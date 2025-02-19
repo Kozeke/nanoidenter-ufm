@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import h5py
 import numpy as np
@@ -19,37 +19,51 @@ app.add_middleware(
 # Path to the HDF5 file
 HDF5_FILE_PATH = "data/all.hdf5"  # Adjust as needed
 
-def read_hdf5_recursive(group, data_dict, path=""):
-    """Recursively reads datasets from an HDF5 file."""
+async def read_hdf5_recursive_streaming(group, chunk_size=500, path=""):
+    """Asynchronous generator to read HDF5 datasets recursively in chunks."""
     for key in group.keys():
         item_path = f"{path}/{key}" if path else key
         
         if isinstance(group[key], h5py.Group):
-            read_hdf5_recursive(group[key], data_dict, item_path)  # Recursively read groups
+            async for item in read_hdf5_recursive_streaming(group[key], chunk_size, item_path):
+                yield item  # ✅ Recursively yield data in chunks
         else:
             try:
-                data = group[key][()]
-                if isinstance(data, np.ndarray):
-                    data = data.tolist()
-                data_dict[item_path] = data
+                dataset = group[key]
+
+                # If dataset is empty, skip it
+                if dataset.shape[0] == 0:
+                    continue
+
+                # Read in chunks to avoid memory overload
+                for start in range(0, dataset.shape[0], chunk_size):
+                    end = min(start + chunk_size, dataset.shape[0])
+                    data_chunk = dataset[start:end]  # Read only the required chunk
+
+                    if isinstance(data_chunk, np.ndarray):
+                        data_chunk = data_chunk.tolist()
+                    
+                    await asyncio.sleep(0)  # Yield control to event loop
+                    yield (item_path, data_chunk)  # ✅ Yield chunked data
+
             except Exception as e:
                 print(f"Error reading dataset {item_path}: {e}")
 
-def read_hdf5(file_path):
-    """Reads an HDF5 file recursively and returns its contents as a dictionary."""
+
+async def read_hdf5_streaming(file_path, chunk_size=500):
+    """Asynchronous generator that reads an HDF5 file in chunks."""
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File {file_path} not found.")
 
-    data_dict = {}
     try:
         with h5py.File(file_path, "r") as f:
-            read_hdf5_recursive(f, data_dict)
+            async for item in read_hdf5_recursive_streaming(f, chunk_size):
+                yield item  # ✅ Yield each chunk instead of storing all at once
     except Exception as e:
         import traceback
         traceback.print_exc()
         raise RuntimeError(f"Error reading HDF5 file: {e}")
 
-    return data_dict
 
 def transform_data_for_force_vs_z(data_dict):
     """Transforms HDF5 data into a format suitable for F vs Z graph plotting."""
@@ -83,17 +97,24 @@ def transform_data_for_force_vs_z(data_dict):
                 transformed_data["Force_vs_Z"].append({"x": z_values[i]})
             transformed_data["Force_vs_Z"][i][f"y{curve_index + 1}"] = force_values[i]
 
-    return transformed_data 
+    return transformed_data
 
-@app.get("/data")
-async def get_hdf5_data():
-    """API endpoint to read and return Force vs Z data."""
+@app.websocket("/ws/data")
+async def websocket_data_stream(websocket: WebSocket):
+    """WebSocket endpoint to stream HDF5 data in real-time."""
+    await websocket.accept()
+    
     try:
-        raw_data = read_hdf5(HDF5_FILE_PATH)  
-        transformed_data = transform_data_for_force_vs_z(raw_data)  
-        return {"status": "success", "data": transformed_data}
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="HDF5 file not found.")
+        # ✅ Read HDF5 asynchronously
+        data_stream = read_hdf5_streaming(HDF5_FILE_PATH, chunk_size=500)
+
+        # ✅ Send each chunk over WebSockets
+        async for key, chunk in data_stream:
+            await websocket.send_text(json.dumps({"status": "success", "dataset": key, "data": chunk}))
+            await asyncio.sleep(0.1)  # Simulate real-time delay
+
+    except WebSocketDisconnect:
+        print("Client disconnected.")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        await websocket.send_text(json.dumps({"status": "error", "message": str(e)}))
 
