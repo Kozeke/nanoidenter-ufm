@@ -1,4 +1,4 @@
-const socket = new WebSocket("ws://localhost:8000/ws/data");
+const socket = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
 
 socket.onopen = () => {
     console.log("WebSocket connected.");
