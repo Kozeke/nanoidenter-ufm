@@ -1,6 +1,8 @@
 fastapi
-uvicorn
-h5py
+uvicorn[standard]
+websockets
+wsproto
 duckdb
+h5py
 numpy
 scipy
