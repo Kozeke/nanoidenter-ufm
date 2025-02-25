@@ -125,7 +125,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         }
         for row in result
     ]
-
+    # print(curves)
     # Compute domain range using SQL with APPROX_QUANTILE
     domain_query = """
         WITH unnested AS (

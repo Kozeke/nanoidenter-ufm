@@ -1,3 +1,5 @@
+from filters.apply_contact_point_filters import apply_cp_filters 
+
 def apply(query, filters, curve_ids):
     """
     Applies selected filters dynamically to the base query.
@@ -11,6 +13,8 @@ def apply(query, filters, curve_ids):
             "savgol": {"window_size": 25, "polyorder": 3}
         }
     """
+    cp_filters = filters.get("cp_filters", {})
+    filters = filters.get("regular", {})
 
     filter_chain = "force_values"  # ✅ Start with raw force values
 
@@ -50,6 +54,8 @@ def apply(query, filters, curve_ids):
         polyorder = filters["savgol"].get("polyorder", 3)
         filter_chain = f"savgol_smooth(z_values, {filter_chain}, {window_size}, {polyorder})"
 
+    
+    
     query = f"""
         SELECT curve_name, 
                 z_values, 
@@ -57,6 +63,9 @@ def apply(query, filters, curve_ids):
         FROM force_vs_z 
         WHERE curve_id IN ({",".join([f"'{cid}'" for cid in curve_ids])})
     """
+    
+    if cp_filters:
+        query = apply_cp_filters(query, cp_filters, curve_ids)
 
     # print(query)  # ✅ Debugging: Check the generated SQL
     return query

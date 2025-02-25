@@ -16,8 +16,8 @@ app = FastAPI()
 # Enable CORS for frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://nanoidenter-ufm-front-end.onrender.com/"],
-    # allow_origins=["*"],  
+    # allow_origins=["https://nanoidenter-ufm-front-end.onrender.com/"],
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,7 +39,7 @@ async def websocket_data_stream(websocket: WebSocket):
     print("WebSocket connected")
     await websocket.accept()
     conn = duckdb.connect(DB_PATH)
-    # register_filters(conn)  # Uncomment if you have filter registration
+    register_filters(conn)  # Uncomment if you have filter registration
 
     try:
         # Check table existence once at startup
@@ -60,7 +60,7 @@ async def websocket_data_stream(websocket: WebSocket):
                 request = await websocket.receive_text()
                 request_data = json.loads(request)
                 num_curves = min(request_data.get("num_curves", 100), 100)  # Cap for safety
-                filters = request_data.get("filters", {})
+                filters = request_data.get("filters", {"regular": {}, "cp_filters": {}})
                 print(f"Received request: num_curves={num_curves}, filters={filters}")
 
                 # Fetch curve IDs based on request
