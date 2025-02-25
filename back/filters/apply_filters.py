@@ -1,8 +1,8 @@
-def apply(query, filters, num_curves):
+def apply(query, filters, curve_ids):
     """
     Applies selected filters dynamically to the base query.
     - filters: Dictionary of filters with parameters.
-    - num_curves: Number of curves to fetch.
+    - curve_ids: Number of curves to fetch.
     
     Example filters:
         filters = {
@@ -50,14 +50,13 @@ def apply(query, filters, num_curves):
         polyorder = filters["savgol"].get("polyorder", 3)
         filter_chain = f"savgol_smooth(z_values, {filter_chain}, {window_size}, {polyorder})"
 
-    # ✅ Generate the final query
     query = f"""
         SELECT curve_name, 
-               z_values, 
-               {filter_chain} AS force_values
+                z_values, 
+                {filter_chain} AS force_values
         FROM force_vs_z 
-        LIMIT {num_curves}
+        WHERE curve_id IN ({",".join([f"'{cid}'" for cid in curve_ids])})
     """
 
-    print(query)  # ✅ Debugging: Check the generated SQL
+    # print(query)  # ✅ Debugging: Check the generated SQL
     return query

@@ -1,6 +1,7 @@
 import h5py
 import duckdb
 from filters.apply_filters import apply
+from typing import Dict, Tuple, List
 
 DB_PATH = "data/hdf5_data.db"
 
@@ -30,28 +31,51 @@ def transform_data_for_force_vs_z(hdf5_file):
 
     return curves
 
-def save_to_duckdb(transformed_data, db_path):
-    """Saves transformed Force vs Z data into DuckDB in bulk."""
+def save_to_duckdb(transformed_data: Dict[str, Dict[str, List[float]]], db_path: str) -> None:
+    """
+    Saves transformed Force vs Z data into DuckDB in bulk with curve_id.
+
+    Args:
+        transformed_data: Dictionary with curve_name as key and {'x': z_values, 'y': force_values} as value
+        db_path: Path to DuckDB database file
+    """
     print("🚀 Saving transformed data to DuckDB...")
 
+    # Establish connection
     conn = duckdb.connect(db_path)
 
-    # ✅ Create table (if not exists)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS force_vs_z (
-            curve_name TEXT,
-            z_values DOUBLE[],  -- Store Z points as an array
-            force_values DOUBLE[] -- Store Force points as an array
+    try:
+        # Create table with curve_id (if not exists)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS force_vs_z (
+                curve_id INTEGER PRIMARY KEY,  -- Added integer curve_id as primary key
+                curve_name TEXT UNIQUE,        -- Keep curve_name as unique text
+                z_values DOUBLE[],             -- Store Z points as array
+                force_values DOUBLE[]          -- Store Force points as array
+            )
+        """)
+
+        # Prepare batch data with curve_id
+        batch_data: List[Tuple[int, str, List[float], List[float]]] = [
+            (i, curve_name, values["x"], values["y"])
+            for i, (curve_name, values) in enumerate(transformed_data.items())
+        ]
+
+        # Bulk insert with executemany
+        conn.executemany(
+            "INSERT INTO force_vs_z (curve_id, curve_name, z_values, force_values) VALUES (?, ?, ?, ?)",
+            batch_data
         )
-    """)
 
-    # ✅ Bulk insert data
-    batch_data = [(curve_name, values["x"], values["y"]) for curve_name, values in transformed_data.items()]
-    conn.executemany("INSERT INTO force_vs_z VALUES (?, ?, ?)", batch_data)
+        # Verify row count (optional, for debugging)
+        row_count = conn.execute("SELECT COUNT(*) FROM force_vs_z").fetchone()[0]
+        print(f"✅ Inserted {row_count} rows into {db_path}!")
 
-    conn.close()
-    print(f"✅ Data successfully stored in {db_path}!")
-
+    except duckdb.Error as e:
+        print(f"❌ DuckDB error: {e}")
+        raise
+    finally:
+        conn.close()
 def transform_hdf5_to_db(hdf5_path, db_path):
     """Reads HDF5, transforms it, and saves the result into DuckDB."""
     print("🚀 Processing HDF5 file...")
@@ -63,34 +87,52 @@ def transform_hdf5_to_db(hdf5_path, db_path):
     print("✅ HDF5 to DuckDB transformation complete!")
 
 
-def fetch_curves_from_db(conn, num_curves, filters):
+def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict) -> Tuple[List[Dict], Dict]:
     """
-    Fetches curve data from DuckDB and applies filters dynamically in SQL.
+    Fetches a batch of curve data from DuckDB and applies filters dynamically in SQL.
+    
+    Args:
+        conn: DuckDB connection object
+        curve_ids: List of curve IDs to fetch
+        filters: Dictionary of filters to apply (e.g., {'min_force': 0.1, 'max_z': 10})
+    
+    Returns:
+        Tuple containing:
+        - List of curve dictionaries with curve_id, z_values, and force_values
+        - Dictionary with domain range (xMin, xMax, yMin, yMax)
     """
-    print("Fetching curves...")
+    print(f"Fetching batch of {curve_ids} curves...")
 
-    # Base query
-    base_query = f"""
-        SELECT curve_name, z_values, force_values 
+    # Base query for specific curve IDs
+    base_query = """
+        SELECT curve_id, z_values, force_values 
         FROM force_vs_z 
-        LIMIT {num_curves}
-    """
-
-    # Apply filters dynamically
-    query = apply(base_query, filters, num_curves)
+        WHERE curve_id IN ({})
+    """.format(",".join([f"'{cid}'" for cid in curve_ids]))
+    # print(base_query)
+    # Apply filters dynamically (assuming apply() is defined elsewhere)
+    query = apply(base_query, filters, curve_ids)  # Assuming apply() handles filter logic
 
     # Execute query and fetch results
     result = conn.execute(query).fetchall()
-    
-    curves = {row[0]: {"x": row[1], "y": row[2]} for row in result}
+    # print(result)
+    # Process curves into list of dictionaries
+    curves = [
+        {
+            "curve_id": row[0],  # Changed curve_name to curve_id for consistency
+            "x": row[1],  # Keep as list/array
+            "y": row[2]  # Keep as list/array
+        }
+        for row in result
+    ]
 
-    # ✅ Compute min/max domain values in SQL using APPROX_QUANTILE for better performance
-    domain_query = f"""
+    # Compute domain range using SQL with APPROX_QUANTILE
+    domain_query = """
         WITH unnested AS (
             SELECT 
                 unnest(z_values) AS z_value,
                 unnest(force_values) AS force_value
-            FROM ({query}) AS filtered_curves
+            FROM ({}) AS filtered_curves
         )
         SELECT 
             APPROX_QUANTILE(z_value, 0) AS xMin,
@@ -98,18 +140,16 @@ def fetch_curves_from_db(conn, num_curves, filters):
             APPROX_QUANTILE(force_value, 0) AS yMin,
             APPROX_QUANTILE(force_value, 1) AS yMax
         FROM unnested
-    """
+    """.format(query)
 
     domain_result = conn.execute(domain_query).fetchone()
 
-    # ✅ Convert result into a dictionary
+    # Convert domain result to dictionary
     domain_range = {
-        "xMin": domain_result[0],
-        "xMax": domain_result[1],
-        "yMin": domain_result[2],
-        "yMax": domain_result[3],
+        "xMin": float(domain_result[0]) if domain_result[0] is not None else None,
+        "xMax": float(domain_result[1]) if domain_result[1] is not None else None,
+        "yMin": float(domain_result[2]) if domain_result[2] is not None else None,
+        "yMax": float(domain_result[3]) if domain_result[3] is not None else None,
     }
-
-
-    # Convert to dictionary format for WebSocket transmission
-    return curves, domain_range  # ✅ Return both data & domain range
+    print(curves[0]['curve_id'])
+    return curves, domain_range

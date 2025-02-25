@@ -3,8 +3,13 @@ import ReactECharts from "echarts-for-react";
 
 const MultiLineChart = () => {
   console.log("rerender");
-  const [forceData, setForceData] = useState({});
-  const [domainRange, setDomainRange] = useState({});
+  const [forceData, setForceData] = useState([]);
+  const [domainRange, setDomainRange] = useState({
+    xMin: Infinity,
+    xMax: -Infinity,
+    yMin: Infinity,
+    yMax: -Infinity
+  });
   const [numCurves, setNumCurves] = useState(50);
   const socketRef = useRef(null);
   const initialRequestSent = useRef(false);
@@ -32,6 +37,7 @@ const MultiLineChart = () => {
 
   useEffect(() => {
     socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
+    // socketRef.current = new WebSocket("ws://localhost:8080/ws/data");
 
     socketRef.current.onopen = () => {
       console.log("WebSocket connected.");
@@ -44,14 +50,27 @@ const MultiLineChart = () => {
     socketRef.current.onmessage = (event) => {
       try {
         const response = JSON.parse(event.data);
-        if (response.status === "success" && response.data) {
-          console.log("Received curves:", response.data);
+        if (response.status === "batch" && response.data) {
+          console.log("Received batch of curves:", response.data);
+          
+          // Append new batch to existing data
           setForceData((prevData) => {
-            return JSON.stringify(prevData) !== JSON.stringify(response.data)
-              ? response.data
-              : prevData; // ✅ Prevent unnecessary updates
+            const newData = [...prevData, ...response.data];
+            // Optional: Check for duplicates by curve_id if needed
+            return newData;
           });
-          setDomainRange(response.domain);
+
+          // Update domain range incrementally
+          setDomainRange((prev) => ({
+            xMin: Math.min(prev.xMin, response.domain.xMin),
+            xMax: Math.max(prev.xMax, response.domain.xMax),
+            yMin: Math.min(prev.yMin, response.domain.yMin),
+            yMax: Math.max(prev.yMax, response.domain.yMax)
+          }));
+        } else if (response.status === "complete") {
+          console.log("All batches received");
+        } else if (response.status === "error") {
+          console.error("WebSocket error:", response.message);
         }
       } catch (error) {
         console.error("Error parsing WebSocket message:", error);

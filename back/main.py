@@ -5,14 +5,19 @@ import duckdb
 import os
 from db import transform_hdf5_to_db
 from filters.register_filters import register_filters
-from db import fetch_curves_from_db
+from db import fetch_curves_batch
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List, Tuple
+
 
 app = FastAPI()
 
 # Enable CORS for frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://nanoidenter-ufm-front-end.onrender.com/"],  
+    allow_origins=["https://nanoidenter-ufm-front-end.onrender.com/"],
+    # allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -21,6 +26,8 @@ app.add_middleware(
 # Paths
 HDF5_FILE_PATH = "data/all.hdf5"  # HDF5 file path
 DB_PATH = "data/hdf5_data.db"  # DuckDB database file
+BATCH_SIZE = 10  # Process 10 curves per batch (adjust based on your needs)
+MAX_WORKERS = 8  # Number of parallel workers (tune based on CPU cores)
 
 # Ensure the DB directory exists
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
@@ -28,43 +35,120 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 @app.websocket("/ws/data")
 async def websocket_data_stream(websocket: WebSocket):
-    print("webscoke")
-    """WebSocket endpoint to stream a requested number of transformed HDF5 data curves from DuckDB."""
+    """WebSocket endpoint to stream batches of curve data from DuckDB."""
+    print("WebSocket connected")
     await websocket.accept()
     conn = duckdb.connect(DB_PATH)
-    register_filters(conn)  # ✅ Register custom filters
+    # register_filters(conn)  # Uncomment if you have filter registration
 
     try:
-        # ✅ Check if the table exists before querying
-        table_exists = conn.execute("SELECT count(*) FROM information_schema.tables WHERE table_name='force_vs_z'").fetchone()[0]
-
+        # Check table existence once at startup
+        table_exists = conn.execute(
+            "SELECT count(*) FROM information_schema.tables WHERE table_name='force_vs_z'"
+        ).fetchone()[0]
         if table_exists == 0:
-            await websocket.send_text(json.dumps({"status": "error", "message": "❌ Table force_vs_z does not exist! Load data first."}))
+            await websocket.send_text(json.dumps({
+                "status": "error",
+                "message": "❌ Table force_vs_z does not exist!"
+            }))
             return
 
+        # Continuously accept requests
         while True:
-            request = await websocket.receive_text()
-            request_data = json.loads(request)
-            num_curves = request_data.get("num_curves", 100)
-            filters = request_data.get("filters", {})  # ✅ Filters with parameters
-            print("received filterrs", filters)
-            # ✅ Fetch data with requested filters
-            selected_curves, domain_range = fetch_curves_from_db(conn, num_curves, filters)
+            try:
+                # Wait for a request from the client
+                request = await websocket.receive_text()
+                request_data = json.loads(request)
+                num_curves = min(request_data.get("num_curves", 100), 100)  # Cap for safety
+                filters = request_data.get("filters", {})
+                print(f"Received request: num_curves={num_curves}, filters={filters}")
 
-            await websocket.send_text(json.dumps({
-                "status": "success",
-                "data": selected_curves,
-                "domain": domain_range
-            }))
+                # Fetch curve IDs based on request
+                curve_ids = conn.execute(
+                    "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
+                ).fetchall()
+                curve_ids = [str(row[0]) for row in curve_ids]  # Ensure string IDs
+                print(f"Total curve IDs fetched: {len(curve_ids)}")
 
-    except WebSocketDisconnect:
-        print("Client disconnected.")
+                # Process in batches
+                for i in range(0, len(curve_ids), BATCH_SIZE):
+                    batch_ids = curve_ids[i:i + BATCH_SIZE]
+                    print(f"Processing batch: {batch_ids}")
+                    await process_and_stream_batch(conn, batch_ids, filters, websocket)
+                    await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
+
+                # Signal completion of this request
+                await websocket.send_text(json.dumps({"status": "complete"}))
+                print("Request completed")
+
+            except WebSocketDisconnect:
+                print("Client disconnected.")
+                break  # Exit loop on disconnect
+            except json.JSONDecodeError as e:
+                await websocket.send_text(json.dumps({
+                    "status": "error",
+                    "message": f"Invalid request format: {e}"
+                }))
+            except Exception as e:
+                await websocket.send_text(json.dumps({
+                    "status": "error",
+                    "message": f"Error processing request: {e}"
+                }))
+
     except Exception as e:
+        print(f"Unexpected error: {e}")
         await websocket.send_text(json.dumps({"status": "error", "message": str(e)}))
     finally:
         conn.close()
+        print("WebSocket connection closed")
 
+async def process_and_stream_batch(
+    conn: duckdb.DuckDBPyConnection,
+    batch_ids: List[str],
+    filters: Dict,
+    websocket: WebSocket
+) -> None:
+    """
+    Process a batch of curve IDs, fetch data from DuckDB, and stream results via WebSocket.
 
+    Args:
+        conn: DuckDB connection object
+        batch_ids: List of curve IDs to process in this batch
+        filters: Dictionary of filters to apply (e.g., {'min_force': 0.1})
+        websocket: WebSocket connection to stream results
+    """
+    try:
+        # Get the current event loop
+        loop = asyncio.get_running_loop()
+        
+        # Use ThreadPoolExecutor to offload blocking DuckDB operations
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # Run fetch_curves_batch in a separate thread
+            selected_curves, domain_range = await loop.run_in_executor(
+                executor,
+                lambda: fetch_curves_batch(conn, batch_ids, filters)
+            )
+        
+        # Stream batch results if data is available
+        if selected_curves:
+            # print("selected_curves", selected_curves[0])
+            await websocket.send_text(json.dumps({
+                "status": "batch",
+                "data": selected_curves,
+                "domain": domain_range
+            }, default=str))  # default=str handles any non-serializable types
+        else:
+            print(f"No data returned for batch: {batch_ids}")
+
+    except Exception as e:
+        print(f"Error processing batch {batch_ids}: {e}")
+        # Send error message to client
+        await websocket.send_text(json.dumps({
+            "status": "batch_error",
+            "message": f"Error processing batch: {e}",
+            "batch_ids": batch_ids
+        }))
+    
 @app.on_event("startup")
 async def startup_event():
     """Load HDF5 data into DuckDB when the server starts (if needed)."""
