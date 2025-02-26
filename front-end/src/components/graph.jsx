@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import ReactECharts from "echarts-for-react";
 
 const MultiLineChart = () => {
-  console.log("rerender");
+  console.log("rerendeddr");
   const [forceData, setForceData] = useState([]);
   const [domainRange, setDomainRange] = useState({
     xMin: Infinity,
@@ -35,7 +35,8 @@ const MultiLineChart = () => {
   };
 
   useEffect(() => {
-    socketRef.current = new WebSocket("ws://localhost:8080/ws/data");
+    // socketRef.current = new WebSocket("ws://localhost:8080/ws/data");
+    socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
 
     socketRef.current.onopen = () => {
       console.log("WebSocket connected.");
@@ -46,8 +47,10 @@ const MultiLineChart = () => {
     };
 
     socketRef.current.onmessage = (event) => {
+      console.log("message")
       try {
         const response = JSON.parse(event.data);
+        console.log("received", response)
         if (response.status === "batch" && response.data) {
           console.log("Received batch of curves:", response.data);
           setForceData((prevData) => {
