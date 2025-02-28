@@ -43,7 +43,8 @@ const Dashboard = () => {
   };
 
   useEffect(() => {
-    socketRef.current = new WebSocket("ws://localhost:8080/ws/data");
+    // socketRef.current = new WebSocket("ws://localhost:8080/ws/data");
+    socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
 
     socketRef.current.onopen = () => {
       console.log("WebSocket connected.");

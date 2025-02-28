@@ -16,8 +16,8 @@ app = FastAPI()
 # Enable CORS for frontend requests
 app.add_middleware(
     CORSMiddleware,
-    # allow_origins=["https://nanoidenter-ufm-front-end.onrender.com/"],
-    allow_origins=["*"],  
+    allow_origins=["https://nanoidenter-ufm-front-end.onrender.com/"],
+    # allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
