@@ -27,7 +27,8 @@ const MultiLineChart = () => {
     prominence: { prominency: 40, min_frequency: 25, band_pass: 30 },
     savgol: { window_size: 25.0, polyorder: 3 },
     autotresh: {},
-    gof: { threshold: 0.5 },
+    // gof: { threshold: 0.5 },
+    gof: {},
     gofSphere: { radius: 1.0 },
     rov: { window: 10 },
     stepanddrift: { step_size: 0.1 },
@@ -35,8 +36,8 @@ const MultiLineChart = () => {
   };
 
   useEffect(() => {
-    // socketRef.current = new WebSocket("ws://localhost:8080/ws/data");
-    socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
+    socketRef.current = new WebSocket("ws://localhost:8080/ws/data");
+    // socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
 
     socketRef.current.onopen = () => {
       console.log("WebSocket connected.");

@@ -15,7 +15,7 @@ def getFit(self, delta, force):
     slope, intercept, r_value, _, _ = linregress(delta, linforce)
     return r_value**2
 
-def gof_filter(self, x, y):
+def gof_filter(x, y):
     """Returns contact point (z0, f0) based on max R-squared"""
     # Convert to numpy arrays once
     x = np.asarray(x)
@@ -23,22 +23,29 @@ def gof_filter(self, x, y):
     
     # Calculate constants outside loop
     dx = (x.max() - x.min()) / (len(x) - 1)
-    window = int(self.getValue('fitwindow') * 1e-9 / dx)
-    fthreshold = y.min() + (y.max() - y.min()) * self.getValue('maxf') / 100
-    xthreshold = x.min() + (x.max() - x.min()) * self.getValue('minx') / 100
+    # window = int(self.getValue('fitwindow') * 1e-9 / dx)
+    window = int(1e-9 / dx)
+
+    # fthreshold = y.min() + (y.max() - y.min()) * self.getValue('maxf') / 100
+    # xthreshold = x.min() + (x.max() - x.min()) * self.getValue('minx') / 100
     
+    fthreshold = y.min() + (y.max() - y.min()) / 100
+    xthreshold = x.min() + (x.max() - x.min()) / 100
+
     # Use searchsorted for thresholds (more efficient than argmin with squares)
     jmin = np.searchsorted(x, xthreshold, side='left')
     jmax = np.searchsorted(y, fthreshold, side='left')
     
     # Pre-allocate R2 array
+    jmax = max(jmax, jmin + 1) ## not from formula
+
     R2 = np.zeros(jmax - jmin)
     
     # Vectorize where possible
     for j in range(jmin, jmax):
         try:
-            d, f = self.get_indentation(x, y, j, window)
-            R2[j - jmin] = self.getFit(d, f)
+            d, f = get_indentation(x, y, j, window)
+            R2[j - jmin] = getFit(d, f)
         except:
             continue  # Keep 0 as default value
     
@@ -46,4 +53,4 @@ def gof_filter(self, x, y):
     r_best_ind = np.argmax(R2)
     j_gof = jmin + r_best_ind
     
-    return [x[j_gof], y[j_gof]]
+    return [[float(x[j_gof]), float(y[j_gof])]]

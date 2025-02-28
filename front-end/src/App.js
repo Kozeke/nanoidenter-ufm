@@ -1,5 +1,5 @@
 import React from "react";
-import MultiLineChart from "./components/graph"
+import MultiLineChart from "./components/Dashboard"
 function App() {
   return (
     <div>

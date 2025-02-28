@@ -114,7 +114,7 @@ async def process_and_stream_batch(
     Args:
         conn: DuckDB connection object
         batch_ids: List of curve IDs to process in this batch
-        filters: Dictionary of filters to apply (e.g., {'min_force': 0.1})
+        filters: Dictionary of filters to apply (e.g., {'regular': {...}, 'cp_filters': {...}})
         websocket: WebSocket connection to stream results
     """
     try:
@@ -124,28 +124,41 @@ async def process_and_stream_batch(
         # Use ThreadPoolExecutor to offload blocking DuckDB operations
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             # Run fetch_curves_batch in a separate thread
-            selected_curves, domain_range = await loop.run_in_executor(
+            graph_force_vs_z, graph_force_indentation = await loop.run_in_executor(
                 executor,
                 lambda: fetch_curves_batch(conn, batch_ids, filters)
             )
         
+        # Prepare the response data with both graphs
+        response_data = {
+            "status": "batch",
+            "data": {
+                "graphForcevsZ": graph_force_vs_z,
+                "graphForceIndentation": graph_force_indentation
+            }
+        }
+        
         # Stream batch results if data is available
-        if selected_curves:
-            # print("selected_curves", selected_curves[0])
-            await websocket.send_text(json.dumps({
-                "status": "batch",
-                "data": selected_curves,
-                "domain": domain_range
-            }, default=str))  # default=str handles any non-serializable types
+        if graph_force_vs_z["curves"] or graph_force_indentation["curves"]:
+            await websocket.send_text(json.dumps(
+                response_data,
+                default=str  # Handles any non-serializable types like numpy arrays
+            ))
+            print(f"Streamed batch for IDs: {batch_ids}")
         else:
             print(f"No data returned for batch: {batch_ids}")
+            await websocket.send_text(json.dumps({
+                "status": "batch_empty",
+                "message": "No curves returned for this batch",
+                "batch_ids": batch_ids
+            }))
 
     except Exception as e:
         print(f"Error processing batch {batch_ids}: {e}")
         # Send error message to client
         await websocket.send_text(json.dumps({
             "status": "batch_error",
-            "message": f"Error processing batch: {e}",
+            "message": f"Error processing batch: {str(e)}",
             "batch_ids": batch_ids
         }))
     

@@ -1,6 +1,7 @@
 import h5py
 import duckdb
 from filters.apply_filters import apply
+from filters.apply_contact_point_filters import apply_cp_filters
 from typing import Dict, Tuple, List
 
 DB_PATH = "data/hdf5_data.db"
@@ -101,33 +102,35 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         - List of curve dictionaries with curve_id, z_values, and force_values
         - Dictionary with domain range (xMin, xMax, yMin, yMax)
     """
-    print(f"Fetching batch of {curve_ids} curves...")
-
+    print(f"Fetching batch of {len(curve_ids)} curves...")
+    
+    # Extract regular and cp_filters from the input
+    regular_filters = filters.get("regular", {})
+    cp_filters = filters.get("cp_filters", {})
+    
     # Base query for specific curve IDs
     base_query = """
         SELECT curve_id, z_values, force_values 
         FROM force_vs_z 
         WHERE curve_id IN ({})
     """.format(",".join([f"'{cid}'" for cid in curve_ids]))
-    # print(base_query)
-    # Apply filters dynamically (assuming apply() is defined elsewhere)
-    query = apply(base_query, filters, curve_ids)  # Assuming apply() handles filter logic
 
-    # Execute query and fetch results
-    result = conn.execute(query).fetchall()
-    # print(result)
-    # Process curves into list of dictionaries
-    curves = [
+    # --- Graph 1: Force vs Z (Regular Filters) ---
+    query_regular = apply(base_query, regular_filters, curve_ids)  # Apply regular filters
+    result_regular = conn.execute(query_regular).fetchall()
+    
+    # Process curves for Force vs Z
+    curves_regular = [
         {
-            "curve_id": row[0],  # Changed curve_name to curve_id for consistency
-            "x": row[1],  # Keep as list/array
-            "y": row[2]  # Keep as list/array
+            "curve_id": row[0],
+            "x": row[1],
+            "y": row[2]
         }
-        for row in result
+        for row in result_regular
     ]
-    # print(curves)
-    # Compute domain range using SQL with APPROX_QUANTILE
-    domain_query = """
+    
+    # Compute domain range for Force vs Z
+    domain_query_regular = """
         WITH unnested AS (
             SELECT 
                 unnest(z_values) AS z_value,
@@ -140,16 +143,63 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             APPROX_QUANTILE(force_value, 0) AS yMin,
             APPROX_QUANTILE(force_value, 1) AS yMax
         FROM unnested
-    """.format(query)
-
-    domain_result = conn.execute(domain_query).fetchone()
-
-    # Convert domain result to dictionary
-    domain_range = {
-        "xMin": float(domain_result[0]) if domain_result[0] is not None else None,
-        "xMax": float(domain_result[1]) if domain_result[1] is not None else None,
-        "yMin": float(domain_result[2]) if domain_result[2] is not None else None,
-        "yMax": float(domain_result[3]) if domain_result[3] is not None else None,
+    """.format(query_regular)
+    domain_result_regular = conn.execute(domain_query_regular).fetchone()
+    domain_regular = {
+        "xMin": float(domain_result_regular[0]) if domain_result_regular[0] is not None else None,
+        "xMax": float(domain_result_regular[1]) if domain_result_regular[1] is not None else None,
+        "yMin": float(domain_result_regular[2]) if domain_result_regular[2] is not None else None,
+        "yMax": float(domain_result_regular[3]) if domain_result_regular[3] is not None else None,
     }
-    print(curves[0]['curve_id'])
-    return curves, domain_range
+    
+    graph_force_vs_z = {"curves": curves_regular, "domain": domain_regular}
+   # --- Graph 2: Force vs Indentation (CP Filters, if active) ---
+    
+    graph_force_indentation = {"curves": [], "domain": {"xMin": None, "xMax": None, "yMin": None, "yMax": None}}
+    if cp_filters:  # Only process if cp_filters are present and non-empty
+        query_cp = apply_cp_filters(base_query, cp_filters, curve_ids)  # Apply cp_filters
+        result_cp = conn.execute(query_cp).fetchall()
+        
+        # Process curves for Force vs Indentation
+        curves_cp = []
+        spring_constant = 1.0  # Hardcoded for now; could be a filter parameter
+        set_zero_force = True  # Hardcoded; could be configurable
+        
+        for row in result_cp:
+            curve_id, z_values, force_values, cp_values = row
+            if cp_values is not None and cp_values is not False:  # Mimic your condition
+                # Calculate indentation using DuckDB function
+                indentation_query = f"""
+                    SELECT calc_indentation(?, ?, ?, {spring_constant}, {set_zero_force})
+                """
+                indentation_result = conn.execute(indentation_query, (z_values, force_values, cp_values)).fetchone()[0]
+                
+                if indentation_result is not None:
+                    zi, fi = indentation_result
+                    curves_cp.append({
+                        "curve_id": curve_id,
+                        "x": zi,  # Indentation Z
+                        "y": fi   # Indentation Force
+                    })
+        
+        # Compute domain range for Force vs Indentation
+        if curves_cp:
+            domain_query_cp = """
+                WITH unnested AS (
+                    SELECT unnest(x) AS z_value, unnest(y) AS force_value
+                    FROM UNNEST({curves}) AS t(curve_id, x, y)
+                )
+                SELECT APPROX_QUANTILE(z_value, 0) AS xMin, APPROX_QUANTILE(z_value, 1) AS xMax,
+                       APPROX_QUANTILE(force_value, 0) AS yMin, APPROX_QUANTILE(force_value, 1) AS yMax
+                FROM unnested
+            """.format(curves=[(c["curve_id"], c["x"], c["y"]) for c in curves_cp])
+            domain_result_cp = conn.execute(domain_query_cp).fetchone()
+            domain_cp = {
+                "xMin": float(domain_result_cp[0]) if domain_result_cp[0] is not None else None,
+                "xMax": float(domain_result_cp[1]) if domain_result_cp[1] is not None else None,
+                "yMin": float(domain_result_cp[2]) if domain_result_cp[2] is not None else None,
+                "yMax": float(domain_result_cp[3]) if domain_result_cp[3] is not None else None,
+            }
+            graph_force_indentation = {"curves": curves_cp, "domain": domain_cp}
+
+    return graph_force_vs_z, graph_force_indentation

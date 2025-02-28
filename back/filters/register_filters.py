@@ -11,7 +11,8 @@ from filters.cpoint.gofSphere import gof_sphere_filter
 from filters.cpoint.rov import rov_filter
 from filters.cpoint.stepanddrift import step_drift_filter
 from filters.cpoint.threshold import threshold_filter
-
+import duckdb
+from filters.apply_contact_point_filters import calc_indentation
 def register_filters(conn):
     """Registers all filter functions inside DuckDB for SQL queries."""
 
@@ -44,3 +45,16 @@ def register_filters(conn):
     print("✅ All filters (Main + CP Filters) registered successfully in DuckDB.")
 
 
+    conn.create_function(
+    "calc_indentation",
+    calc_indentation,
+    [
+        duckdb.list_type('DOUBLE'),  # z_values
+        duckdb.list_type('DOUBLE'),  # force_values
+        duckdb.list_type('DOUBLE'),  # cp
+        'DOUBLE',                    # spring_constant
+        'BOOLEAN'                     # set_zero_force
+    ],
+    duckdb.list_type(duckdb.list_type('DOUBLE'))  # Nested list return type
+)  # Returns [Zi, Fi]
+    
