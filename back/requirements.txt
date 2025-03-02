@@ -6,3 +6,4 @@ duckdb
 h5py
 numpy
 scipy
+pandas
