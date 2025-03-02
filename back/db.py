@@ -164,11 +164,13 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         curves_cp = []
         spring_constant = 1.0  # Hardcoded for now; could be a filter parameter
         set_zero_force = True  # Hardcoded; could be configurable
-        
         for row in result_cp:
             curve_id, z_values, force_values, cp_values = row
             if cp_values is not None and cp_values is not False:  # Mimic your condition
                 # Calculate indentation using DuckDB function
+                print("cp",cp_values)
+                print("z_values",len(z_values), z_values[0])
+                print("force_values",len(force_values), force_values[0])
                 indentation_query = f"""
                     SELECT calc_indentation(?, ?, ?, {spring_constant}, {set_zero_force})
                 """
@@ -186,14 +188,26 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         if curves_cp:
             domain_query_cp = """
                 WITH unnested AS (
-                    SELECT unnest(x) AS z_value, unnest(y) AS force_value
-                    FROM UNNEST({curves}) AS t(curve_id, x, y)
+                    SELECT 
+                        unnest(z_values) AS z_value,
+                        unnest(indentation_values[1]) AS force_value  -- Assuming indentation_values[1] is fi_values
+                    FROM ({}) AS filtered_curves
                 )
-                SELECT APPROX_QUANTILE(z_value, 0) AS xMin, APPROX_QUANTILE(z_value, 1) AS xMax,
-                       APPROX_QUANTILE(force_value, 0) AS yMin, APPROX_QUANTILE(force_value, 1) AS yMax
+                SELECT 
+                    APPROX_QUANTILE(z_value, 0) AS xMin,
+                    APPROX_QUANTILE(z_value, 1) AS xMax,
+                    APPROX_QUANTILE(force_value, 0) AS yMin,
+                    APPROX_QUANTILE(force_value, 1) AS yMax
                 FROM unnested
-            """.format(curves=[(c["curve_id"], c["x"], c["y"]) for c in curves_cp])
+            """.format(query_cp)
+
             domain_result_cp = conn.execute(domain_query_cp).fetchone()
+            # domain_cp = {
+            #     "xMin": None,
+            #     "xMax": None,
+            #     "yMin": None,
+            #     "yMax": None,
+            # }
             domain_cp = {
                 "xMin": float(domain_result_cp[0]) if domain_result_cp[0] is not None else None,
                 "xMax": float(domain_result_cp[1]) if domain_result_cp[1] is not None else None,

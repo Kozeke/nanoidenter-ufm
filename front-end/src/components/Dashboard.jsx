@@ -43,8 +43,7 @@ const Dashboard = () => {
   };
 
   useEffect(() => {
-    // socketRef.current = new WebSocket("ws://localhost:8080/ws/data");
-    socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
+    socketRef.current = new WebSocket("ws://localhost:8080/ws/data");
 
     socketRef.current.onopen = () => {
       console.log("WebSocket connected.");
@@ -60,47 +59,21 @@ const Dashboard = () => {
           const { graphForcevsZ, graphForceIndentation } = response.data;
     
           // Update Force vs Z graph
-          setForceData((prev) => {
-            const updatedData = [...prev];
-            graphForcevsZ.curves.forEach((newCurve) => {
-              const existingIndex = updatedData.findIndex(
-                (curve) => curve.curve_id === newCurve.curve_id
-              );
-              if (existingIndex !== -1) {
-                updatedData[existingIndex] = newCurve;
-              } else {
-                updatedData.push(newCurve);
-              }
-            });
-            return updatedData;
-          });
+          setForceData((prev) => [...prev, ...graphForcevsZ.curves]);
           setDomainRange((prev) => ({
-            xMin: Math.min(prev.xMin, graphForcevsZ.domain.xMin ?? Infinity),
-            xMax: Math.max(prev.xMax, graphForcevsZ.domain.xMax ?? -Infinity),
-            yMin: Math.min(prev.yMin, graphForcevsZ.domain.yMin ?? Infinity),
-            yMax: Math.max(prev.yMax, graphForcevsZ.domain.yMax ?? -Infinity),
+              xMin: Math.min(prev.xMin, graphForcevsZ.domain.xMin ?? Infinity),
+              xMax: Math.max(prev.xMax, graphForcevsZ.domain.xMax ?? -Infinity),
+              yMin: Math.min(prev.yMin, graphForcevsZ.domain.yMin ?? Infinity),
+              yMax: Math.max(prev.yMax, graphForcevsZ.domain.yMax ?? -Infinity),
           }));
-    
+  
           // Update Force vs Indentation graph
-          setIndentationData((prev) => {
-            const updatedData = [...prev];
-            graphForceIndentation.curves.forEach((newCurve) => {
-              const existingIndex = updatedData.findIndex(
-                (curve) => curve.curve_id === newCurve.curve_id
-              );
-              if (existingIndex !== -1) {
-                updatedData[existingIndex] = newCurve;
-              } else {
-                updatedData.push(newCurve);
-              }
-            });
-            return updatedData;
-          });
+          setIndentationData((prev) => [...prev, ...graphForceIndentation.curves]);
           setIndentationDomain((prev) => ({
-            xMin: Math.min(prev.xMin, graphForceIndentation.domain.xMin ?? Infinity),
-            xMax: Math.max(prev.xMax, graphForceIndentation.domain.xMax ?? -Infinity),
-            yMin: Math.min(prev.yMin, graphForceIndentation.domain.yMin ?? Infinity),
-            yMax: Math.max(prev.yMax, graphForceIndentation.domain.yMax ?? -Infinity),
+              xMin: Math.min(prev.xMin, graphForceIndentation.domain.xMin ?? Infinity),
+              xMax: Math.max(prev.xMax, graphForceIndentation.domain.xMax ?? -Infinity),
+              yMin: Math.min(prev.yMin, graphForceIndentation.domain.yMin ?? Infinity),
+              yMax: Math.max(prev.yMax, graphForceIndentation.domain.yMax ?? -Infinity),
           }));
         } else if (response.status === "batch_empty") {
           console.log("No data for batch:", response.batch_ids);
@@ -120,6 +93,20 @@ const Dashboard = () => {
 
   const sendCurveRequest = () => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+      setForceData([]);
+      setIndentationData([]);
+      setDomainRange({
+        xMin: Infinity,
+        xMax: -Infinity,
+        yMin: Infinity,
+        yMax: -Infinity,
+      });
+      setIndentationDomain({
+        xMin: Infinity,
+        xMax: -Infinity,
+        yMin: Infinity,
+        yMax: -Infinity,
+      });
       const requestData = {
         num_curves: numCurves,
         filters: {

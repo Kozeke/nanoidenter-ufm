@@ -13,8 +13,7 @@ def apply(query, filters, curve_ids):
             "savgol": {"window_size": 25, "polyorder": 3}
         }
     """
-    cp_filters = filters.get("cp_filters", {})
-    filters = filters.get("regular", {})
+    
 
     filter_chain = "force_values"  # ✅ Start with raw force values
 
@@ -25,6 +24,7 @@ def apply(query, filters, curve_ids):
 
     # ✅ Linear Detrend Filter
     if "lineardetrend" in filters:
+        print("lineardetrend")
         threshold = filters["lineardetrend"].get("threshold", 0.01)
         smoothing_window = filters["lineardetrend"].get("smoothing_window", 10)
         filter_chain = f"linear_detrend(z_values, {filter_chain}, {smoothing_window}, {threshold})"
@@ -63,9 +63,7 @@ def apply(query, filters, curve_ids):
         FROM force_vs_z 
         WHERE curve_id IN ({",".join([f"'{cid}'" for cid in curve_ids])})
     """
-    
-    if cp_filters:
-        query = apply_cp_filters(query, cp_filters, curve_ids)
+
 
     # print(query)  # ✅ Debugging: Check the generated SQL
     return query

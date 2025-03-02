@@ -39,7 +39,7 @@ async def websocket_data_stream(websocket: WebSocket):
     print("WebSocket connected")
     await websocket.accept()
     conn = duckdb.connect(DB_PATH)
-    register_filters(conn)  # Uncomment if you have filter registration
+    # register_filters(conn)  # Uncomment if you have filter registration
 
     try:
         # Check table existence once at startup

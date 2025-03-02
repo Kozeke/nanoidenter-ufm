@@ -53,24 +53,32 @@ def apply_cp_filters(query: str, filters: Dict, curve_ids: List[str]) -> str:
 import numpy as np
 from typing import List, Optional
 
-def calc_indentation(z_values: List[float], force_values: List[float], cp: List[float], spring_constant: float = 1.0, set_zero_force: bool = True) -> Optional[List[List[float]]]:
+from typing import List, Optional
+import numpy as np
+
+def calc_indentation(z_values: List[float], force_values: List[float], cp: List[List[float]], spring_constant: float = 1.0, set_zero_force: bool = True) -> Optional[List[List[float]]]:
     """
     Calculate indentation (Zi, Fi) based on Z, Force, and contact point (cp).
     
     Args:
         z_values: Array of Z values
         force_values: Array of Force values
-        cp: Contact point [z_cp, f_cp]
+        cp: Contact point as 2D array [[z_cp, f_cp], ...], using first row
         spring_constant: Spring constant for indentation calculation (default 1.0)
         set_zero_force: Whether to zero the force at contact point
     
     Returns:
         List of [Zi, Fi] arrays or None if calculation fails
     """
-    if not z_values or not force_values or len(z_values) != len(force_values) or not cp or len(cp) != 2:
+    if not z_values or not force_values or len(z_values) != len(force_values):
         return None
     
-    z_cp, f_cp = cp[0], cp[1]
+    # Check if cp is a valid 2D array with at least one row of length 2
+    if not cp or not isinstance(cp, list) or not cp[0] or len(cp[0]) != 2:
+        return None
+    
+    # Extract z_cp and f_cp from the first row of the 2D cp array
+    z_cp, f_cp = cp[0][0], cp[0][1]
     
     # Find the index of the contact point in z_values
     i_contact = np.argmin(np.abs(np.array(z_values) - z_cp))
