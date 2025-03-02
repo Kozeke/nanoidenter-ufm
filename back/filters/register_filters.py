@@ -16,7 +16,12 @@ from filters.apply_contact_point_filters import calc_indentation
 
 def register_filters(conn):
     """Registers all filter functions inside DuckDB for SQL queries."""
-
+    conn.create_function("autotresh_filter", autothresh_filter, return_type="DOUBLE[][]", null_handling='SPECIAL')
+    conn.create_function("gof_filter", gof_filter, return_type="DOUBLE[][]")
+    conn.create_function("gof_sphere_filter", gof_sphere_filter, return_type="DOUBLE[][]")
+    conn.create_function("rov_filter", rov_filter, return_type="DOUBLE[][]")
+    conn.create_function("step_drift_filter", step_drift_filter, return_type="DOUBLE[][]")
+    conn.create_function("threshold_filter", threshold_filter, return_type="DOUBLE[][]")
     # ✅ Register Median Filter
     conn.create_function("median_filter_array", median_filter_array, return_type="DOUBLE[]")
 
@@ -36,12 +41,7 @@ def register_filters(conn):
     conn.create_function("savgol_smooth", savgol_smooth, 
                          return_type="DOUBLE[]")
 
-    conn.create_function("autotresh_filter", autothresh_filter, return_type="DOUBLE[][]", null_handling='SPECIAL')
-    conn.create_function("gof_filter", gof_filter, return_type="DOUBLE[][]")
-    conn.create_function("gof_sphere_filter", gof_sphere_filter, return_type="DOUBLE[][]")
-    conn.create_function("rov_filter", rov_filter, return_type="DOUBLE[][]")
-    conn.create_function("step_drift_filter", step_drift_filter, return_type="DOUBLE[][]")
-    conn.create_function("threshold_filter", threshold_filter, return_type="DOUBLE[][]")
+    
 
     print("✅ All filters (Main + CP Filters) registered successfully in DuckDB.")
 

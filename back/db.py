@@ -3,6 +3,8 @@ import duckdb
 from filters.apply_filters import apply
 from filters.apply_contact_point_filters import apply_cp_filters
 from typing import Dict, Tuple, List
+from filters.register_filters import register_filters
+import pandas as pd  # Ensure pandas is imported
 
 DB_PATH = "data/hdf5_data.db"
 
@@ -44,6 +46,7 @@ def save_to_duckdb(transformed_data: Dict[str, Dict[str, List[float]]], db_path:
 
     # Establish connection
     conn = duckdb.connect(db_path)
+    register_filters(conn)  # Uncomment if you have filter registration
 
     try:
         # Create table with curve_id (if not exists)
@@ -186,12 +189,16 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         
         # Compute domain range for Force vs Indentation
         if curves_cp:
+            # Register curves_cp as a DuckDB table
+            curves_df = pd.DataFrame(curves_cp)
+            conn.register("curves_temp", curves_df)
+
             domain_query_cp = """
                 WITH unnested AS (
                     SELECT 
-                        unnest(z_values) AS z_value,
-                        unnest(indentation_values[1]) AS force_value  -- Assuming indentation_values[1] is fi_values
-                    FROM ({}) AS filtered_curves
+                        unnest(x) AS z_value,
+                        unnest(y) AS force_value
+                    FROM curves_temp
                 )
                 SELECT 
                     APPROX_QUANTILE(z_value, 0) AS xMin,
@@ -199,15 +206,8 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                     APPROX_QUANTILE(force_value, 0) AS yMin,
                     APPROX_QUANTILE(force_value, 1) AS yMax
                 FROM unnested
-            """.format(query_cp)
-
+            """
             domain_result_cp = conn.execute(domain_query_cp).fetchone()
-            # domain_cp = {
-            #     "xMin": None,
-            #     "xMax": None,
-            #     "yMin": None,
-            #     "yMax": None,
-            # }
             domain_cp = {
                 "xMin": float(domain_result_cp[0]) if domain_result_cp[0] is not None else None,
                 "xMax": float(domain_result_cp[1]) if domain_result_cp[1] is not None else None,
