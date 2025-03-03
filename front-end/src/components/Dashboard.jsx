@@ -4,7 +4,7 @@ import ForceDisplacementSingle from "./graphs/ForceDisplacementSingle";
 import ForceIndentationDataSet from "./graphs/ForceIndentationDataSet";
 import ForceIndentationSingle from "./graphs/ForceIndentationSingle";
 
-import ElasticitySpectra from "./graphs/ElasticitySpectra";
+import ElasticitySpectra from "./graphs/SpectraElasticity";
 import FiltersComponent from "./FiltersComponent";
 
 const Dashboard = () => {
