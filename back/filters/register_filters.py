@@ -18,7 +18,19 @@ def register_filters(conn):
     """Registers all filter functions inside DuckDB for SQL queries."""
     conn.create_function("autotresh_filter", autothresh_filter, return_type="DOUBLE[][]", null_handling='SPECIAL')
     conn.create_function("gof_filter", gof_filter, return_type="DOUBLE[][]")
-    conn.create_function("gof_sphere_filter", gof_sphere_filter, return_type="DOUBLE[][]")
+    conn.create_function(
+        "gof_sphere_filter",
+        gof_sphere_filter,
+        [
+            duckdb.list_type('DOUBLE'),  # z_values: DOUBLE[]
+            duckdb.list_type('DOUBLE'),  # force_values: DOUBLE[]
+            'INTEGER',                   # fit_window: INTEGER
+            'INTEGER',                   # x_range: INTEGER
+            'INTEGER'                    # force_threshold: INTEGER
+        ],
+        return_type="DOUBLE[][]",      # Return: DOUBLE[] (e.g., [z0, f0])
+        null_handling='SPECIAL'          # Handle NULL inputs explicitly
+    )
     conn.create_function("rov_filter", rov_filter, return_type="DOUBLE[][]")
     conn.create_function("step_drift_filter", step_drift_filter, return_type="DOUBLE[][]")
     conn.create_function("threshold_filter", threshold_filter, return_type="DOUBLE[][]")

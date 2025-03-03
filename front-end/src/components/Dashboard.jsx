@@ -34,17 +34,17 @@ const Dashboard = () => {
     polytrend: { baseline_percentile: 90, polynomial_degree: 2 },
     prominence: { prominency: 40, min_frequency: 25, band_pass: 30 },
     savgol: { window_size: 25.0, polyorder: 3 },
-    autotresh: {},
-    gof: {},
-    gofSphere: { radius: 1.0 },
-    rov: { window: 10 },
-    stepanddrift: { step_size: 0.1 },
-    threshold: { force_threshold: 0.01 },
+    autotresh: {range_to_set_zero: 500},
+    gof: {fit_window: 200, min_x:50, max_force:50},
+    gofSphere: { fit_window:200, x_range:1000, force_threshold: 10 },
+    rov: { safe_threshold: 10, x_range:1000, windowRov: 200 },
+    stepanddrift: { algin_threshold: 10, threshold_ratio: 25, smoothing_window: 101 },
+    threshold: { starting_threshold: 2, min_x: 1, max_x: 60, force_offset: 0 },
   };
 
   useEffect(() => {
-    socketRef.current = new WebSocket("ws://localhost:8080/ws/data");
-    // socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
+    // socketRef.current = new WebSocket("ws://localhost:8080/ws/data");
+    socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
 
     socketRef.current.onopen = () => {
       console.log("WebSocket connected.");

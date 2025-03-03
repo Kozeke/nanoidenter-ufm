@@ -1,6 +1,6 @@
 import numpy as np
 
-def autothresh_filter(x, y):
+def autothresh_filter(x, y, zeroRange=0):
     """
     Apply autotresh filter to find contact point.
     Returns [z_cp, f_cp] as a DOUBLE[][] or None if no valid point is found.
@@ -13,7 +13,7 @@ def autothresh_filter(x, y):
     worky = np.copy(np.asarray(y, dtype=np.float64))
 
     # Find target index for zero range
-    xtarget = np.min(x)
+    xtarget = np.min(x) + zeroRange * 1e-9
     jtarget = np.argmin(np.abs(x - xtarget))
 
     if jtarget == 0 or jtarget >= len(x):

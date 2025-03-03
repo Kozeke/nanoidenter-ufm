@@ -1,38 +1,64 @@
 import numpy as np
 
-def rov_filter(self, x, y):
-    """Returns contact point based on maximum variance ratio"""
-    x = np.asarray(x)
-    y = np.asarray(y)
-    out = self.getWeight(x, y)
+def rov_filter(x, y, safe_threshold=10, x_range=1000, windowRov=200):
+    """
+    Returns contact point based on maximum variance ratio.
+
+    Parameters:
+    - x: Array of z-values
+    - y: Array of force values
+    - safe_threshold: Force threshold in nanoNewtons (default: 10 nN)
+    - x_range: Range in nanometers for x threshold (default: 1000 nm)
+    - windowRov: Window size in nanometers for variance ratio (default: 200 nm)
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    out = getWeight(x, y, safe_threshold, x_range, windowRov)
     if not out:
         return False
     zz_x, rov = out
     rov_best_ind = np.argmax(rov)
     j_rov = np.argmin(np.abs(x - zz_x[rov_best_ind]))  # Avoid squaring
-    return [x[j_rov], y[j_rov]]
+    return [[float(x[j_rov]), float(y[j_rov])]]  # Ensure float output
 
-def getRange(self, x, y):
-    """Returns min and max indices based on thresholds"""
+def getRange(x, y, safe_threshold, x_range):
+    """
+    Returns min and max indices based on thresholds.
+
+    Parameters:
+    - x: Array of z-values
+    - y: Array of force values
+    - safe_threshold: Force threshold in nanoNewtons
+    - x_range: Range in nanometers for x threshold
+    """
     try:
-        f_threshold = self.getValue('Fthreshold') * 1e-9
-        x_range = self.getValue('Xrange') * 1e-9
+        f_threshold = safe_threshold * 1e-9  # Convert nN to N
+        x_range_nm = x_range * 1e-9  # Convert nm to m
         jmax = np.argmin(np.abs(y - f_threshold))
-        jmin = np.argmin(np.abs(x - (x[jmax] - x_range)))
+        jmin = np.argmin(np.abs(x - (x[jmax] - x_range_nm)))
         return jmin, jmax
     except ValueError:
         return False
 
-def getWeight(self, x, y):
-    """Returns x values and variance ratios for contact point detection"""
-    out = self.getRange(x, y)
+def getWeight(x, y, safe_threshold, x_range, windowRov):
+    """
+    Returns x values and variance ratios for contact point detection.
+
+    Parameters:
+    - x: Array of z-values
+    - y: Array of force values
+    - safe_threshold: Force threshold in nanoNewtons
+    - x_range: Range in nanometers for x threshold
+    - windowRov: Window size in nanometers for variance ratio
+    """
+    out = getRange(x, y, safe_threshold, x_range)
     if not out:
         return False
     jmin, jmax = out
     
     # Calculate window size
-    winr = self.getValue('windowr') * 1e-9
-    xstep = (x.max() - x.min()) / (len(x) - 1)
+    winr = windowRov * 1e-9  # Convert nm to m
+    xstep = (x.max() - x.min()) / (len(x) - 1) if len(x) > 1 else 1
     win = int(winr / xstep)
     
     # Adjust bounds
