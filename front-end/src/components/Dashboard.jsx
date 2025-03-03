@@ -1,7 +1,10 @@
-// Dashboard.jsx
 import React, { useState, useEffect, useRef } from "react";
-import ForceDisplacement from "./graphs/ForceDisplacement";
-import ForceIdentation from "./graphs/ForceIndentation";
+import ForceDisplacementDataSet from "./graphs/ForceDisplacementDataSet";
+import ForceDisplacementSingle from "./graphs/ForceDisplacementSingle";
+import ForceIndentationDataSet from "./graphs/ForceIndentationDataSet";
+import ForceIndentationSingle from "./graphs/ForceIndentationSingle";
+
+import ElasticitySpectra from "./graphs/ElasticitySpectra";
 import FiltersComponent from "./FiltersComponent";
 
 const Dashboard = () => {
@@ -34,10 +37,10 @@ const Dashboard = () => {
     polytrend: { baseline_percentile: 90, polynomial_degree: 2 },
     prominence: { prominency: 40, min_frequency: 25, band_pass: 30 },
     savgol: { window_size: 25.0, polyorder: 3 },
-    autotresh: {range_to_set_zero: 500},
-    gof: {fit_window: 200, min_x:50, max_force:50},
-    gofSphere: { fit_window:200, x_range:1000, force_threshold: 10 },
-    rov: { safe_threshold: 10, x_range:1000, windowRov: 200 },
+    autotresh: { range_to_set_zero: 500 },
+    gof: { fit_window: 200, min_x: 50, max_force: 50 },
+    gofSphere: { fit_window: 200, x_range: 1000, force_threshold: 10 },
+    rov: { safe_threshold: 10, x_range: 1000, windowRov: 200 },
     stepanddrift: { algin_threshold: 10, threshold_ratio: 25, smoothing_window: 101 },
     threshold: { starting_threshold: 2, min_x: 1, max_x: 60, force_offset: 0 },
   };
@@ -55,33 +58,31 @@ const Dashboard = () => {
     };
 
     socketRef.current.onmessage = (event) => {
-        const response = JSON.parse(event.data);
-        if (response.status === "batch" && response.data) {
-          const { graphForcevsZ, graphForceIndentation } = response.data;
-    
-          // Update Force vs Z graph
-          setForceData((prev) => [...prev, ...graphForcevsZ.curves]);
-          setDomainRange((prev) => ({
-              xMin: Math.min(prev.xMin, graphForcevsZ.domain.xMin ?? Infinity),
-              xMax: Math.max(prev.xMax, graphForcevsZ.domain.xMax ?? -Infinity),
-              yMin: Math.min(prev.yMin, graphForcevsZ.domain.yMin ?? Infinity),
-              yMax: Math.max(prev.yMax, graphForcevsZ.domain.yMax ?? -Infinity),
-          }));
-  
-          // Update Force vs Indentation graph
-          setIndentationData((prev) => [...prev, ...graphForceIndentation.curves]);
-          setIndentationDomain((prev) => ({
-              xMin: Math.min(prev.xMin, graphForceIndentation.domain.xMin ?? Infinity),
-              xMax: Math.max(prev.xMax, graphForceIndentation.domain.xMax ?? -Infinity),
-              yMin: Math.min(prev.yMin, graphForceIndentation.domain.yMin ?? Infinity),
-              yMax: Math.max(prev.yMax, graphForceIndentation.domain.yMax ?? -Infinity),
-          }));
-        } else if (response.status === "batch_empty") {
-          console.log("No data for batch:", response.batch_ids);
-        } else if (response.status === "batch_error") {
-          console.error("Batch error:", response.message);
-        }
-      };
+      const response = JSON.parse(event.data);
+      if (response.status === "batch" && response.data) {
+        const { graphForcevsZ, graphForceIndentation } = response.data;
+
+        setForceData((prev) => [...prev, ...graphForcevsZ.curves]);
+        setDomainRange((prev) => ({
+          xMin: Math.min(prev.xMin, graphForcevsZ.domain.xMin ?? Infinity),
+          xMax: Math.max(prev.xMax, graphForcevsZ.domain.xMax ?? -Infinity),
+          yMin: Math.min(prev.yMin, graphForcevsZ.domain.yMin ?? Infinity),
+          yMax: Math.max(prev.yMax, graphForcevsZ.domain.yMax ?? -Infinity),
+        }));
+
+        setIndentationData((prev) => [...prev, ...graphForceIndentation.curves]);
+        setIndentationDomain((prev) => ({
+          xMin: Math.min(prev.xMin, graphForceIndentation.domain.xMin ?? Infinity),
+          xMax: Math.max(prev.xMax, graphForceIndentation.domain.xMax ?? -Infinity),
+          yMin: Math.min(prev.yMin, graphForceIndentation.domain.yMin ?? Infinity),
+          yMax: Math.max(prev.yMax, graphForceIndentation.domain.yMax ?? -Infinity),
+        }));
+      } else if (response.status === "batch_empty") {
+        console.log("No data for batch:", response.batch_ids);
+      } else if (response.status === "batch_error") {
+        console.error("Batch error:", response.message);
+      }
+    };
 
     socketRef.current.onclose = () => {
       console.log("WebSocket disconnected.");
@@ -123,11 +124,18 @@ const Dashboard = () => {
   const handleAddFilter = (filterName, isCpFilter = false) => {
     const targetFilters = isCpFilter ? cpFilters : regularFilters;
     const setTargetFilters = isCpFilter ? setCpFilters : setRegularFilters;
+
     if (filterName && !targetFilters[filterName]) {
-      setTargetFilters((prev) => ({
-        ...prev,
-        [filterName]: filterDefaults[filterName],
-      }));
+      if (isCpFilter) {
+        setTargetFilters(() => ({
+          [filterName]: filterDefaults[filterName],
+        }));
+      } else {
+        setTargetFilters((prev) => ({
+          ...prev,
+          [filterName]: filterDefaults[filterName],
+        }));
+      }
     }
   };
 
@@ -160,9 +168,115 @@ const Dashboard = () => {
   };
 
   return (
-    <div style={{ display: "flex" }}>
-      <ForceDisplacement forceData={forceData} domainRange={domainRange} />
-      <ForceIdentation forceData={indentationData} domainRange={indentationDomain} />
+    <div
+      style={{
+        display: "flex",
+        height: "100vh",
+        backgroundColor: "#f4f6f8",
+        fontFamily: "'Roboto', sans-serif",
+      }}
+    >
+      <div
+        style={{
+          flex: 1,
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr", // Two columns
+          gridTemplateRows: "1fr 1fr", // Three rows
+          gap: "10px", // Reduced gap for tighter fit
+          padding: "10px", // Reduced padding
+        }}
+      >
+        {/* Graph 1 */}
+        <div
+          style={{
+            backgroundColor: "#fff",
+            borderRadius: "8px",
+            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+            padding: "10px",
+          }}
+        >
+          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
+            Force vs Displacement
+          </h2>
+          <ForceDisplacementDataSet forceData={forceData} domainRange={domainRange} />
+        </div>
+
+        {/* Graph 2 */}
+        <div
+          style={{
+            backgroundColor: "#fff",
+            borderRadius: "8px",
+            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+            padding: "10px",
+          }}
+        >
+          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
+            Force vs Indentation
+          </h2>
+          <ForceIndentationDataSet forceData={indentationData} domainRange={indentationDomain} />
+        </div>
+
+        {/* Graph 3 */}
+        <div
+          style={{
+            backgroundColor: "#fff",
+            borderRadius: "8px",
+            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+            padding: "10px",
+          }}
+        >
+          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
+            Elasticity Spectra
+          </h2>
+          <ElasticitySpectra forceData={indentationData} domainRange={indentationDomain} />
+        </div>
+
+        {/* Graph 4 (Duplicate for demo) */}
+        <div
+          style={{
+            backgroundColor: "#fff",
+            borderRadius: "8px",
+            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+            padding: "10px",
+          }}
+        >
+          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
+            Force vs Displacement (2)
+          </h2>
+          <ForceDisplacementSingle forceData={forceData} domainRange={domainRange} />
+        </div>
+
+        {/* Graph 5 (Duplicate for demo) */}
+        <div
+          style={{
+            backgroundColor: "#fff",
+            borderRadius: "8px",
+            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+            padding: "10px",
+          }}
+        >
+          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
+            Force vs Indentation (2)
+          </h2>
+          <ForceIndentationSingle forceData={indentationData} domainRange={indentationDomain} />
+        </div>
+
+        {/* Graph 6 (Duplicate for demo) */}
+        <div
+          style={{
+            backgroundColor: "#fff",
+            borderRadius: "8px",
+            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+            padding: "10px",
+          }}
+        >
+          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
+            Elasticity Spectra (2)
+          </h2>
+          <ElasticitySpectra forceData={indentationData} domainRange={indentationDomain} />
+        </div>
+      </div>
+
       <FiltersComponent
         numCurves={numCurves}
         regularFilters={regularFilters}

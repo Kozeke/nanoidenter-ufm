@@ -2,8 +2,7 @@
 import React from "react";
 import ReactECharts from "echarts-for-react";
 
-const ForceDisplacement = ({ forceData, domainRange }) => {
-// Function to determine scale factor based on a min value
+const ForceIndentationSingle = ({ forceData, domainRange }) => {
   function getScaleFactor(minValue, dataArray = []) {
     if (!minValue && minValue !== 0) return 1; // Handle undefined or null
     if (minValue === 0 && dataArray.length > 0) {
@@ -22,7 +21,7 @@ const ForceDisplacement = ({ forceData, domainRange }) => {
   const yScaleFactor = getScaleFactor(domainRange.yMin); 
 
   const chartOptions = {
-    title: { text: "Force vs Z (Live)", left: "center" },
+    title: { text: "Force Indentation (Single)", left: "center" },
     tooltip: { trigger: "axis" },
     xAxis: {
         type: "value",
@@ -60,14 +59,14 @@ const ForceDisplacement = ({ forceData, domainRange }) => {
         data: curve.x.map((x, i) => [x * xScaleFactor, curve.y[i] * yScaleFactor]) || [], // Apply different scales
     })),
     legend: { show: false, bottom: 0 },
-    grid: { left: "10%", right: "10%", bottom: "10%" },
+    grid: { left: "12%", right: "10%", bottom: "10%" },
     animation: false,
     progressive: 5000,
   };
 
   return (
     <div style={{ flex: 1 }}>
-      <h2>Force vs Z (Live)</h2>
+      <h2>Force Indentation (Single)</h2>
       <ReactECharts
         option={chartOptions}
         style={{ height: 600 }}
@@ -77,4 +76,4 @@ const ForceDisplacement = ({ forceData, domainRange }) => {
     </div>
   );
 };
-export default ForceDisplacement;
+export default ForceIndentationSingle;

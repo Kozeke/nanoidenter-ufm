@@ -2,7 +2,7 @@
 import React from "react";
 import ReactECharts from "echarts-for-react";
 
-const ForceIndentation = ({ forceData, domainRange }) => {
+const ForceIndentationDataSet = ({ forceData, domainRange }) => {
   function getScaleFactor(minValue, dataArray = []) {
     if (!minValue && minValue !== 0) return 1; // Handle undefined or null
     if (minValue === 0 && dataArray.length > 0) {
@@ -21,7 +21,7 @@ const ForceIndentation = ({ forceData, domainRange }) => {
   const yScaleFactor = getScaleFactor(domainRange.yMin); 
 
   const chartOptions = {
-    title: { text: "Force Indentation (Live)", left: "center" },
+    title: { text: "Force Indentation (Data set)", left: "center" },
     tooltip: { trigger: "axis" },
     xAxis: {
         type: "value",
@@ -59,14 +59,14 @@ const ForceIndentation = ({ forceData, domainRange }) => {
         data: curve.x.map((x, i) => [x * xScaleFactor, curve.y[i] * yScaleFactor]) || [], // Apply different scales
     })),
     legend: { show: false, bottom: 0 },
-    grid: { left: "10%", right: "10%", bottom: "10%" },
+    grid: { left: "12%", right: "10%", bottom: "10%" },
     animation: false,
     progressive: 5000,
   };
 
   return (
     <div style={{ flex: 1 }}>
-      <h2>Force Indentation (Live)</h2>
+      <h2>Force Indentation (Data Set)</h2>
       <ReactECharts
         option={chartOptions}
         style={{ height: 600 }}
@@ -76,4 +76,4 @@ const ForceIndentation = ({ forceData, domainRange }) => {
     </div>
   );
 };
-export default ForceIndentation;
+export default ForceIndentationDataSet;

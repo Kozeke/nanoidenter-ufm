@@ -2,7 +2,7 @@
 import React from "react";
 import ReactECharts from "echarts-for-react";
 
-const ElasticitySpectra = ({ forceData, domainRange }) => {
+const ForceDisplacementDataSet = ({ forceData, domainRange }) => {
 // Function to determine scale factor based on a min value
   function getScaleFactor(minValue, dataArray = []) {
     if (!minValue && minValue !== 0) return 1; // Handle undefined or null
@@ -22,7 +22,7 @@ const ElasticitySpectra = ({ forceData, domainRange }) => {
   const yScaleFactor = getScaleFactor(domainRange.yMin); 
 
   const chartOptions = {
-    title: { text: "E (Live)", left: "center" },
+    title: { text: "Force-displacement (data set)", left: "center" },
     tooltip: { trigger: "axis" },
     xAxis: {
         type: "value",
@@ -77,4 +77,4 @@ const ElasticitySpectra = ({ forceData, domainRange }) => {
     </div>
   );
 };
-export default ElasticitySpectra;
+export default ForceDisplacementDataSet;

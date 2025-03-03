@@ -151,7 +151,7 @@ const MultiLineChart = () => {
           ]) || [],
       })),
       legend: { show: false, bottom: 0 },
-      grid: { left: "10%", right: "10%", bottom: "5%" },
+      grid: { left: "12%", right: "10%", bottom: "5%" },
       animation: false,
       progressive: 5000,
     }),

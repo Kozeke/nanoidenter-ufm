@@ -1,4 +1,3 @@
-// FiltersComponent.jsx
 import React from "react";
 
 const FiltersComponent = ({
@@ -15,9 +14,66 @@ const FiltersComponent = ({
   handleFilterChange,
   sendCurveRequest,
 }) => {
+  const [isOpen, setIsOpen] = React.useState(true);
+
+  const toggleFilters = () => {
+    setIsOpen((prev) => !prev);
+  };
+
+  // Render only a toggle button when filters are closed
+  if (!isOpen) {
+    return (
+      <div style={{ position: "fixed", right: "10px", top: "10px" }}>
+        <button
+          onClick={toggleFilters}
+          style={{
+            padding: "8px 12px",
+            backgroundColor: "#007bff",
+            color: "white",
+            border: "none",
+            borderRadius: "5px",
+            cursor: "pointer",
+            fontSize: "14px",
+          }}
+        >
+          Filters
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div style={{ width: "300px", padding: "10px", borderLeft: "1px solid #ddd" }}>
-      <div style={{ marginBottom: "20px" }}>
+    <div
+      style={{
+        width: "300px",
+        padding: "10px",
+        borderLeft: "1px solid #ddd",
+        backgroundColor: "#f9f9f9",
+        position: "fixed",
+        right: "0",
+        top: "0",
+        height: "100vh",
+        overflowY: "auto",
+        boxShadow: "-2px 0 5px rgba(0,0,0,0.1)",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ margin: "0" }}>Filters</h3>
+        <button
+          onClick={toggleFilters}
+          style={{
+            background: "none",
+            border: "none",
+            color: "#ff4d4d",
+            fontSize: "18px",
+            cursor: "pointer",
+          }}
+        >
+          ✕
+        </button>
+      </div>
+
+      <div style={{ marginBottom: "20px", marginTop: "20px" }}>
         <label>Number of Curves: </label>
         <input
           type="range"
@@ -36,6 +92,7 @@ const FiltersComponent = ({
           style={{ width: "50px", textAlign: "center", marginLeft: "10px" }}
         />
       </div>
+
       <div style={{ marginBottom: "20px" }}>
         <label>Select Regular Filter: </label>
         <select
@@ -44,6 +101,7 @@ const FiltersComponent = ({
             setSelectedRegularFilter(e.target.value);
             handleAddFilter(e.target.value, false);
           }}
+          style={{ width: "100%", padding: "5px" }}
         >
           <option value="">None</option>
           <option value="median">Median Filter</option>
@@ -54,6 +112,7 @@ const FiltersComponent = ({
           <option value="savgol">Savitzky-Golay</option>
         </select>
       </div>
+
       <div style={{ marginBottom: "20px" }}>
         <label>Select CP Filter: </label>
         <select
@@ -62,6 +121,7 @@ const FiltersComponent = ({
             setSelectedCpFilter(e.target.value);
             handleAddFilter(e.target.value, true);
           }}
+          style={{ width: "100%", padding: "5px" }}
         >
           <option value="">None</option>
           <option value="autotresh">Auto Threshold</option>
@@ -72,6 +132,7 @@ const FiltersComponent = ({
           <option value="threshold">Threshold</option>
         </select>
       </div>
+
       {Object.keys(regularFilters).map((filterName) => (
         <div
           key={filterName}
@@ -80,13 +141,14 @@ const FiltersComponent = ({
             padding: "10px",
             border: "1px solid #ddd",
             borderRadius: "5px",
+            backgroundColor: "#fff",
           }}
         >
-          <h4>
+          <h4 style={{ margin: "0", display: "flex", justifyContent: "space-between" }}>
             {filterName}
             <button
               onClick={() => handleRemoveFilter(filterName, false)}
-              style={{ marginLeft: "10px", color: "red", border: "none", background: "none" }}
+              style={{ color: "red", border: "none", background: "none", cursor: "pointer" }}
             >
               ❌
             </button>
@@ -106,6 +168,7 @@ const FiltersComponent = ({
           ))}
         </div>
       ))}
+
       {Object.keys(cpFilters).map((filterName) => (
         <div
           key={filterName}
@@ -114,13 +177,14 @@ const FiltersComponent = ({
             padding: "10px",
             border: "1px solid #ddd",
             borderRadius: "5px",
+            backgroundColor: "#fff",
           }}
         >
-          <h4>
+          <h4 style={{ margin: "0", display: "flex", justifyContent: "space-between" }}>
             {filterName}
             <button
               onClick={() => handleRemoveFilter(filterName, true)}
-              style={{ marginLeft: "10px", color: "red", border: "none", background: "none" }}
+              style={{ color: "red", border: "none", background: "none", cursor: "pointer" }}
             >
               ❌
             </button>
@@ -140,13 +204,24 @@ const FiltersComponent = ({
           ))}
         </div>
       ))}
+
       <button
         onClick={sendCurveRequest}
-        style={{ width: "100%", padding: "10px", marginTop: "10px" }}
+        style={{
+          width: "100%",
+          padding: "10px",
+          marginTop: "10px",
+          backgroundColor: "#28a745",
+          color: "white",
+          border: "none",
+          borderRadius: "5px",
+          cursor: "pointer",
+        }}
       >
         Update Curves
       </button>
     </div>
   );
 };
+
 export default FiltersComponent;
