@@ -3,7 +3,6 @@ import ForceDisplacementDataSet from "./graphs/ForceDisplacementDataSet";
 import ForceDisplacementSingle from "./graphs/ForceDisplacementSingle";
 import ForceIndentationDataSet from "./graphs/ForceIndentationDataSet";
 import ForceIndentationSingle from "./graphs/ForceIndentationSingle";
-
 import ElasticitySpectra from "./graphs/SpectraElasticity";
 import FiltersComponent from "./FiltersComponent";
 
@@ -21,7 +20,7 @@ const Dashboard = () => {
     yMin: Infinity,
     yMax: -Infinity,
   });
-  const [numCurves, setNumCurves] = useState(50);
+  const [numCurves, setNumCurves] = useState(1);
   const socketRef = useRef(null);
   const initialRequestSent = useRef(false);
   const [regularFilters, setRegularFilters] = useState({});
@@ -29,6 +28,7 @@ const Dashboard = () => {
   const [selectedRegularFilter, setSelectedRegularFilter] = useState("");
   const [selectedCpFilter, setSelectedCpFilter] = useState("");
   const [indentationData, setIndentationData] = useState([]);
+  const [activeTab, setActiveTab] = useState("forceDisplacement");
 
   const filterDefaults = {
     median: { window_size: 5 },
@@ -41,7 +41,11 @@ const Dashboard = () => {
     gof: { fit_window: 200, min_x: 50, max_force: 50 },
     gofSphere: { fit_window: 200, x_range: 1000, force_threshold: 10 },
     rov: { safe_threshold: 10, x_range: 1000, windowRov: 200 },
-    stepanddrift: { algin_threshold: 10, threshold_ratio: 25, smoothing_window: 101 },
+    stepanddrift: {
+      algin_threshold: 10,
+      threshold_ratio: 25,
+      smoothing_window: 101,
+    },
     threshold: { starting_threshold: 2, min_x: 1, max_x: 60, force_offset: 0 },
   };
 
@@ -70,17 +74,28 @@ const Dashboard = () => {
           yMax: Math.max(prev.yMax, graphForcevsZ.domain.yMax ?? -Infinity),
         }));
 
-        setIndentationData((prev) => [...prev, ...graphForceIndentation.curves]);
+        setIndentationData((prev) => [
+          ...prev,
+          ...graphForceIndentation.curves,
+        ]);
         setIndentationDomain((prev) => ({
-          xMin: Math.min(prev.xMin, graphForceIndentation.domain.xMin ?? Infinity),
-          xMax: Math.max(prev.xMax, graphForceIndentation.domain.xMax ?? -Infinity),
-          yMin: Math.min(prev.yMin, graphForceIndentation.domain.yMin ?? Infinity),
-          yMax: Math.max(prev.yMax, graphForceIndentation.domain.yMax ?? -Infinity),
+          xMin: Math.min(
+            prev.xMin,
+            graphForceIndentation.domain.xMin ?? Infinity
+          ),
+          xMax: Math.max(
+            prev.xMax,
+            graphForceIndentation.domain.xMax ?? -Infinity
+          ),
+          yMin: Math.min(
+            prev.yMin,
+            graphForceIndentation.domain.yMin ?? Infinity
+          ),
+          yMax: Math.max(
+            prev.yMax,
+            graphForceIndentation.domain.yMax ?? -Infinity
+          ),
         }));
-      } else if (response.status === "batch_empty") {
-        console.log("No data for batch:", response.batch_ids);
-      } else if (response.status === "batch_error") {
-        console.error("Batch error:", response.message);
       }
     };
 
@@ -117,7 +132,6 @@ const Dashboard = () => {
         },
       };
       socketRef.current.send(JSON.stringify(requestData));
-      console.log("Request sent:", requestData);
     }
   };
 
@@ -176,104 +190,182 @@ const Dashboard = () => {
         fontFamily: "'Roboto', sans-serif",
       }}
     >
-      <div
-        style={{
-          flex: 1,
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr", // Two columns
-          gridTemplateRows: "1fr 1fr", // Three rows
-          gap: "10px", // Reduced gap for tighter fit
-          padding: "10px", // Reduced padding
-        }}
-      >
-        {/* Graph 1 */}
-        <div
-          style={{
-            backgroundColor: "#fff",
-            borderRadius: "8px",
-            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-            padding: "10px",
-          }}
-        >
-          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
+      <div style={{ flex: 1, padding: "10px" }}>
+        {/* Tab Navigation */}
+        <div style={{ marginBottom: "10px" }}>
+          <button
+            onClick={() => setActiveTab("forceDisplacement")}
+            style={{
+              padding: "8px 16px",
+              marginRight: "5px",
+              backgroundColor:
+                activeTab === "forceDisplacement" ? "#007bff" : "#fff",
+              color: activeTab === "forceDisplacement" ? "#fff" : "#333",
+              border: "1px solid #ccc",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+          >
             Force vs Displacement
-          </h2>
-          <ForceDisplacementDataSet forceData={forceData} domainRange={domainRange} />
-        </div>
-
-        {/* Graph 2 */}
-        <div
-          style={{
-            backgroundColor: "#fff",
-            borderRadius: "8px",
-            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-            padding: "10px",
-          }}
-        >
-          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
+          </button>
+          <button
+            onClick={() => setActiveTab("forceIndentation")}
+            style={{
+              padding: "8px 16px",
+              marginRight: "5px",
+              backgroundColor:
+                activeTab === "forceIndentation" ? "#007bff" : "#fff",
+              color: activeTab === "forceIndentation" ? "#fff" : "#333",
+              border: "1px solid #ccc",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+          >
             Force vs Indentation
-          </h2>
-          <ForceIndentationDataSet forceData={indentationData} domainRange={indentationDomain} />
-        </div>
-
-        {/* Graph 3 */}
-        <div
-          style={{
-            backgroundColor: "#fff",
-            borderRadius: "8px",
-            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-            padding: "10px",
-          }}
-        >
-          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
+          </button>
+          <button
+            onClick={() => setActiveTab("elasticitySpectra")}
+            style={{
+              padding: "8px 16px",
+              backgroundColor:
+                activeTab === "elasticitySpectra" ? "#007bff" : "#fff",
+              color: activeTab === "elasticitySpectra" ? "#fff" : "#333",
+              border: "1px solid #ccc",
+              borderRadius: "4px",
+              cursor: "pointer",
+            }}
+          >
             Elasticity Spectra
-          </h2>
-          <ElasticitySpectra forceData={indentationData} domainRange={indentationDomain} />
+          </button>
         </div>
 
-        {/* Graph 4 (Duplicate for demo) */}
+        {/* Tab Content */}
         <div
           style={{
-            backgroundColor: "#fff",
-            borderRadius: "8px",
-            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-            padding: "10px",
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: "10px",
           }}
         >
-          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
-            Force vs Displacement (2)
-          </h2>
-          <ForceDisplacementSingle forceData={forceData} domainRange={domainRange} />
-        </div>
+          {activeTab === "forceDisplacement" && (
+            <>
+              <div
+                style={{
+                  backgroundColor: "#fff",
+                  borderRadius: "8px",
+                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+                  padding: "10px",
+                }}
+              >
+                <h2
+                  style={{
+                    margin: "0 0 5px 0",
+                    fontSize: "14px",
+                    color: "#333",
+                  }}
+                >
+                  Force vs Displacement (DataSet)
+                </h2>
+                <ForceDisplacementDataSet
+                  forceData={forceData}
+                  domainRange={domainRange}
+                />
+              </div>
+              <div
+                style={{
+                  backgroundColor: "#fff",
+                  borderRadius: "8px",
+                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+                  padding: "10px",
+                }}
+              >
+                <h2
+                  style={{
+                    margin: "0 0 5px 0",
+                    fontSize: "14px",
+                    color: "#333",
+                  }}
+                >
+                  Force vs Displacement (Single)
+                </h2>
+                <ForceDisplacementSingle
+                  forceData={forceData}
+                  domainRange={domainRange}
+                />
+              </div>
+            </>
+          )}
 
-        {/* Graph 5 (Duplicate for demo) */}
-        <div
-          style={{
-            backgroundColor: "#fff",
-            borderRadius: "8px",
-            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-            padding: "10px",
-          }}
-        >
-          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
-            Force vs Indentation (2)
-          </h2>
-          <ForceIndentationSingle forceData={indentationData} domainRange={indentationDomain} />
-        </div>
+          {activeTab === "forceIndentation" && (
+            <>
+              <div
+                style={{
+                  backgroundColor: "#fff",
+                  borderRadius: "8px",
+                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+                  padding: "10px",
+                }}
+              >
+                <h2
+                  style={{
+                    margin: "0 0 5px 0",
+                    fontSize: "14px",
+                    color: "#333",
+                  }}
+                >
+                  Force vs Indentation (Data Set)
+                </h2>
+                <ForceIndentationDataSet
+                  forceData={indentationData}
+                  domainRange={indentationDomain}
+                />
+              </div>
+              <div
+                style={{
+                  backgroundColor: "#fff",
+                  borderRadius: "8px",
+                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+                  padding: "10px",
+                }}
+              >
+                <h2
+                  style={{
+                    margin: "0 0 5px 0",
+                    fontSize: "14px",
+                    color: "#333",
+                  }}
+                >
+                  Force vs Indentation (Single)
+                </h2>
+                <ForceIndentationSingle
+                  forceData={indentationData}
+                  domainRange={indentationDomain}
+                />
+              </div>
+            </>
+          )}
 
-        {/* Graph 6 (Duplicate for demo) */}
-        <div
-          style={{
-            backgroundColor: "#fff",
-            borderRadius: "8px",
-            boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-            padding: "10px",
-          }}
-        >
-          <h2 style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}>
-            Elasticity Spectra (2)
-          </h2>
-          <ElasticitySpectra forceData={indentationData} domainRange={indentationDomain} />
+          {activeTab === "elasticitySpectra" && (
+            <div
+              style={{
+                backgroundColor: "#fff",
+                borderRadius: "8px",
+                boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+                padding: "10px",
+                gridColumn: "span 2",
+              }}
+            >
+              <h2
+                style={{ margin: "0 0 5px 0", fontSize: "14px", color: "#333" }}
+              >
+                Elasticity Spectra
+              </h2>
+              <ElasticitySpectra
+                forceData={indentationData}
+                domainRange={indentationDomain}
+              />
+            </div>
+          )}
         </div>
       </div>
 
