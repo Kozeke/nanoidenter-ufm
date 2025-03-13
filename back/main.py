@@ -157,7 +157,7 @@ async def process_and_stream_batch(
                 
             }
         }
-        print(response_data["data"]["graphElspectra"])
+        # print(response_data["data"]["graphElspectra"])
         # Add single curve data if available
         if graph_force_vs_z_single:
             response_data["data"].update({
@@ -172,7 +172,7 @@ async def process_and_stream_batch(
                 response_data,
                 default=str  # Handles any non-serializable types like numpy arrays
             ))
-            print(f"Streamed batch for IDs: {batch_ids}, curve_id: {curve_id}")
+            # print(f"Streamed batch for IDs: {batch_ids}, curve_id: {curve_id}")
         else:
             print(f"No data returned for batch: {batch_ids}")
             await websocket.send_text(json.dumps({

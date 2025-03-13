@@ -61,7 +61,7 @@ const Dashboard = () => {
   const [cpFilters, setCpFilters] = useState({});
   const [selectedRegularFilter, setSelectedRegularFilter] = useState("");
   const [selectedCpFilter, setSelectedCpFilter] = useState("");
-  const [activeTab, setActiveTab] = useState("elasticitySpectra");
+  const [activeTab, setActiveTab] = useState("forceDisplacement");
   const [curveId, setCurveId] = useState("");
 
   const filterDefaults = {
@@ -420,7 +420,7 @@ const Dashboard = () => {
                 </h2>
                 <ForceDisplacementSingle
                   forceData={forceDataSingle} // Use separate data for Single graph
-                  domainRange={domainRange}
+                  domainRange={domainRangeSingle}
                 />
               </div>
             </>

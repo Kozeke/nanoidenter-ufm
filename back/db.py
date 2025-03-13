@@ -171,7 +171,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                         "x": zi,  # Indentation Z
                         "y": fi   # Indentation Force
                     })
-                print("lenzifi",len(zi),len(fi))
+                # print("lenzifi",len(zi),len(fi))
                 win = 61
                 order = 2
                 tip_geometry = 'sphere'
@@ -186,7 +186,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                 # print("elspectra_res", elspectra_result)
                 if elspectra_result is not None:
                     ze, e = elspectra_result
-                    print(len(ze),len(e))
+                    # print(len(ze),len(e))
                     curves_el.append({
                         "curve_id": curve_id,
                         "x": ze,  # Position values from elspectra
