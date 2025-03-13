@@ -133,47 +133,32 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     ]
     
     # Compute domain range for Force vs Z
-    domain_query_regular = """
-        WITH unnested AS (
-            SELECT 
-                unnest(z_values) AS z_value,
-                unnest(force_values) AS force_value
-            FROM ({}) AS filtered_curves
-        )
-        SELECT 
-            APPROX_QUANTILE(z_value, 0) AS xMin,
-            APPROX_QUANTILE(z_value, 1) AS xMax,
-            APPROX_QUANTILE(force_value, 0) AS yMin,
-            APPROX_QUANTILE(force_value, 1) AS yMax
-        FROM unnested
-    """.format(query_regular)
-    domain_result_regular = conn.execute(domain_query_regular).fetchone()
-    domain_regular = {
-        "xMin": float(domain_result_regular[0]) if domain_result_regular[0] is not None else None,
-        "xMax": float(domain_result_regular[1]) if domain_result_regular[1] is not None else None,
-        "yMin": float(domain_result_regular[2]) if domain_result_regular[2] is not None else None,
-        "yMax": float(domain_result_regular[3]) if domain_result_regular[3] is not None else None,
-    }
+    domain_regular = compute_domain(conn, curves_regular, "curves_temp_regular")
     
     graph_force_vs_z = {"curves": curves_regular, "domain": domain_regular}
    # --- Graph 2: Force vs Indentation (CP Filters, if active) ---
-    
+    print("graph_force_vs_z")
     graph_force_indentation = {"curves": [], "domain": {"xMin": None, "xMax": None, "yMin": None, "yMax": None}}
+    graph_elspectra = {"curves": [], "domain": {"xMin": None, "xMax": None, "yMin": None, "yMax": None}}
+    
     if cp_filters:  # Only process if cp_filters are present and non-empty
+        # print("cpfilters", cp_filters)
         query_cp = apply_cp_filters(base_query, cp_filters, curve_ids)  # Apply cp_filters
         result_cp = conn.execute(query_cp).fetchall()
         
         # Process curves for Force vs Indentation
         curves_cp = []
+        curves_el = []
         spring_constant = 1.0  # Hardcoded for now; could be a filter parameter
         set_zero_force = True  # Hardcoded; could be configurable
+        print("cp flters applied")
         for row in result_cp:
             curve_id, z_values, force_values, cp_values = row
             if cp_values is not None and cp_values is not False:  # Mimic your condition
                 # Calculate indentation using DuckDB function
-                print("cp",cp_values)
-                print("z_values",len(z_values), z_values[0])
-                print("force_values",len(force_values), force_values[0])
+                # print("cp",cp_values)
+                # print("z_values",len(z_values), z_values[0])
+                # print("force_values",len(force_values), force_values[0])
                 indentation_query = f"""
                     SELECT calc_indentation(?, ?, ?, {spring_constant}, {set_zero_force})
                 """
@@ -186,34 +171,75 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                         "x": zi,  # Indentation Z
                         "y": fi   # Indentation Force
                     })
-        
-        # Compute domain range for Force vs Indentation
+                print("lenzifi",len(zi),len(fi))
+                win = 61
+                order = 2
+                tip_geometry = 'sphere'
+                tip_radius = 1e-05
+                tip_angle = 30.0
+                interp = True                    
+                # Calculate elspectra using indentation results
+                elspectra_query = f"""
+                    SELECT calc_elspectra(?, ?, {win}, {order}, '{tip_geometry}', {tip_radius}, {tip_angle}, {interp})
+                """
+                elspectra_result = conn.execute(elspectra_query, (zi, fi)).fetchone()[0]
+                # print("elspectra_res", elspectra_result)
+                if elspectra_result is not None:
+                    ze, e = elspectra_result
+                    print(len(ze),len(e))
+                    curves_el.append({
+                        "curve_id": curve_id,
+                        "x": ze,  # Position values from elspectra
+                        "y": e    # Electric field values
+                    })
         if curves_cp:
-            # Register curves_cp as a DuckDB table
-            curves_df = pd.DataFrame(curves_cp)
-            conn.register("curves_temp", curves_df)
-
-            domain_query_cp = """
-                WITH unnested AS (
-                    SELECT 
-                        unnest(x) AS z_value,
-                        unnest(y) AS force_value
-                    FROM curves_temp
-                )
-                SELECT 
-                    APPROX_QUANTILE(z_value, 0) AS xMin,
-                    APPROX_QUANTILE(z_value, 1) AS xMax,
-                    APPROX_QUANTILE(force_value, 0) AS yMin,
-                    APPROX_QUANTILE(force_value, 1) AS yMax
-                FROM unnested
-            """
-            domain_result_cp = conn.execute(domain_query_cp).fetchone()
-            domain_cp = {
-                "xMin": float(domain_result_cp[0]) if domain_result_cp[0] is not None else None,
-                "xMax": float(domain_result_cp[1]) if domain_result_cp[1] is not None else None,
-                "yMin": float(domain_result_cp[2]) if domain_result_cp[2] is not None else None,
-                "yMax": float(domain_result_cp[3]) if domain_result_cp[3] is not None else None,
-            }
+            domain_cp = compute_domain(conn, curves_cp, "curves_temp_cp")
             graph_force_indentation = {"curves": curves_cp, "domain": domain_cp}
+        
+        if curves_el:
+            domain_el = compute_domain(conn, curves_el, "curves_temp_el")
+            graph_elspectra = {"curves": curves_el, "domain": domain_el}
 
-    return graph_force_vs_z, graph_force_indentation
+    return graph_force_vs_z, graph_force_indentation, graph_elspectra
+
+
+def compute_domain(conn: duckdb.DuckDBPyConnection, curves: List[Dict], table_name: str) -> Dict:
+    """
+    Compute domain ranges (min/max) for x and y values in a list of curves.
+    
+    Args:
+        conn: DuckDB connection object
+        curves: List of dictionaries containing 'x' and 'y' values
+        table_name: Temporary table name for registration
+    
+    Returns:
+        Dictionary with xMin, xMax, yMin, yMax values
+    """
+    if not curves:
+        return {"xMin": None, "xMax": None, "yMin": None, "yMax": None}
+    
+    curves_df = pd.DataFrame(curves)
+    conn.register(table_name, curves_df)
+    
+    domain_query = f"""
+        WITH unnested AS (
+            SELECT 
+                unnest(x) AS x_value,
+                unnest(y) AS y_value
+            FROM {table_name}
+        )
+        SELECT 
+            APPROX_QUANTILE(x_value, 0) AS xMin,
+            APPROX_QUANTILE(x_value, 1) AS xMax,
+            APPROX_QUANTILE(y_value, 0) AS yMin,
+            APPROX_QUANTILE(y_value, 1) AS yMax
+        FROM unnested
+    """
+    domain_result = conn.execute(domain_query).fetchone()
+    
+    return {
+        "xMin": float(domain_result[0]) if domain_result[0] is not None else None,
+        "xMax": float(domain_result[1]) if domain_result[1] is not None else None,
+        "yMin": float(domain_result[2]) if domain_result[2] is not None else None,
+        "yMax": float(domain_result[3]) if domain_result[3] is not None else None,
+    }

@@ -12,7 +12,9 @@ from filters.cpoint.rov import rov_filter
 from filters.cpoint.stepanddrift import step_drift_filter
 from filters.cpoint.threshold import threshold_filter
 import duckdb
-from filters.apply_contact_point_filters import calc_indentation
+from filters.cpoint.calculate_indentation import calc_indentation
+from filters.cpoint.calculate_elasticity import calc_elspectra
+
 
 def register_filters(conn):
     """Registers all filter functions inside DuckDB for SQL queries."""
@@ -71,6 +73,23 @@ def register_filters(conn):
         duckdb.list_type(duckdb.list_type('DOUBLE')),  # Return: DOUBLE[][]
         null_handling='SPECIAL'
     )
-    # Nested list return type
-  # Returns [Zi, Fi]
+    
+    # Registration with DuckDB
+    conn.create_function(
+        "calc_elspectra",
+        calc_elspectra,
+        [
+            duckdb.list_type('DOUBLE'),    # z_values: DOUBLE[]
+            duckdb.list_type('DOUBLE'),    # force_values: DOUBLE[]
+            'INTEGER',                     # win: INTEGER
+            'INTEGER',                     # order: INTEGER
+            'VARCHAR',                     # tip_geometry: VARCHAR
+            'DOUBLE',                      # tip_radius: DOUBLE
+            'DOUBLE',                      # tip_angle: DOUBLE
+            'BOOLEAN'                      # interp: BOOLEAN
+        ],
+        duckdb.list_type(duckdb.list_type('DOUBLE')),  # Return: DOUBLE[][]
+        null_handling='SPECIAL'
+    )
+
     

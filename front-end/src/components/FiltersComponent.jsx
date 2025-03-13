@@ -13,6 +13,8 @@ const FiltersComponent = ({
   handleRemoveFilter,
   handleFilterChange,
   sendCurveRequest,
+  curveId,           // Add this prop
+  setCurveId,        // Add this prop
 }) => {
   const [isOpen, setIsOpen] = React.useState(true);
 
@@ -20,7 +22,6 @@ const FiltersComponent = ({
     setIsOpen((prev) => !prev);
   };
 
-  // Render only a toggle button when filters are closed
   if (!isOpen) {
     return (
       <div style={{ position: "fixed", right: "10px", top: "10px" }}>
@@ -73,7 +74,19 @@ const FiltersComponent = ({
         </button>
       </div>
 
+      {/* Add Curve ID Input */}
       <div style={{ marginBottom: "20px", marginTop: "20px" }}>
+        <label>Curve ID: </label>
+        <input
+          type="text"
+          value={curveId}
+          onChange={(e) => setCurveId(e.target.value)}
+          style={{ width: "100%", padding: "5px" }}
+          placeholder="Enter Curve ID"
+        />
+      </div>
+
+      <div style={{ marginBottom: "20px" }}>
         <label>Number of Curves: </label>
         <input
           type="range"

@@ -61,7 +61,8 @@ async def websocket_data_stream(websocket: WebSocket):
                 request_data = json.loads(request)
                 num_curves = min(request_data.get("num_curves", 100), 100)  # Cap for safety
                 filters = request_data.get("filters", {"regular": {}, "cp_filters": {}})
-                print(f"Received request: num_curves={num_curves}, filters={filters}")
+                curve_id = request_data.get("curve_id", None)  # Extract curve_id
+                print(f"Received request: num_curves={num_curves}, curve_id={curve_id}, filters={filters}")
 
                 # Fetch curve IDs based on request
                 curve_ids = conn.execute(
@@ -69,12 +70,16 @@ async def websocket_data_stream(websocket: WebSocket):
                 ).fetchall()
                 curve_ids = [str(row[0]) for row in curve_ids]  # Ensure string IDs
                 print(f"Total curve IDs fetched: {len(curve_ids)}")
+                
+                # If curve_id is provided, ensure it's included or handled separately
+                if curve_id and curve_id not in curve_ids:
+                    curve_ids.append(curve_id)  # Add specific curve_id if not already included
 
                 # Process in batches
                 for i in range(0, len(curve_ids), BATCH_SIZE):
                     batch_ids = curve_ids[i:i + BATCH_SIZE]
                     print(f"Processing batch: {batch_ids}")
-                    await process_and_stream_batch(conn, batch_ids, filters, websocket)
+                    await process_and_stream_batch(conn, batch_ids, filters, websocket, curve_id)
                     await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
 
                 # Signal completion of this request
@@ -106,7 +111,9 @@ async def process_and_stream_batch(
     conn: duckdb.DuckDBPyConnection,
     batch_ids: List[str],
     filters: Dict,
-    websocket: WebSocket
+    websocket: WebSocket,
+    curve_id: str = None
+
 ) -> None:
     """
     Process a batch of curve IDs, fetch data from DuckDB, and stream results via WebSocket.
@@ -116,6 +123,7 @@ async def process_and_stream_batch(
         batch_ids: List of curve IDs to process in this batch
         filters: Dictionary of filters to apply (e.g., {'regular': {...}, 'cp_filters': {...}})
         websocket: WebSocket connection to stream results
+        curve_id: Optional specific curve ID to fetch separately
     """
     try:
         # Get the current event loop
@@ -124,27 +132,47 @@ async def process_and_stream_batch(
         # Use ThreadPoolExecutor to offload blocking DuckDB operations
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             # Run fetch_curves_batch in a separate thread
-            graph_force_vs_z, graph_force_indentation = await loop.run_in_executor(
+            graph_force_vs_z, graph_force_indentation, graph_elspectra = await loop.run_in_executor(
                 executor,
                 lambda: fetch_curves_batch(conn, batch_ids, filters)
             )
+            # Fetch specific curve data if curve_id is provided and in this batch
+            graph_force_vs_z_single = None
+            graph_force_indentation_single = None
+            graph_elspectra_single = None
+            if curve_id and curve_id in batch_ids:
+                print("curve_id", curve_id)
+                graph_force_vs_z_single, graph_force_indentation_single, graph_elspectra_single= await loop.run_in_executor(
+                    executor,
+                    lambda: fetch_curves_batch(conn, [curve_id], filters)
+                )
         
         # Prepare the response data with both graphs
         response_data = {
             "status": "batch",
             "data": {
                 "graphForcevsZ": graph_force_vs_z,
-                "graphForceIndentation": graph_force_indentation
+                "graphForceIndentation": graph_force_indentation,
+                "graphElspectra": graph_elspectra,
+                
             }
         }
+        print(response_data["data"]["graphElspectra"])
+        # Add single curve data if available
+        if graph_force_vs_z_single:
+            response_data["data"].update({
+                "graphForcevsZSingle": graph_force_vs_z_single,
+                "graphForceIndentationSingle": graph_force_indentation_single,
+                "graphElspectraSingle": graph_elspectra_single
+            })
         
         # Stream batch results if data is available
-        if graph_force_vs_z["curves"] or graph_force_indentation["curves"]:
+        if graph_force_vs_z["curves"] or graph_force_indentation["curves"] or (graph_force_vs_z_single and graph_force_vs_z_single["curves"]):
             await websocket.send_text(json.dumps(
                 response_data,
                 default=str  # Handles any non-serializable types like numpy arrays
             ))
-            print(f"Streamed batch for IDs: {batch_ids}")
+            print(f"Streamed batch for IDs: {batch_ids}, curve_id: {curve_id}")
         else:
             print(f"No data returned for batch: {batch_ids}")
             await websocket.send_text(json.dumps({
@@ -167,7 +195,5 @@ async def startup_event():
     """Load HDF5 data into DuckDB when the server starts (if needed)."""
     if not os.path.exists(DB_PATH) or os.stat(DB_PATH).st_size == 0:
         print("🚀 Loading HDF5 data into DuckDB...")
-        transform_hdf5_to_db(HDF5_FILE_PATH, DB_PATH)
-        print("✅ Data successfully loaded into DuckDB.")
-    else:
+        transform_hdf5_to_db(HDF5_FILE_PATH, DB_PATH)   
         print("✅ DuckDB database already exists, skipping reload.")

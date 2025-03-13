@@ -25,7 +25,7 @@ const ElasticitySpectra = ({ forceData, domainRange }) => {
   const xScaleFactor = getScaleFactor(domainRange.xMin, xData); // Pass x data for non-zero check
 
   const chartOptions = {
-    title: { text: "E (Live)", left: "center" },
+    title: { text: "Elasticity Spectra (Single)", left: "center" },
     tooltip: { trigger: "axis" },
     xAxis: {
       type: "value",
@@ -70,7 +70,7 @@ const ElasticitySpectra = ({ forceData, domainRange }) => {
 
   return (
     <div style={{ flex: 1 }}>
-      <h2>Elasticity Spectra (Live)</h2>
+      <h2>Elasticity Spectra (Single)</h2>
       <ReactECharts
         option={chartOptions}
         style={{ height: 600 }}
