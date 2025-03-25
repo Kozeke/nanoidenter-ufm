@@ -7,14 +7,20 @@ const FiltersComponent = ({
   selectedRegularFilter,
   selectedCpFilter,
   handleNumCurvesChange,
+  fModels,
+  selectedFModels,
+  setSelectedFmodel,
+  eModels,
+  selectedEModels,
+  setSelectedEmodel,
   setSelectedRegularFilter,
   setSelectedCpFilter,
   handleAddFilter,
   handleRemoveFilter,
   handleFilterChange,
   sendCurveRequest,
-  curveId,           // Add this prop
-  setCurveId,        // Add this prop
+  curveId, // Add this prop
+  setCurveId, // Add this prop
 }) => {
   const [isOpen, setIsOpen] = React.useState(true);
 
@@ -58,7 +64,13 @@ const FiltersComponent = ({
         boxShadow: "-2px 0 5px rgba(0,0,0,0.1)",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
         <h3 style={{ margin: "0" }}>Filters</h3>
         <button
           onClick={toggleFilters}
@@ -146,6 +158,41 @@ const FiltersComponent = ({
         </select>
       </div>
 
+      <div style={{ marginBottom: "20px" }}>
+        <label>Select force model: </label>
+        <select
+          value={selectedFModels}
+          onChange={(e) => {
+            setSelectedFmodel(e.target.value);
+            handleAddFilter(e.target.value, false, true);
+          }}
+          style={{ width: "100%", padding: "5px" }}
+        >
+          <option value="">None</option>
+          <option value="hertz">Hertz</option>
+          <option value="hertzEffective">Hertz Effective</option>
+          <option value="driftedHertz">Drifted Hertz</option>
+        </select>
+      </div>
+
+      <div style={{ marginBottom: "20px" }}>
+        <label>Select elasticity model: </label>
+        <select
+          value={selectedEModels}
+          onChange={(e) => {
+            setSelectedFmodel(e.target.value);
+            handleAddFilter(e.target.value, false, false, true);
+          }}
+          style={{ width: "100%", padding: "5px" }}
+        >
+          <option value="">None</option>
+          <option value="bilayer">Bilayer</option>
+          <option value="linemax">Linemax</option>
+          <option value="constant">Constant</option>
+          <option value="sigmoid">Sigmoid</option>
+        </select>
+      </div>
+
       {Object.keys(regularFilters).map((filterName) => (
         <div
           key={filterName}
@@ -157,11 +204,22 @@ const FiltersComponent = ({
             backgroundColor: "#fff",
           }}
         >
-          <h4 style={{ margin: "0", display: "flex", justifyContent: "space-between" }}>
+          <h4
+            style={{
+              margin: "0",
+              display: "flex",
+              justifyContent: "space-between",
+            }}
+          >
             {filterName}
             <button
               onClick={() => handleRemoveFilter(filterName, false)}
-              style={{ color: "red", border: "none", background: "none", cursor: "pointer" }}
+              style={{
+                color: "red",
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+              }}
             >
               ❌
             </button>
@@ -173,7 +231,12 @@ const FiltersComponent = ({
                 type="number"
                 value={regularFilters[filterName][param]}
                 onChange={(e) =>
-                  handleFilterChange(filterName, param, parseFloat(e.target.value), false)
+                  handleFilterChange(
+                    filterName,
+                    param,
+                    parseFloat(e.target.value),
+                    false
+                  )
                 }
                 style={{ width: "80px" }}
               />
@@ -193,11 +256,22 @@ const FiltersComponent = ({
             backgroundColor: "#fff",
           }}
         >
-          <h4 style={{ margin: "0", display: "flex", justifyContent: "space-between" }}>
+          <h4
+            style={{
+              margin: "0",
+              display: "flex",
+              justifyContent: "space-between",
+            }}
+          >
             {filterName}
             <button
               onClick={() => handleRemoveFilter(filterName, true)}
-              style={{ color: "red", border: "none", background: "none", cursor: "pointer" }}
+              style={{
+                color: "red",
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+              }}
             >
               ❌
             </button>
@@ -209,7 +283,118 @@ const FiltersComponent = ({
                 type="number"
                 value={cpFilters[filterName][param]}
                 onChange={(e) =>
-                  handleFilterChange(filterName, param, parseFloat(e.target.value), true)
+                  handleFilterChange(
+                    filterName,
+                    param,
+                    parseFloat(e.target.value),
+                    true
+                  )
+                }
+                style={{ width: "80px" }}
+              />
+            </div>
+          ))}
+        </div>
+      ))}
+      {Object.keys(fModels).map((filterName) => (
+        <div
+          key={filterName}
+          style={{
+            marginBottom: "15px",
+            padding: "10px",
+            border: "1px solid #ddd",
+            borderRadius: "5px",
+            backgroundColor: "#fff",
+          }}
+        >
+          <h4
+            style={{
+              margin: "0",
+              display: "flex",
+              justifyContent: "space-between",
+            }}
+          >
+            {filterName}
+            <button
+              onClick={() => handleRemoveFilter(filterName, false, true)}
+              style={{
+                color: "red",
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+              }}
+            >
+              ❌
+            </button>
+          </h4>
+          {Object.keys(fModels[filterName]).map((param) => (
+            <div key={param} style={{ marginTop: "5px" }}>
+              <label>{param.replace("_", " ")}: </label>
+              <input
+                type="number"
+                value={fModels[filterName][param]}
+                onChange={(e) =>
+                  handleFilterChange(
+                    filterName,
+                    param,
+                    parseFloat(e.target.value),
+                    false,
+                    true
+                  )
+                }
+                style={{ width: "80px" }}
+              />
+            </div>
+          ))}
+        </div>
+      ))}
+      {Object.keys(eModels).map((filterName) => (
+        <div
+          key={filterName}
+          style={{
+            marginBottom: "15px",
+            padding: "10px",
+            border: "1px solid #ddd",
+            borderRadius: "5px",
+            backgroundColor: "#fff",
+          }}
+        >
+          <h4
+            style={{
+              margin: "0",
+              display: "flex",
+              justifyContent: "space-between",
+            }}
+          >
+            {filterName}
+            <button
+              onClick={() => handleRemoveFilter(filterName, false, false, true)} // isEModel = true
+              style={{
+                color: "red",
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+              }}
+            >
+              ❌
+            </button>
+          </h4>
+          {Object.keys(eModels[filterName]).map((param) => (
+            <div key={param} style={{ marginTop: "5px" }}>
+              <label>{param.replace("_", " ")}: </label>
+              <input
+                type="number"
+                value={eModels[filterName][param]}
+                onChange={
+                  (e) =>
+                    handleFilterChange(
+                      filterName,
+                      param,
+                      parseFloat(e.target.value),
+                      false,
+                      false,
+                      true
+                    ) // isEModel = true
                 }
                 style={{ width: "80px" }}
               />

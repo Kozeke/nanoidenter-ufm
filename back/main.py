@@ -60,8 +60,9 @@ async def websocket_data_stream(websocket: WebSocket):
                 request = await websocket.receive_text()
                 request_data = json.loads(request)
                 num_curves = min(request_data.get("num_curves", 100), 100)  # Cap for safety
-                filters = request_data.get("filters", {"regular": {}, "cp_filters": {}})
+                filters = request_data.get("filters", {"regular": {}, "cp_filters": {}, "fmodels": {}})
                 curve_id = request_data.get("curve_id", None)  # Extract curve_id
+                filters_changed = request_data.get("filters_changed", False)
                 print(f"Received request: num_curves={num_curves}, curve_id={curve_id}, filters={filters}")
 
                 # Fetch curve IDs based on request
@@ -79,7 +80,7 @@ async def websocket_data_stream(websocket: WebSocket):
                 for i in range(0, len(curve_ids), BATCH_SIZE):
                     batch_ids = curve_ids[i:i + BATCH_SIZE]
                     print(f"Processing batch: {batch_ids}")
-                    await process_and_stream_batch(conn, batch_ids, filters, websocket, curve_id)
+                    await process_and_stream_batch(conn, batch_ids, filters, websocket, curve_id, filters_changed)
                     await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
 
                 # Signal completion of this request
@@ -112,11 +113,11 @@ async def process_and_stream_batch(
     batch_ids: List[str],
     filters: Dict,
     websocket: WebSocket,
-    curve_id: str = None
-
+    curve_id: str = None,
+    filters_changed: bool = False,  # New flag,
 ) -> None:
     """
-    Process a batch of curve IDs, fetch data from DuckDB, and stream results via WebSocket.
+    Process a batch of curve IDs and optionally a single curve ID, fetch data from DuckDB, and stream results via WebSocket.
 
     Args:
         conn: DuckDB connection object
@@ -124,40 +125,50 @@ async def process_and_stream_batch(
         filters: Dictionary of filters to apply (e.g., {'regular': {...}, 'cp_filters': {...}})
         websocket: WebSocket connection to stream results
         curve_id: Optional specific curve ID to fetch separately
+        filters_changed: Boolean flag indicating if filters have changed
     """
     try:
         # Get the current event loop
         loop = asyncio.get_running_loop()
-        
-        # Use ThreadPoolExecutor to offload blocking DuckDB operations
+
+        # Initialize graph variables
+        graph_force_vs_z = None
+        graph_force_indentation = None
+        graph_elspectra = None
+        graph_force_vs_z_single = None
+        graph_force_indentation_single = None
+        graph_elspectra_single = None
+
+        # Use ThreadPoolExecutor for blocking DuckDB operations
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # Run fetch_curves_batch in a separate thread
-            graph_force_vs_z, graph_force_indentation, graph_elspectra = await loop.run_in_executor(
-                executor,
-                lambda: fetch_curves_batch(conn, batch_ids, filters)
-            )
-            # Fetch specific curve data if curve_id is provided and in this batch
-            graph_force_vs_z_single = None
-            graph_force_indentation_single = None
-            graph_elspectra_single = None
-            if curve_id and curve_id in batch_ids:
-                print("curve_id", curve_id)
-                graph_force_vs_z_single, graph_force_indentation_single, graph_elspectra_single= await loop.run_in_executor(
+            # Fetch non-single graphs only if filters have changed
+            if filters_changed:
+                graph_force_vs_z, graph_force_indentation, graph_elspectra = await loop.run_in_executor(
                     executor,
-                    lambda: fetch_curves_batch(conn, [curve_id], filters)
+                    lambda: fetch_curves_batch(conn, batch_ids, filters)
                 )
-        
-        # Prepare the response data with both graphs
+            
+        # Fetch specific curve data if curve_id is provided (always, regardless of filters_changed)
+        if curve_id:
+            # Note: Using synchronous call here for simplicity; could also use executor if needed
+            graph_force_vs_z_single, graph_force_indentation_single, graph_elspectra_single = fetch_curves_batch(
+                conn, [curve_id], filters, single=True
+            )
+
+        # Prepare the response data
         response_data = {
             "status": "batch",
-            "data": {
+            "data": {}
+        }
+
+        # Include non-single graph data only if fetched (i.e., filters_changed was True)
+        if filters_changed:
+            response_data["data"].update({
                 "graphForcevsZ": graph_force_vs_z,
                 "graphForceIndentation": graph_force_indentation,
-                "graphElspectra": graph_elspectra,
-                
-            }
-        }
-        # print(response_data["data"]["graphElspectra"])
+                "graphElspectra": graph_elspectra
+            })
+
         # Add single curve data if available
         if graph_force_vs_z_single:
             response_data["data"].update({
@@ -165,12 +176,12 @@ async def process_and_stream_batch(
                 "graphForceIndentationSingle": graph_force_indentation_single,
                 "graphElspectraSingle": graph_elspectra_single
             })
-        
-        # Stream batch results if data is available
-        if graph_force_vs_z["curves"] or graph_force_indentation["curves"] or (graph_force_vs_z_single and graph_force_vs_z_single["curves"]):
+
+        # Stream results if there’s any data
+        if response_data["data"]:
             await websocket.send_text(json.dumps(
                 response_data,
-                default=str  # Handles any non-serializable types like numpy arrays
+                default=str  # Handles non-serializable types like numpy arrays
             ))
             # print(f"Streamed batch for IDs: {batch_ids}, curve_id: {curve_id}")
         else:
@@ -183,7 +194,6 @@ async def process_and_stream_batch(
 
     except Exception as e:
         print(f"Error processing batch {batch_ids}: {e}")
-        # Send error message to client
         await websocket.send_text(json.dumps({
             "status": "batch_error",
             "message": f"Error processing batch: {str(e)}",

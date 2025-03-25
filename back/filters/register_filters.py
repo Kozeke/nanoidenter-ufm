@@ -15,6 +15,12 @@ import duckdb
 from filters.cpoint.calculate_indentation import calc_indentation
 from filters.cpoint.calculate_elasticity import calc_elspectra
 
+from filters.fmodels.hertz import calc_fmodels
+from filters.emodels.calc_emodels import calc_emodels
+
+# from filters.fmodels.hertz import theoryHertz
+# from filters.fmodels.hertz import theoryHertzEffective
+# from filters.fmodels.hertz import theoryHertzLine
 
 def register_filters(conn):
     """Registers all filter functions inside DuckDB for SQL queries."""
@@ -92,4 +98,62 @@ def register_filters(conn):
         null_handling='SPECIAL'
     )
 
-    
+    conn.create_function(
+        "calc_fmodels",
+        calc_fmodels,
+        [
+            duckdb.list_type('DOUBLE'),  # zi_values
+            duckdb.list_type('DOUBLE'),  # fi_values
+            'DOUBLE',                    # zi_min
+            'DOUBLE',                    # zi_max
+            'VARCHAR',                   # model (string type for 'hertz', 'hertzEffective', etc.)
+            'DOUBLE'                     # poisson
+        ],
+        duckdb.list_type(duckdb.list_type('DOUBLE')),  # Return type: List[List[Double]]
+        null_handling='SPECIAL',
+        side_effects=False
+    )
+
+    conn.create_function(
+        "calc_emodels",
+        calc_emodels,
+        [
+            duckdb.list_type('DOUBLE'),  # ze_values
+            duckdb.list_type('DOUBLE'),  # fe_values
+            'DOUBLE',                    # ze_min
+            'DOUBLE',                    # ze_max
+            'VARCHAR',                   # model (string type for 'bilayer', 'linemax', etc.)
+            'DOUBLE'                     # poisson
+        ],
+        duckdb.list_type(duckdb.list_type('DOUBLE')),  # Return type: List[List[Double]]
+        null_handling='SPECIAL',
+        side_effects=False
+    )
+    # conn.create_function(
+    #     "hertzeffective_theory",
+    #     theoryHertzEffective,
+    #     [
+    #         duckdb.list_type('DOUBLE'),  # z_values: DOUBLE[]
+    #         duckdb.list_type('DOUBLE'),  # force_values: DOUBLE[]
+    #         'DOUBLE'                     # elastic: DOUBLE
+    #     ],
+    #     duckdb.list_type('DOUBLE'),  # Return: DOUBLE[]
+    #     null_handling='SPECIAL'
+    # )
+
+    # conn.create_function(
+    #     "hertzlinear_theory",
+    #     theoryHertzLine ,
+    #     [
+    #         duckdb.list_type('DOUBLE'),  # z_values: DOUBLE[]
+    #         duckdb.list_type('DOUBLE'),  # force_values: DOUBLE[]
+    #         'DOUBLE',                    # poisson: DOUBLE
+    #         'DOUBLE',                    # E: DOUBLE
+    #         'DOUBLE',                    # m: DOUBLE
+    #         'VARCHAR',                   # tip_geometry: STRING
+    #         'DOUBLE',                    # R: DOUBLE (nullable)
+    #         'DOUBLE'                     # ang: DOUBLE (nullable)
+    #     ],
+    #     duckdb.list_type('DOUBLE'),  # Return: DOUBLE[]
+    #     null_handling='SPECIAL'
+    # )

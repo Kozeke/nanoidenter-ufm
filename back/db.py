@@ -2,6 +2,7 @@ import h5py
 import duckdb
 from filters.apply_filters import apply
 from filters.apply_contact_point_filters import apply_cp_filters
+from filters.apply_fmodels import apply_fmodels
 from typing import Dict, Tuple, List
 from filters.register_filters import register_filters
 import pandas as pd  # Ensure pandas is imported
@@ -91,7 +92,7 @@ def transform_hdf5_to_db(hdf5_path, db_path):
     print("✅ HDF5 to DuckDB transformation complete!")
 
 
-def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict) -> Tuple[List[Dict], Dict]:
+def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict, single = False) -> Tuple[List[Dict], Dict]:
     """
     Fetches a batch of curve data from DuckDB and applies filters dynamically in SQL.
     
@@ -102,10 +103,11 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     
     Returns:
         Tuple containing:
-        - List of curve dictionaries with curve_id, z_values, and force_values
-        - Dictionary with domain range (xMin, xMax, yMin, yMax)
+        - graph_force_vs_z: Dict with curves and domain for Force vs Z
+        - graph_force_indentation: Dict with curves and domain for Force vs Indentation
+        - graph_elspectra: Dict with curves and domain for Elspectra
     """
-    print(f"Fetching batch of {len(curve_ids)} curves...")
+    # print(f"Fetching batch of {len(curve_ids)} curves...")
     
     # Extract regular and cp_filters from the input
     regular_filters = filters.get("regular", {})
@@ -119,10 +121,9 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     """.format(",".join([f"'{cid}'" for cid in curve_ids]))
 
     # --- Graph 1: Force vs Z (Regular Filters) ---
-    query_regular = apply(base_query, regular_filters, curve_ids)  # Apply regular filters
+    query_regular = apply(base_query, regular_filters, curve_ids)
     result_regular = conn.execute(query_regular).fetchall()
     
-    # Process curves for Force vs Z
     curves_regular = [
         {
             "curve_id": row[0],
@@ -132,66 +133,170 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         for row in result_regular
     ]
     
-    # Compute domain range for Force vs Z
     domain_regular = compute_domain(conn, curves_regular, "curves_temp_regular")
-    
     graph_force_vs_z = {"curves": curves_regular, "domain": domain_regular}
-   # --- Graph 2: Force vs Indentation (CP Filters, if active) ---
-    print("graph_force_vs_z")
+    
+    # --- Graph 2: Force vs Indentation and Elspectra (CP Filters, if active) ---
+    # print("graph_force_vs_z")
     graph_force_indentation = {"curves": [], "domain": {"xMin": None, "xMax": None, "yMin": None, "yMax": None}}
     graph_elspectra = {"curves": [], "domain": {"xMin": None, "xMax": None, "yMin": None, "yMax": None}}
     
-    if cp_filters:  # Only process if cp_filters are present and non-empty
-        # print("cpfilters", cp_filters)
-        query_cp = apply_cp_filters(base_query, cp_filters, curve_ids)  # Apply cp_filters
-        result_cp = conn.execute(query_cp).fetchall()
+    if cp_filters:
+        query_cp = apply_cp_filters(base_query, cp_filters, curve_ids)
+        # print(f"Generated cp query: {query_cp}")
         
-        # Process curves for Force vs Indentation
+        # Parameters for indentation and elspectra
+        spring_constant = 1.0
+        set_zero_force = True
+        win = 61
+        order = 2
+        tip_geometry = 'sphere'
+        tip_radius = 1e-05
+        tip_angle = 30.0
+        interp = True
+        
+        # Define defaults for model parameters
+        model = 'hertz'
+        poisson = 0.5
+        zi_min = 0.0
+        zi_max = 800.0
+        
+        # Get fmodels from filters and override defaults if present
+        fmodels = filters.get('f_models', {})
+        if fmodels:
+            model = next(iter(fmodels))
+            poisson = fmodels[model].get('poisson', 0.5)
+            zi_min = fmodels[model].get('minInd', 0.0)
+            zi_max = fmodels[model].get('maxInd', 800.0)
+            # print(f"Using fmodels with model: {model}, poisson: {poisson}, zi_min: {zi_min}, zi_max: {zi_max}")
+        
+        emodels = filters.get('e_models', {})  
+        if emodels:
+            model = next(iter(emodels))
+            poisson = emodels[model].get('poisson', 0.5)
+            ze_min = emodels[model].get('minInd', 0.0)
+            ze_max = emodels[model].get('maxInd', 800.0)
+            # print(f"Using emodels with model: {model}, poisson: {poisson}, ze_min: {ze_min}, ze_max: {ze_max}")
+
+        # Combined batch query with conditional fmodels calculation
+        batch_query = f"""
+            WITH cp_data AS (
+                {query_cp}
+            ),
+            indentation_data AS (
+                SELECT 
+                    curve_id,
+                    calc_indentation(
+                        z_values, 
+                        force_values, 
+                        cp_values,
+                        {spring_constant}, 
+                        {set_zero_force}
+                    ) AS indentation_result
+                FROM cp_data
+                WHERE cp_values IS NOT NULL
+            ),
+            base_results AS (
+                SELECT 
+                    curve_id,
+                    indentation_result AS indentation,
+                    calc_elspectra(
+                        indentation_result[1],
+                        indentation_result[2],
+                        {win}, 
+                        {order}, 
+                        '{tip_geometry}', 
+                        {tip_radius}, 
+                        {tip_angle}, 
+                        {interp}
+                    ) AS elspectra_result
+                FROM indentation_data
+                WHERE indentation_result IS NOT NULL
+            )
+            {", fmodels_results AS ("
+            f"    SELECT "
+            f"        curve_id,"
+            f"        calc_fmodels("
+            f"            indentation_result[1],"
+            f"            indentation_result[2],"
+            f"            {zi_min},"
+            f"            {zi_max},"
+            f"            '{model}',"
+            f"            {poisson}"
+            f"        ) AS hertz_result"
+            f"    FROM indentation_data"
+            f"    WHERE indentation_result IS NOT NULL"
+            f")" if fmodels else ""}
+            {", emodels_results AS ("
+            f"    SELECT "
+            f"        curve_id,"
+            f"        calc_fmodels("
+            f"            elspectra_result[1],"
+            f"            elspectra_result[2],"
+            f"            {ze_min},"
+            f"            {ze_max},"
+            f"            '{model}',"
+            f"            {poisson}"
+            f"        ) AS elastic_result"
+            f"    FROM base_results"
+            f"    WHERE elspectra_result IS NOT NULL"
+            f")" if emodels else ""}
+            SELECT 
+                b.curve_id,
+                b.indentation,
+                b.elspectra_result,
+                {"f.hertz_result" if fmodels else "NULL AS hertz_result"},
+                {"e.elastic_result" if emodels else "NULL AS elastic_result"}
+            FROM base_results b
+            {f"LEFT JOIN fmodels_results f ON b.curve_id = f.curve_id" if fmodels else ""}
+            {f"LEFT JOIN emodels_results e ON b.curve_id = e.curve_id" if emodels else ""}
+        """
+        
+        try:
+            result_batch = conn.execute(batch_query).fetchall()
+        except Exception as e:
+            print(f"Error in combined batch query: {e}")
+            raise
+        
         curves_cp = []
         curves_el = []
-        spring_constant = 1.0  # Hardcoded for now; could be a filter parameter
-        set_zero_force = True  # Hardcoded; could be configurable
-        print("cp flters applied")
-        for row in result_cp:
-            curve_id, z_values, force_values, cp_values = row
-            if cp_values is not None and cp_values is not False:  # Mimic your condition
-                # Calculate indentation using DuckDB function
-                # print("cp",cp_values)
-                # print("z_values",len(z_values), z_values[0])
-                # print("force_values",len(force_values), force_values[0])
-                indentation_query = f"""
-                    SELECT calc_indentation(?, ?, ?, {spring_constant}, {set_zero_force})
-                """
-                indentation_result = conn.execute(indentation_query, (z_values, force_values, cp_values)).fetchone()[0]
-                
-                if indentation_result is not None:
-                    zi, fi = indentation_result
+        for row in result_batch:
+            curve_id, indentation_result, elspectra_result, hertz_result, elastic_result = row
+            
+            if indentation_result is not None:
+                zi, fi = indentation_result
+                curves_cp.append({
+                    "curve_id": f"{curve_id}_indentation",
+                    "x": zi,
+                    "y": fi
+                })
+                if hertz_result is not None and fmodels and single:
+                    # print("hertz_result", hertz_result)
+                    x, y = hertz_result
                     curves_cp.append({
-                        "curve_id": curve_id,
-                        "x": zi,  # Indentation Z
-                        "y": fi   # Indentation Force
+                        "curve_id": f"{curve_id}_hertz",
+                        "x": x,
+                        "y": y
                     })
-                # print("lenzifi",len(zi),len(fi))
-                win = 61
-                order = 2
-                tip_geometry = 'sphere'
-                tip_radius = 1e-05
-                tip_angle = 30.0
-                interp = True                    
-                # Calculate elspectra using indentation results
-                elspectra_query = f"""
-                    SELECT calc_elspectra(?, ?, {win}, {order}, '{tip_geometry}', {tip_radius}, {tip_angle}, {interp})
-                """
-                elspectra_result = conn.execute(elspectra_query, (zi, fi)).fetchone()[0]
-                # print("elspectra_res", elspectra_result)
-                if elspectra_result is not None:
-                    ze, e = elspectra_result
-                    # print(len(ze),len(e))
+            
+            if elspectra_result is not None:
+                ze, e = elspectra_result
+                curves_el.append({
+                    "curve_id": curve_id,
+                    "x": ze,
+                    "y": e
+                })
+                if elastic_result is not None and emodels and single:
+                    # print("elastic_result", elastic_result)
+                    x, y = elastic_result
                     curves_el.append({
-                        "curve_id": curve_id,
-                        "x": ze,  # Position values from elspectra
-                        "y": e    # Electric field values
+                        "curve_id": f"{curve_id}_elastic",
+                        "x": x,
+                        "y": y
                     })
+        
+        print("cp filters applied, batch indentation and elspectra calculated")
+        
         if curves_cp:
             domain_cp = compute_domain(conn, curves_cp, "curves_temp_cp")
             graph_force_indentation = {"curves": curves_cp, "domain": domain_cp}
@@ -201,8 +306,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             graph_elspectra = {"curves": curves_el, "domain": domain_el}
 
     return graph_force_vs_z, graph_force_indentation, graph_elspectra
-
-
+               
 def compute_domain(conn: duckdb.DuckDBPyConnection, curves: List[Dict], table_name: str) -> Dict:
     """
     Compute domain ranges (min/max) for x and y values in a list of curves.

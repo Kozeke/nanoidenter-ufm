@@ -1,17 +1,11 @@
-// GraphComponent.jsx
 import React from "react";
 import ReactECharts from "echarts-for-react";
 
 const ElasticitySpectra = ({ forceData, domainRange }) => {
-  // console.log("render");
-  // console.log(forceData);
-  // console.log(domainRange);
-
   // Function to determine scale factor based on a min value
   function getScaleFactor(minValue, dataArray = []) {
     if (!minValue && minValue !== 0) return 1; // Handle undefined or null
     if (minValue === 0 && dataArray.length > 0) {
-      // If min is 0, find the smallest non-zero value in the data
       const nonZeroValues = dataArray.filter((v) => v > 0);
       if (nonZeroValues.length === 0) return 1; // Fallback if all values are 0
       minValue = Math.min(...nonZeroValues);
@@ -24,16 +18,20 @@ const ElasticitySpectra = ({ forceData, domainRange }) => {
   const xData = forceData.length > 0 ? forceData[0].x : []; // Use the first curve's x values
   const xScaleFactor = getScaleFactor(domainRange.xMin, xData); // Pass x data for non-zero check
 
+  // Calculate the center of the x-axis range after scaling
+  const xCenter = ((domainRange.xMin + domainRange.xMax) / 2) * xScaleFactor;
+  const xRange = (domainRange.xMax - domainRange.xMin) * xScaleFactor; // Full range for normalization
+
   const chartOptions = {
     title: { text: "Elasticity Spectra (Single)", left: "center" },
     tooltip: { trigger: "axis" },
     xAxis: {
       type: "value",
-      name: `Z (x10^${-Math.log10(xScaleFactor)} m)`, // Reflect the scale factor in the unit
+      name: `Z (x10^${-Math.log10(xScaleFactor)} m)`,
       nameLocation: "middle",
       nameGap: 25,
-      min: domainRange.xMin * xScaleFactor, // Scale the domain min
-      max: domainRange.xMax * xScaleFactor, // Scale the domain max
+      min: domainRange.xMin * xScaleFactor,
+      max: domainRange.xMax * xScaleFactor,
       axisLabel: {
         formatter: function (value) {
           return value.toFixed(0); // Display as whole numbers
@@ -42,12 +40,12 @@ const ElasticitySpectra = ({ forceData, domainRange }) => {
     },
     yAxis: {
       type: "value",
-      name: "E (Pa)", // No scale factor in the unit
+      name: "E (Pa)",
       nameLocation: "middle",
       nameGap: 40,
       scale: true,
-      min: domainRange.yMin, // Use raw domain min
-      max: domainRange.yMax, // Use raw domain max
+      min: domainRange.yMin,
+      max: domainRange.yMax,
       axisLabel: {
         formatter: function (value) {
           return value.toFixed(0); // Display as whole numbers
@@ -56,11 +54,35 @@ const ElasticitySpectra = ({ forceData, domainRange }) => {
     },
     series: forceData.map((curve) => ({
       name: curve.curve_id,
-      type: "line",
-      smooth: false,
-      showSymbol: false,
+      type: "scatter", // Change to scatter for individual dots
+      symbol: "circle", // Use circular points
+      symbolSize: 10, // Larger bubbles (adjust as needed, e.g., 12, 15)
+      showSymbol: true, // Ensure points are visible
       large: true,
       data: curve.x.map((x, i) => [x * xScaleFactor, curve.y[i]]) || [], // Only scale x
+      itemStyle: String(curve.curve_id).endsWith("_elastic")
+        ? {
+            color: "yellow", // Solid yellow for elastic curves
+          }
+        : {
+            // Radial gradient for non-elastic curves
+            color: {
+              type: "radial",
+              x: 0.5, // Center of the gradient (normalized)
+              y: 0.5,
+              r: 0.5, // Radius of the gradient (normalized)
+              colorStops: [
+                {
+                  offset: 0, // Center
+                  color: "rgba(255, 255, 255, 0.5)", // White, 50% transparent
+                },
+                {
+                  offset: 1, // Edge
+                  color: "rgba(0, 0, 255, 1)", // Blue, fully opaque (outer circle)
+                },
+              ],
+            },
+          },
     })),
     legend: { show: false, bottom: 0 },
     grid: { left: "12%", right: "10%", bottom: "10%" },
