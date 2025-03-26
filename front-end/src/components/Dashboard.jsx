@@ -7,7 +7,7 @@ import ElasticitySpectra from "./graphs/SpectraElasticity";
 import ElasticitySpectraSingle from "./graphs/SpectraElasticitySingle";
 import FiltersComponent from "./FiltersComponent";
 
-const WEBSOCKET_URL = process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8080/ws/data";
+const WEBSOCKET_URL = process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:80/ws/data";
 
 const Dashboard = () => {
   const [forceData, setForceData] = useState([]); // For DataSet graph
@@ -209,10 +209,10 @@ const Dashboard = () => {
 
     useEffect(() => {
       console.log("useeffect")
-      socketRef.current = new WebSocket(
-        WEBSOCKET_URL
-      );
-
+      // socketRef.current = new WebSocket(
+      //   WEBSOCKET_URL
+      // );
+      socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
       socketRef.current.onopen = () => {
         console.log("WebSocket connected.");
         if (!initialRequestSent.current) {
