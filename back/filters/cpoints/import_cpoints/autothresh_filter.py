@@ -32,7 +32,7 @@ class AutothreshFilter(CpointBase):
         jtarget = np.argmin(np.abs(x - xtarget))
 
         if jtarget == 0 or jtarget >= len(x):
-            print(jtarget,len(x) )
+            # print(jtarget,len(x) )
             return None
 
         # Linear fit based on direction of x

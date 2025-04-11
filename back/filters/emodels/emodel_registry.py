@@ -32,7 +32,7 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
     emodel_info = EMODEL_REGISTRY[emodel_name.lower()]
     emodel_instance = emodel_info["instance"]
     udf_name = emodel_info["udf_function"]
-    print("Emodel setup complete:", emodel_instance)
+    # print("Emodel setup complete:", emodel_instance)
 
     # Define parameter types: ze_values, fe_values, and a single DOUBLE[] for all parameters
     udf_param_types = [
@@ -64,7 +64,7 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
             x, y = getEizi(ze_min, ze_max, ze_values, fe_values)
             
             result = emodel_instance.calculate(x, y)
-            print("result", result)
+            # print("result", result)
             return result if result is not None else None
         except Exception as e:
             print(f"Error in UDF for {emodel_name}: {e}")
@@ -87,7 +87,7 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
         return_type=return_type,
         null_handling='SPECIAL'
     )
-    print(f"UDF {udf_name} registered with types: {udf_param_types}, return type: {return_type}")
+    # print(f"UDF {udf_name} registered with types: {udf_param_types}, return type: {return_type}")
 
 
 

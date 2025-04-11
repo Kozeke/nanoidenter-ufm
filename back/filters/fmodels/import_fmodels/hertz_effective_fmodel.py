@@ -54,7 +54,7 @@ class HertzEffectiveModel(FmodelBase):
         :param y: Force values (N, DOUBLE[])
         :return: 
         """
-        print("calc hertz effective")
+        # print("calc hertz effective")
         x = np.asarray(x, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
 
@@ -71,7 +71,7 @@ class HertzEffectiveModel(FmodelBase):
 
             # Evaluate the theory function over x to get the fitted curve
             y_fit = self.theory(x, E_eff)
-            print("hertz effective res", len(x), len(y_fit))
+            # print("hertz effective res", len(x), len(y_fit))
             return [x.tolist(), y_fit.tolist()]  # Return as DOUBLE[][]
         except (RuntimeError, ValueError) as e:
             print(f"Fitting failed: {str(e)}")

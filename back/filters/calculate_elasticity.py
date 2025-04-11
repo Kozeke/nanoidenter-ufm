@@ -36,13 +36,13 @@ def calc_elspectra(
     - Returns None if there are insufficient data points (for compatibility, adjusted to match original).
     """
 
-    print("calc_elspectra")
-    print("Tip Radius:", tip_radius)
-    print(win, order)
+    # print("calc_elspectra")
+    # print("Tip Radius:", tip_radius)
+    # print(win, order)
     x = np.array(z_values)
     y = np.array(force_values)
 
-    print("Input lengths:", len(x), len(y))
+    # print("Input lengths:", len(x), len(y))
 
     if len(x) < 2:
         return None  # Not enough data to process
@@ -90,6 +90,6 @@ def calc_elspectra(
     Ex = xx[dwin:-dwin]  # Adjusted depth values
     Ey = Ey[dwin:-dwin]  # Elastic modulus values
 
-    print("Processed lengths - Ey:", len(Ey), "Ex:", len(Ex))
+    # print("Processed lengths - Ey:", len(Ey), "Ex:", len(Ex))
 
     return [Ex.tolist(), Ey.tolist()]

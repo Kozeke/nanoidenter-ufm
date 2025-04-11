@@ -33,14 +33,14 @@ class SavgolSmoothFilter(FilterBase):
         # Retrieve parameters
         window_size = int(self.get_value("window_size"))
         polyorder = int(self.get_value("polyorder"))
-        print(window_size, polyorder)
+        # print(window_size, polyorder)
         # Convert input to NumPy arrays for efficiency
         x = np.asarray(x, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
 
         if len(x) == 0 or len(y) == 0:
             return y  # Return original if empty
-        print("here")
+        # print("here")
         # Compute step size
         xstep = (max(x) - min(x)) / (len(x) - 1) if len(x) > 1 else 1.0  # Avoid division by zero
 

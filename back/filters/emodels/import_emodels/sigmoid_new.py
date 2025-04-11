@@ -31,9 +31,9 @@ class SigmoidModel(EmodelBase):
         :param y: Input array (e.g., force values, DOUBLE[])
         :return: Fitted parameters [EH, EL, T, k] or None if fitting fails
         """
-        print("calc sigmoid", len(x), len(y))
-        print("x",x)
-        print("y",y)
+        # print("calc sigmoid", len(x), len(y))
+        # print("x",x)
+        # print("y",y)
         try:
             # Better initial guesses based on data
             y_max, y_min = np.max(y), np.min(y)
@@ -41,9 +41,9 @@ class SigmoidModel(EmodelBase):
             p0 = [y_max, y_min, x_mid, 10]  # EH, EL (Pa), T (nm), k (Pa/nm)
             bounds = ([0, 0, 0, 1e-3], [1e6, 1e6, 1000, 1e3])  # Realistic ranges
             popt, _ = curve_fit(self.theory, x, y, p0=p0, bounds=bounds, maxfev=10000)
-            print("popt", popt)
+            # print("popt", popt)
             y_fit = self.theory(x, *popt)
-            print("y_fit sample", y_fit[:5])
+            # print("y_fit sample", y_fit[:5])
             return [x.tolist(), y_fit.tolist()]
         except (RuntimeError, ValueError) as e:
             print(f"Fitting failed: {e}")

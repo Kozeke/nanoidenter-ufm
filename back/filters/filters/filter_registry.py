@@ -20,7 +20,7 @@ def create_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
     """Register a filter as a DuckDB UDF with a single parameter array, dynamically handling inputs."""
     filter_instance = FILTER_REGISTRY[filter_name.lower()]["instance"]
     udf_name = FILTER_REGISTRY[filter_name.lower()]["udf_function"]  # e.g., "median"
-    print("Filter setup complete:", filter_instance)
+    # print("Filter setup complete:", filter_instance)
 
     # Define parameter types: always three inputs for consistency
     udf_param_types = [

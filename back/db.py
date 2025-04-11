@@ -175,7 +175,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         
         emodels = filters.get('e_models', {})
         if emodels:
-            print("emodel exists", emodels)
+            # print("emodel exists", emodels)
             query_emodels = apply_emodels("", emodels, curve_ids) if emodels else None
         
 
@@ -247,9 +247,9 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                     "y": fi
                 })
                 if hertz_result is not None and fmodels and single:
-                    print("hertz_result", len(hertz_result))
+                    # print("hertz_result", len(hertz_result))
                     x, y = hertz_result
-                    print(len(x),len(y))
+                    # print(len(x),len(y))
                     curves_cp.append({
                         "curve_id": f"{curve_id}_hertz",
                         "x": x,
@@ -258,14 +258,14 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             
             if elspectra_result is not None:
                 ze, e = elspectra_result
-                print("ze, e",ze, e)
+                # print("ze, e",ze, e)
                 curves_el.append({
                     "curve_id": curve_id,
                     "x": ze,
                     "y": e
                 })
                 if elastic_result is not None and emodels and single:
-                    print("elastic_result", elastic_result)
+                    # print("elastic_result", elastic_result)
                     x, y = elastic_result
                     curves_el.append({
                         "curve_id": f"{curve_id}_elastic",

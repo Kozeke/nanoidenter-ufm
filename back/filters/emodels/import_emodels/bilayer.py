@@ -39,7 +39,7 @@ class BilayerModel(EmodelBase):
         """
         x = np.asarray(x, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
-        print("calc bimodule", len(x),len(y))
+        # print("calc bimodule", len(x),len(y))
         if len(x) < 2 or len(y) < 2:
             return None
 
@@ -49,10 +49,10 @@ class BilayerModel(EmodelBase):
             
             # Check if popt is valid (assuming False means fitting failed, though unlikely)
             if popt is False:  # This condition is unusual; see note below
-                print("popt is false")
+                # print("popt is false")
                 y_fit = [0] * len(x)  # Return zeros if fitting "fails"
                 return [x.tolist(), y_fit]
-            print(popt)
+            # print(popt)
             # Calculate y_fit using the fitted parameters
             y_fit = self.theory(x, popt[0], popt[1], popt[2])
             return [x.tolist(), y_fit.tolist()]  # Return [x, y_fit] as lists

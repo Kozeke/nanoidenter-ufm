@@ -32,7 +32,7 @@ def create_fmodel_udf(fmodel_name: str, conn: duckdb.DuckDBPyConnection):
     """Register an fmodel as a DuckDB UDF with getFizi filtering before calculate."""
     fmodel_instance = FMODEL_REGISTRY[fmodel_name.lower()]["instance"]
     udf_name = FMODEL_REGISTRY[fmodel_name.lower()]["udf_function"]
-    print("Fmodel setup complete:", fmodel_instance)
+    # print("Fmodel setup complete:", fmodel_instance)
 
     # Define parameter types: zi_values, fi_values, and a single DOUBLE[] for all parameters
     udf_param_types = [
@@ -63,7 +63,7 @@ def create_fmodel_udf(fmodel_name: str, conn: duckdb.DuckDBPyConnection):
             zi_max = fmodel_instance.get_value("maxInd") * 1e-9 if "maxInd" in fmodel_instance.parameters else 800e-9
 
             x, y = getFizi(zi_min, zi_max, zi_values, fi_values)
-            print("res", len(x), len(y))
+            # print("res", len(x), len(y))
 
             if len(x) > 5:  # Minimum length check
                 result = fmodel_instance.calculate(x, y)

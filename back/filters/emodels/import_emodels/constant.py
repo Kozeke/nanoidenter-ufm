@@ -34,7 +34,7 @@ class ConstantModel(EmodelBase):
             return None
          # Compute the average of y
         avg = float(np.average(y))
-        print("Average modulus:", avg)
+        # print("Average modulus:", avg)
 
         # Use the average to generate y_fit via theory
         y_fit = self.theory(x, avg)

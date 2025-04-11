@@ -43,11 +43,11 @@ class CustomFilter(FilterBase):
         # Ensure inputs are NumPy arrays
         x = np.array(x, dtype=np.float64)
         y = np.array(y, dtype=np.float64)
-        print("before", x)
-        print("y", y)
+        # print("before", x)
+        # print("y", y)
         if len(x) == 0 or len(y) == 0:
             return []  # Return an empty list if input is empty
-        print("after")
+        # print("after")
         # Ensure the smoothing window is valid
         smoothing_window = max(5, min(smoothing_window, len(y) - 1))  # Within valid range
         if smoothing_window % 2 == 0:

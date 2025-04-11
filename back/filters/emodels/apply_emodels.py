@@ -2,7 +2,7 @@ from typing import Dict, List
 from .emodel_registry import EMODEL_REGISTRY
 
 def apply_emodels(query: str, emodels: Dict, curve_ids: List[str]) -> str:
-    print("apply_emodels")
+    # print("apply_emodels")
     z_col = "elspectra_result[1]"
     e_col = "elspectra_result[2]"
     

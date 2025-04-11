@@ -19,7 +19,7 @@ def create_contact_point_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
     """Register a contact point filter as a DuckDB UDF with dynamic parameter array."""
     filter_instance = CONTACT_POINT_REGISTRY[filter_name.lower()]["instance"]
     udf_name = CONTACT_POINT_REGISTRY[filter_name.lower()]["udf_function"]  # e.g., "autothresh"
-    print("Contact point filter setup complete:", filter_instance)
+    # print("Contact point filter setup complete:", filter_instance)
 
     # Define parameter types: x_values, y_values, and a single DOUBLE[] for all parameters
     udf_param_types = [
@@ -64,7 +64,7 @@ def create_contact_point_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
         return_type=return_type,
         null_handling="SPECIAL" if filter_name in ["Autothresh", "GofSphere"] else "DEFAULT"
     )
-    print(f"UDF {udf_name} registered with types: {udf_param_types}, return type: {return_type}")
+    # print(f"UDF {udf_name} registered with types: {udf_param_types}, return type: {return_type}")
 
 
 def save_cp_to_db(filter_class, conn):

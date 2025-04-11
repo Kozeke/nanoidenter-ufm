@@ -53,7 +53,7 @@ class LineMaxModel(EmodelBase):
 
         # Compute statistical parameters
         stats = [float(np.average(y)), float(np.median(full)), float(maxi), float(mini)]
-        print("stats", stats)
+        # print("stats", stats)
 
         # Use the average (stats[0]) to compute y_fit with theory
         y_fit = self.theory(x, stats[0])  # Only pass the average modulus

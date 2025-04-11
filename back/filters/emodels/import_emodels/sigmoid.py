@@ -30,14 +30,14 @@ class SigmoidModel(EmodelBase):
         :param x: Input array (e.g., indentation depth, DOUBLE[])
         :param y: Input array (e.g., force values, DOUBLE[])
         :return: Fitted parameters [EH, EL, T, k] or None if fitting fails
-        """
-        print("calc sigmoid", len(x), len(y))
-        print("x",x)
-        print("y",y)
+        # """
+        # print("calc sigmoid", len(x), len(y))
+        # print("x",x)
+        # print("y",y)
         x = np.asarray(x, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
         if len(x) < 2 or len(y) < 2:
-            print("len(x)<2", len(x),len(y))
+            # print("len(x)<2", len(x),len(y))
             return None
 
         try:
@@ -45,9 +45,9 @@ class SigmoidModel(EmodelBase):
             popt, _ = curve_fit(self.theory, x, y, p0=p0, maxfev=10000)
             # if any(p < 0 for p in popt):  # Check for negative parameters
             #     return None
-            print("popt",popt)
+            # print("popt",popt)
             params = list(map(float, popt))  # [EH, EL, T, k]
-            print("params", params)
+            # print("params", params)
             y_fit = self.theory(x, params)
             return [x.tolist(), y_fit.tolist()]
         except (RuntimeError, ValueError):

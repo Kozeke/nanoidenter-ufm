@@ -22,7 +22,7 @@ class DriftedHertzModel(FmodelBase):
         """
         # if self.curve is None or "tip" not in self.curve or "geometry" not in self.curve["tip"]:
         #     raise ValueError("Curve data with tip geometry is required")
-        print("params",parameters)
+        # print("params",parameters)
 
         # Normalize parameters to always unpack E and m safely
         if len(parameters) == 1 and isinstance(parameters[0], (list, tuple, np.ndarray)):
@@ -33,7 +33,7 @@ class DriftedHertzModel(FmodelBase):
         geometry = "sphere"
         poisson = self.get_value("poisson")
         x = np.array(x)
-        print('passed')
+        # print('passed')
         drift_term = m * x
         if geometry == "sphere":
             # R = self.curve.tip["radius"]
@@ -76,9 +76,9 @@ class DriftedHertzModel(FmodelBase):
             if E < 0:  # Ensure positive modulus (drift coefficient m can be negative)
                 return None
                     # Compute the fitted curve using the theory function
-            print(popt)
+            # print(popt)
             y_fit = self.theory(x, popt)
-            print("i am ")
+            # print("i am ")
             return [x.tolist(), y_fit.tolist()]  #
         except (RuntimeError, ValueError) as e:
             print(f"Fitting failed: {str(e)}")
