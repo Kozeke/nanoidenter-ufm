@@ -56,13 +56,19 @@ def create_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
     # Consistent return type: DOUBLE[]
     return_type = duckdb.list_type('DOUBLE')
 
-    conn.create_function(
-        udf_name,
-        udf_wrapper,
-        udf_param_types,
-        return_type=return_type,
-        null_handling='SPECIAL'
-    )
+    try:
+        conn.create_function(
+            udf_name,
+            udf_wrapper,
+            udf_param_types,
+            return_type=return_type,
+            null_handling='SPECIAL'
+        )
+    except duckdb.CatalogException as e:
+        if "already exists" in str(e):
+            print(f"Function '{udf_name}' already exists. Skipping creation.")
+        else:
+            raise
     print(f"UDF {udf_name} registered with types: {udf_param_types}, return type: {return_type}")
     
 
