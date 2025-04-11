@@ -63,7 +63,7 @@ def create_contact_point_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
             udf_wrapper,
             udf_param_types,
             return_type=return_type,
-            null_handling="SPECIAL" if filter_name in ["Autothresh", "GofSphere"] else "DEFAULT"
+            null_handling="SPECIAL" if filter_name in ["Autothresh", "GofSphere", "stepdrift"] else "DEFAULT"
         )
     except duckdb.CatalogException as e:
         if "already exists" in str(e):
