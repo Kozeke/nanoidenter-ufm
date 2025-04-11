@@ -180,53 +180,60 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         
 
                 # Construct the batch query
+        # Precompute CTEs to ensure proper formatting
+        fmodels_cte = f"fmodels_results AS (\n    {query_fmodels}\n)" if fmodels else ""
+        emodels_cte = f"emodels_results AS (\n    {query_emodels}\n)" if emodels else ""
+
+        # Comma logic
+        comma_after_base = fmodels or emodels  # Comma if any CTE follows base_results
+        comma_between = fmodels and emodels    # Comma only if both fmodels and emodels are present
+
         batch_query = f"""
-                WITH cp_data AS (
-                    {query_cp}
-                ),
-                indentation_data AS (
-                    SELECT 
-                        curve_id,
-                        calc_indentation(
-                            z_values, 
-                            force_values, 
-                            cp_values,
-                            {spring_constant}, 
-                            {set_zero_force}
-                        ) AS indentation_result
-                    FROM cp_data
-                    WHERE cp_values IS NOT NULL
-                ),
-                base_results AS (
-                    SELECT 
-                        curve_id,
-                        indentation_result AS indentation,
-                        calc_elspectra(
-                            indentation_result[1],
-                            indentation_result[2],
-                            {win}, 
-                            {order}, 
-                            '{tip_geometry}', 
-                            {tip_radius}, 
-                            {tip_angle}, 
-                            {interp}
-                        ) AS elspectra_result
-                    FROM indentation_data
-                    WHERE indentation_result IS NOT NULL
-                ){("," if fmodels or emodels else "")}
-                {f"fmodels_results AS (\n    {query_fmodels}\n)" if fmodels else ""}
-                {("," if fmodels and emodels else "")}
-                {f"emodels_results AS (\n    {query_emodels}\n)" if emodels else ""}
+            WITH cp_data AS (
+                {query_cp}
+            ),
+            indentation_data AS (
                 SELECT 
-                    b.curve_id,
-                    b.indentation,
-                    b.elspectra_result,
-                    {"f.fmodel_values" if fmodels else "NULL AS hertz_result"},
-                    {"e.emodel_values" if emodels else "NULL AS elastic_result"}
-                FROM base_results b
-                {f"LEFT JOIN fmodels_results f ON b.curve_id = f.curve_id" if fmodels else ""}
-                {f"LEFT JOIN emodels_results e ON b.curve_id = e.curve_id" if emodels else ""}
-            """
+                    curve_id,
+                    calc_indentation(
+                        z_values, 
+                        force_values, 
+                        cp_values,
+                        {spring_constant}, 
+                        {set_zero_force}
+                    ) AS indentation_result
+                FROM cp_data
+                WHERE cp_values IS NOT NULL
+            ),
+            base_results AS (
+                SELECT 
+                    curve_id,
+                    indentation_result AS indentation,
+                    calc_elspectra(
+                        indentation_result[1],
+                        indentation_result[2],
+                        {win}, 
+                        {order}, 
+                        '{tip_geometry}', 
+                        {tip_radius}, 
+                        {tip_angle}, 
+                        {interp}
+                    ) AS elspectra_result
+                FROM indentation_data
+                WHERE indentation_result IS NOT NULL
+            ){(',' if comma_after_base else '')}
+            {fmodels_cte}{(',' if comma_between else '')}
+            {emodels_cte}
+            SELECT 
+                b.curve_id,
+                b.indentation,
+                b.elspectra_result,
+                {'f.fmodel_values' if fmodels else 'NULL AS hertz_result'},
+                {'e.emodel_values' if emodels else 'NULL AS elastic_result'}
+            FROM base_results b
+            {'LEFT JOIN fmodels_results f ON b.curve_id = f.curve_id' if fmodels else ''}
+            {'LEFT JOIN emodels_results e ON b.curve_id = e.curve_id' if emodels else ''}
+        """
         
         try:
             result_batch = conn.execute(batch_query).fetchall()
