@@ -4,7 +4,7 @@ import json
 import duckdb
 import os
 from db import transform_hdf5_to_db
-from filters.register_filters import register_filters
+from filters.register_all import register_filters
 from db import fetch_curves_batch
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -16,8 +16,8 @@ app = FastAPI()
 # Enable CORS for frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://nanoidenter-ufm-front-end.onrender.com/"],
-    # allow_origins=["*"],  
+    # allow_origins=["https://nanoidenter-ufm-front-end.onrender.com/"],
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -35,17 +35,85 @@ os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
 
 @app.websocket("/ws/data")
 async def websocket_data_stream(websocket: WebSocket):
-    """WebSocket endpoint to stream batches of curve data from DuckDB."""
+    """WebSocket endpoint to stream batches of curve data from DuckDB and send filter defaults."""
     print("WebSocket connected")
     await websocket.accept()
     conn = duckdb.connect(DB_PATH)
-    register_filters(conn)  # Uncomment if you have filter registration
+    print(f"Connected to database: {DB_PATH}")
 
     try:
-        # Check table existence once at startup
+        # Debug: List all tables before any operations
+        tables = conn.execute("SHOW TABLES").fetchall()
+        print(f"Tables in database at connection: {tables}")
+        
+        # Register filters
+        register_filters(conn)
+        print("Filters registered")
+
+        # Debug: List tables after register_filters
+        tables = conn.execute("SHOW TABLES").fetchall()
+        print(f"Tables in database after register_filters: {tables}")
+
+        # Send filter defaults immediately after connection
+        result = conn.execute("SELECT name, parameters FROM filters").fetchall()
+        filter_defaults = {}
+        for name, params_json in result:
+            params = json.loads(params_json)
+            filter_key = f"{name.lower()}_filter_array"
+            filter_defaults[filter_key] = {
+                param_name: param_info["default"]
+                for param_name, param_info in params.items()
+            }
+        
+        # Send contact point filter defaults
+        cp_result = conn.execute("SELECT name, parameters FROM cps").fetchall()
+        cp_filter_defaults = {}
+        for name, params_json in cp_result:
+            params = json.loads(params_json)
+            cp_filter_key = f"{name.lower()}_filter_array"
+            cp_filter_defaults[cp_filter_key] = {
+                param_name: param_info["default"]
+                for param_name, param_info in params.items()
+            }
+            
+        # Send fmodel defaults
+        fmodel_result = conn.execute("SELECT name, parameters FROM fmodels").fetchall()
+        fmodel_defaults = {}
+        for name, params_json in fmodel_result:
+            params = json.loads(params_json)
+            fmodel_key = f"{name.lower()}_filter_array"  # Matches UDF name from create_fmodel_udf
+            fmodel_defaults[fmodel_key] = {
+                param_name: param_info["default"]
+                for param_name, param_info in params.items()
+            }
+        
+        # Send fmodel defaults
+        emodel_result = conn.execute("SELECT name, parameters FROM emodels").fetchall()
+        emodel_defaults = {}
+        for name, params_json in emodel_result:
+            params = json.loads(params_json)
+            emodel_key = f"{name.lower()}_filter_array"  # Matches UDF name from create_fmodel_udf
+            emodel_defaults[emodel_key] = {
+                param_name: param_info["default"]
+                for param_name, param_info in params.items()
+            }
+            
+        print("Prepared contact point filter defaults")
+        await websocket.send_json({
+            "status": "filter_defaults",             
+            "data": {
+                "regular_filters": filter_defaults,
+                "cp_filters": cp_filter_defaults,
+                "fmodels": fmodel_defaults,
+                "emodels": emodel_defaults
+            }})
+        print("Sent filter defaults to client")
+
+        # Check table existence
         table_exists = conn.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_name='force_vs_z'"
         ).fetchone()[0]
+        print(f"force_vs_z exists: {table_exists}")
         if table_exists == 0:
             await websocket.send_text(json.dumps({
                 "status": "error",
@@ -147,7 +215,7 @@ async def process_and_stream_batch(
                     executor,
                     lambda: fetch_curves_batch(conn, batch_ids, filters)
                 )
-            
+                
         # Fetch specific curve data if curve_id is provided (always, regardless of filters_changed)
         if curve_id:
             # Note: Using synchronous call here for simplicity; could also use executor if needed
@@ -202,8 +270,11 @@ async def process_and_stream_batch(
     
 @app.on_event("startup")
 async def startup_event():
-    """Load HDF5 data into DuckDB when the server starts (if needed)."""
+    """Load HDF5 data into DuckDB and set up filters when the server starts."""
+    # Check if DB needs initialization
     if not os.path.exists(DB_PATH) or os.stat(DB_PATH).st_size == 0:
         print("🚀 Loading HDF5 data into DuckDB...")
-        transform_hdf5_to_db(HDF5_FILE_PATH, DB_PATH)   
+        transform_hdf5_to_db(HDF5_FILE_PATH, DB_PATH)
+    else:
         print("✅ DuckDB database already exists, skipping reload.")
+    print("✅ Startup complete.")

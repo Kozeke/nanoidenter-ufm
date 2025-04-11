@@ -1,17 +1,22 @@
 import React from "react";
 
+import FilterStatusSidebar from "./FilterStatusSidebar";
+
 const FiltersComponent = ({
-  numCurves,
+  filterDefaults,
+  capitalizeFilterName,
+  cpDefaults,
+  fModelDefaults,
   regularFilters,
   cpFilters,
   selectedRegularFilter,
   selectedCpFilter,
-  handleNumCurvesChange,
   fModels,
-  selectedFModels,
+  selectedFModel,
   setSelectedFmodel,
   eModels,
   selectedEModels,
+  eModelDefaults,
   setSelectedEmodel,
   setSelectedRegularFilter,
   setSelectedCpFilter,
@@ -19,8 +24,7 @@ const FiltersComponent = ({
   handleRemoveFilter,
   handleFilterChange,
   sendCurveRequest,
-  curveId, // Add this prop
-  setCurveId, // Add this prop
+  activeTab,
 }) => {
   const [isOpen, setIsOpen] = React.useState(true);
 
@@ -43,7 +47,7 @@ const FiltersComponent = ({
             fontSize: "14px",
           }}
         >
-          Filters
+          {/* Filters */}
         </button>
       </div>
     );
@@ -52,18 +56,18 @@ const FiltersComponent = ({
   return (
     <div
       style={{
-        width: "300px",
-        padding: "10px",
-        borderLeft: "1px solid #ddd",
+        width: "100%", // Full width of parent container
+        padding: "5px", // Reduced padding
+        borderTop: "1px solid #ddd",
         backgroundColor: "#f9f9f9",
-        position: "fixed",
-        right: "0",
-        top: "0",
-        height: "100vh",
-        overflowY: "auto",
-        boxShadow: "-2px 0 5px rgba(0,0,0,0.1)",
+        height: "100%", // Take up full 15vh from parent
+        display: "flex",
+        flexDirection: "column", // Stack children vertically
+        justifyContent: "flex-start", // Align content from top
+        gap: "5px", // Reduced gap between elements
       }}
     >
+      {/* Header */}
       <div
         style={{
           display: "flex",
@@ -71,353 +75,419 @@ const FiltersComponent = ({
           alignItems: "center",
         }}
       >
-        <h3 style={{ margin: "0" }}>Filters</h3>
+        <h3 style={{ margin: "0", fontSize: "14px" }}>Filters</h3>
         <button
           onClick={toggleFilters}
           style={{
             background: "none",
             border: "none",
             color: "#ff4d4d",
-            fontSize: "18px",
+            fontSize: "14px",
             cursor: "pointer",
+            padding: "0",
           }}
         >
           ✕
         </button>
       </div>
 
-      {/* Add Curve ID Input */}
-      <div style={{ marginBottom: "20px", marginTop: "20px" }}>
-        <label>Curve ID: </label>
-        <input
-          type="text"
-          value={curveId}
-          onChange={(e) => setCurveId(e.target.value)}
-          style={{ width: "100%", padding: "5px" }}
-          placeholder="Enter Curve ID"
-        />
-      </div>
-
-      <div style={{ marginBottom: "20px" }}>
-        <label>Number of Curves: </label>
-        <input
-          type="range"
-          min="1"
-          max="100"
-          value={numCurves}
-          onChange={(e) => handleNumCurvesChange(e.target.value)}
-          style={{ width: "80%" }}
-        />
-        <input
-          type="number"
-          min="1"
-          max="100"
-          value={numCurves}
-          onChange={(e) => handleNumCurvesChange(e.target.value)}
-          style={{ width: "50px", textAlign: "center", marginLeft: "10px" }}
-        />
-      </div>
-
-      <div style={{ marginBottom: "20px" }}>
-        <label>Select Regular Filter: </label>
-        <select
-          value={selectedRegularFilter}
-          onChange={(e) => {
-            setSelectedRegularFilter(e.target.value);
-            handleAddFilter(e.target.value, false);
-          }}
-          style={{ width: "100%", padding: "5px" }}
-        >
-          <option value="">None</option>
-          <option value="median">Median Filter</option>
-          <option value="lineardetrend">Linear Detrend</option>
-          <option value="notch">Notch Filter</option>
-          <option value="polytrend">Polynomial Detrend</option>
-          <option value="prominence">Prominence Filter</option>
-          <option value="savgol">Savitzky-Golay</option>
-        </select>
-      </div>
-
-      <div style={{ marginBottom: "20px" }}>
-        <label>Select CP Filter: </label>
-        <select
-          value={selectedCpFilter}
-          onChange={(e) => {
-            setSelectedCpFilter(e.target.value);
-            handleAddFilter(e.target.value, true);
-          }}
-          style={{ width: "100%", padding: "5px" }}
-        >
-          <option value="">None</option>
-          <option value="autotresh">Auto Threshold</option>
-          <option value="gof">Goodness of Fit</option>
-          <option value="gofSphere">GoF Sphere</option>
-          <option value="rov">Rate of Variation</option>
-          <option value="stepanddrift">Step and Drift</option>
-          <option value="threshold">Threshold</option>
-        </select>
-      </div>
-
-      <div style={{ marginBottom: "20px" }}>
-        <label>Select force model: </label>
-        <select
-          value={selectedFModels}
-          onChange={(e) => {
-            setSelectedFmodel(e.target.value);
-            handleAddFilter(e.target.value, false, true);
-          }}
-          style={{ width: "100%", padding: "5px" }}
-        >
-          <option value="">None</option>
-          <option value="hertz">Hertz</option>
-          <option value="hertzEffective">Hertz Effective</option>
-          <option value="driftedHertz">Drifted Hertz</option>
-        </select>
-      </div>
-
-      <div style={{ marginBottom: "20px" }}>
-        <label>Select elasticity model: </label>
-        <select
-          value={selectedEModels}
-          onChange={(e) => {
-            setSelectedFmodel(e.target.value);
-            handleAddFilter(e.target.value, false, false, true);
-          }}
-          style={{ width: "100%", padding: "5px" }}
-        >
-          <option value="">None</option>
-          <option value="bilayer">Bilayer</option>
-          <option value="linemax">Linemax</option>
-          <option value="constant">Constant</option>
-          <option value="sigmoid">Sigmoid</option>
-        </select>
-      </div>
-
-      {Object.keys(regularFilters).map((filterName) => (
-        <div
-          key={filterName}
-          style={{
-            marginBottom: "15px",
-            padding: "10px",
-            border: "1px solid #ddd",
-            borderRadius: "5px",
-            backgroundColor: "#fff",
-          }}
-        >
-          <h4
-            style={{
-              margin: "0",
-              display: "flex",
-              justifyContent: "space-between",
+      {/* Four-Column Select Row */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr 1fr", // Four equal columns
+          gap: "5px", // Space between columns
+        }}
+      >
+        {/* Regular Filter */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+          <label style={{ fontSize: "14px" }}>Regular:</label>
+          <select
+            value={selectedRegularFilter}
+            onChange={(e) => {
+              setSelectedRegularFilter(e.target.value);
+              handleAddFilter(e.target.value, false);
             }}
+            style={{ width: "100%", padding: "2px", fontSize: "14px" }} // Smaller size
           >
-            {filterName}
-            <button
-              onClick={() => handleRemoveFilter(filterName, false)}
-              style={{
-                color: "red",
-                border: "none",
-                background: "none",
-                cursor: "pointer",
-              }}
-            >
-              ❌
-            </button>
-          </h4>
-          {Object.keys(regularFilters[filterName]).map((param) => (
-            <div key={param} style={{ marginTop: "5px" }}>
-              <label>{param.replace("_", " ")}: </label>
-              <input
-                type="number"
-                value={regularFilters[filterName][param]}
-                onChange={(e) =>
-                  handleFilterChange(
-                    filterName,
-                    param,
-                    parseFloat(e.target.value),
-                    false
-                  )
-                }
-                style={{ width: "80px" }}
-              />
-            </div>
-          ))}
+            <option value="">None</option>
+            {Object.keys(filterDefaults).map((filterName) => (
+              <option key={filterName} value={filterName}>
+                {capitalizeFilterName(filterName)}
+              </option>
+            ))}
+          </select>
         </div>
-      ))}
 
-      {Object.keys(cpFilters).map((filterName) => (
-        <div
-          key={filterName}
-          style={{
-            marginBottom: "15px",
-            padding: "10px",
-            border: "1px solid #ddd",
-            borderRadius: "5px",
-            backgroundColor: "#fff",
-          }}
-        >
-          <h4
-            style={{
-              margin: "0",
-              display: "flex",
-              justifyContent: "space-between",
+        {/* CP Filter */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+          <label style={{ fontSize: "14px" }}>CP:</label>
+          <select
+            value={selectedCpFilter}
+            onChange={(e) => {
+              setSelectedCpFilter(e.target.value);
+              handleAddFilter(e.target.value, true);
             }}
+            style={{ width: "100%", padding: "2px", fontSize: "14px" }}
           >
-            {filterName}
-            <button
-              onClick={() => handleRemoveFilter(filterName, true)}
-              style={{
-                color: "red",
-                border: "none",
-                background: "none",
-                cursor: "pointer",
-              }}
-            >
-              ❌
-            </button>
-          </h4>
-          {Object.keys(cpFilters[filterName]).map((param) => (
-            <div key={param} style={{ marginTop: "5px" }}>
-              <label>{param.replace("_", " ")}: </label>
-              <input
-                type="number"
-                value={cpFilters[filterName][param]}
-                onChange={(e) =>
-                  handleFilterChange(
-                    filterName,
-                    param,
-                    parseFloat(e.target.value),
-                    true
-                  )
-                }
-                style={{ width: "80px" }}
-              />
-            </div>
-          ))}
+            <option value="">None</option>
+            {Object.keys(cpDefaults).map((filterName) => (
+              <option key={filterName} value={filterName}>
+                {capitalizeFilterName(filterName)}
+              </option>
+            ))}
+          </select>
         </div>
-      ))}
-      {Object.keys(fModels).map((filterName) => (
-        <div
-          key={filterName}
-          style={{
-            marginBottom: "15px",
-            padding: "10px",
-            border: "1px solid #ddd",
-            borderRadius: "5px",
-            backgroundColor: "#fff",
-          }}
-        >
-          <h4
+
+        {/* Force Model */}
+        {activeTab === "forceIndentation" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+            <label style={{ fontSize: "14px" }}>Force:</label>
+            <select
+              value={selectedFModel}
+              onChange={(e) => {
+                setSelectedFmodel(e.target.value);
+                handleAddFilter(e.target.value, false, true);
+              }}
+              style={{ width: "100%", padding: "2px", fontSize: "14px" }}
+            >
+              <option value="">None</option>
+              {Object.keys(fModelDefaults).map((fmodelName) => (
+                <option key={fmodelName} value={fmodelName}>
+                  {capitalizeFilterName(fmodelName)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Elasticity Model */}
+        {activeTab === "elasticitySpectra" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+            <label style={{ fontSize: "14px" }}>Elasticity:</label>
+            <select
+              value={selectedEModels}
+              onChange={(e) => {
+                setSelectedEmodel(e.target.value);
+                handleAddFilter(e.target.value, false, false, true);
+              }}
+              style={{ width: "100%", padding: "2px", fontSize: "14px" }}
+            >
+              <option value="">None</option>
+              {Object.keys(eModelDefaults).map((emodelName) => (
+                <option key={emodelName} value={emodelName}>
+                  {capitalizeFilterName(emodelName)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
+
+      {/* Filter Status Indicators */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap", // Allow wrapping to next line if needed
+          gap: "5px", // Space between filter blocks
+        }}
+      >
+        {Object.keys(regularFilters).map((filterName) => (
+          <div
+            key={filterName}
             style={{
-              margin: "0",
-              display: "flex",
-              justifyContent: "space-between",
+              width: "150px", // Fixed width
+              padding: "5px", // Reduced padding
+              border: "1px solid #ddd",
+              borderRadius: "3px", // Smaller radius
+              backgroundColor: "#fff",
             }}
           >
-            {filterName}
-            <button
-              onClick={() => handleRemoveFilter(filterName, false, true)}
+            <h4
               style={{
-                color: "red",
-                border: "none",
-                background: "none",
-                cursor: "pointer",
+                margin: "0",
+                fontSize: "14px", // Reduced font size
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
               }}
             >
-              ❌
-            </button>
-          </h4>
-          {Object.keys(fModels[filterName]).map((param) => (
-            <div key={param} style={{ marginTop: "5px" }}>
-              <label>{param.replace("_", " ")}: </label>
-              <input
-                type="number"
-                value={fModels[filterName][param]}
-                onChange={(e) =>
-                  handleFilterChange(
-                    filterName,
-                    param,
-                    parseFloat(e.target.value),
-                    false,
-                    true
-                  )
-                }
-                style={{ width: "80px" }}
-              />
-            </div>
-          ))}
-        </div>
-      ))}
-      {Object.keys(eModels).map((filterName) => (
-        <div
-          key={filterName}
-          style={{
-            marginBottom: "15px",
-            padding: "10px",
-            border: "1px solid #ddd",
-            borderRadius: "5px",
-            backgroundColor: "#fff",
-          }}
-        >
-          <h4
-            style={{
-              margin: "0",
-              display: "flex",
-              justifyContent: "space-between",
-            }}
-          >
-            {filterName}
-            <button
-              onClick={() => handleRemoveFilter(filterName, false, false, true)} // isEModel = true
-              style={{
-                color: "red",
-                border: "none",
-                background: "none",
-                cursor: "pointer",
-              }}
-            >
-              ❌
-            </button>
-          </h4>
-          {Object.keys(eModels[filterName]).map((param) => (
-            <div key={param} style={{ marginTop: "5px" }}>
-              <label>{param.replace("_", " ")}: </label>
-              <input
-                type="number"
-                value={eModels[filterName][param]}
-                onChange={
-                  (e) =>
+              {capitalizeFilterName(filterName)}
+              <button
+                onClick={() => handleRemoveFilter(filterName, false)}
+                style={{
+                  color: "red",
+                  border: "none",
+                  background: "none",
+                  cursor: "pointer",
+                  fontSize: "14px", // Reduced size
+                  padding: "0",
+                }}
+              >
+                ❌
+              </button>
+            </h4>
+            {Object.keys(regularFilters[filterName]).map((param) => (
+              <div
+                key={param}
+                style={{
+                  marginTop: "2px", // Reduced margin
+                  fontSize: "13px", // Smaller font
+                }}
+              >
+                <label style={{ display: "block" }}>
+                  {param.replace("_", " ")}:
+                </label>
+                <input
+                  type="number"
+                  value={regularFilters[filterName][param]}
+                  onChange={(e) =>
                     handleFilterChange(
                       filterName,
                       param,
                       parseFloat(e.target.value),
-                      false,
-                      false,
+                      false
+                    )
+                  }
+                  style={{ width: "100%", padding: "2px", fontSize: "13px" }} // Compact input
+                />
+              </div>
+            ))}
+          </div>
+        ))}
+
+        {Object.keys(cpFilters).map((filterName) => (
+          <div
+            key={filterName}
+            style={{
+              width: "150px",
+              padding: "5px",
+              border: "1px solid #ddd",
+              borderRadius: "3px",
+              backgroundColor: "#fff",
+            }}
+          >
+            <h4
+              style={{
+                margin: "0",
+                fontSize: "14px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              {filterName}
+              <button
+                onClick={() => handleRemoveFilter(filterName, true)}
+                style={{
+                  color: "red",
+                  border: "none",
+                  background: "none",
+                  cursor: "pointer",
+                  fontSize: "14px",
+                  padding: "0",
+                }}
+              >
+                ❌
+              </button>
+            </h4>
+            {Object.keys(cpFilters[filterName]).map((param) => (
+              <div
+                key={param}
+                style={{
+                  marginTop: "2px",
+                  fontSize: "13px",
+                }}
+              >
+                <label style={{ display: "block" }}>
+                  {param.replace("_", " ")}:
+                </label>
+                <input
+                  type="number"
+                  value={cpFilters[filterName][param]}
+                  onChange={(e) =>
+                    handleFilterChange(
+                      filterName,
+                      param,
+                      parseFloat(e.target.value),
                       true
-                    ) // isEModel = true
-                }
-                style={{ width: "80px" }}
-              />
+                    )
+                  }
+                  style={{ width: "100%", padding: "2px", fontSize: "13px" }}
+                />
+              </div>
+            ))}
+          </div>
+        ))}
+
+        {/* Force Models (for forceIndentation tab) */}
+        {activeTab === "forceIndentation" &&
+          Object.keys(fModels).map((fmodelName) => (
+            <div
+              key={fmodelName}
+              style={{
+                width: "150px",
+                padding: "5px",
+                border: "1px solid #ddd",
+                borderRadius: "3px",
+                backgroundColor: "#fff",
+              }}
+            >
+              <h4
+                style={{
+                  margin: "0",
+                  fontSize: "14px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                {capitalizeFilterName(fmodelName)}
+                <button
+                  onClick={() => handleRemoveFilter(fmodelName, false, true)}
+                  style={{
+                    color: "red",
+                    border: "none",
+                    background: "none",
+                    cursor: "pointer",
+                    fontSize: "14px",
+                    padding: "0",
+                  }}
+                >
+                  ❌
+                </button>
+              </h4>
+              {Object.keys(fModels[fmodelName]).map((param) => (
+                <div
+                  key={param}
+                  style={{
+                    marginTop: "2px",
+                    fontSize: "13px",
+                  }}
+                >
+                  <label style={{ display: "block" }}>
+                    {param.replace("_", " ")}:
+                  </label>
+                  <input
+                    type="number"
+                    value={
+                      fModels[fmodelName]?.[param] ||
+                      fModelDefaults[fmodelName][param]
+                    }
+                    onChange={(e) =>
+                      handleFilterChange(
+                        fmodelName,
+                        param,
+                        parseFloat(e.target.value),
+                        false,
+                        true
+                      )
+                    }
+                    style={{ width: "100%", padding: "2px", fontSize: "13px" }}
+                  />
+                </div>
+              ))}
             </div>
           ))}
-        </div>
-      ))}
 
+        {/* Elasticity Models (for elasticitySpectra tab) */}
+        {activeTab === "elasticitySpectra" &&
+          Object.keys(eModels).map((filterName) => (
+            <div
+              key={filterName}
+              style={{
+                width: "150px",
+                padding: "5px",
+                border: "1px solid #ddd",
+                borderRadius: "3px",
+                backgroundColor: "#fff",
+              }}
+            >
+              <h4
+                style={{
+                  margin: "0",
+                  fontSize: "14px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                {filterName}
+                <button
+                  onClick={() =>
+                    handleRemoveFilter(filterName, false, false, true)
+                  }
+                  style={{
+                    color: "red",
+                    border: "none",
+                    background: "none",
+                    cursor: "pointer",
+                    fontSize: "14px",
+                    padding: "0",
+                  }}
+                >
+                  ❌
+                </button>
+              </h4>
+              {Object.keys(eModels[filterName]).map((param) => (
+                <div
+                  key={param}
+                  style={{
+                    marginTop: "2px",
+                    fontSize: "13px",
+                  }}
+                >
+                  <label style={{ display: "block" }}>
+                    {param.replace("_", " ")}:
+                  </label>
+                  <input
+                    type="number"
+                    value={eModels[filterName][param]}
+                    onChange={(e) =>
+                      handleFilterChange(
+                        filterName,
+                        param,
+                        parseFloat(e.target.value),
+                        false,
+                        false,
+                        true
+                      )
+                    }
+                    style={{ width: "100%", padding: "2px", fontSize: "13px" }}
+                  />
+                </div>
+              ))}
+            </div>
+          ))}
+      </div>
+
+      {/* Update Curves Button */}
       <button
         onClick={sendCurveRequest}
         style={{
           width: "100%",
-          padding: "10px",
-          marginTop: "10px",
+          padding: "5px",
           backgroundColor: "#28a745",
           color: "white",
           border: "none",
-          borderRadius: "5px",
+          borderRadius: "3px",
           cursor: "pointer",
+          fontSize: "12px",
         }}
       >
         Update Curves
       </button>
+      {/* Sidebar with Filter Status */}
+      <FilterStatusSidebar
+        regularFilters={regularFilters}
+        cpFilters={cpFilters}
+        fModels={fModels}
+        eModels={eModels}
+        fModelDefaults={fModelDefaults}
+        capitalizeFilterName={capitalizeFilterName}
+        handleRemoveFilter={handleRemoveFilter}
+        handleFilterChange={handleFilterChange}
+      />
     </div>
   );
 };

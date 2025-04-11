@@ -1,10 +1,11 @@
 import h5py
 import duckdb
-from filters.apply_filters import apply
-from filters.apply_contact_point_filters import apply_cp_filters
-from filters.apply_fmodels import apply_fmodels
+from filters.filters.apply_filters import apply
+from filters.cpoints.apply_contact_point_filters import apply_cp_filters
+from filters.fmodels.apply_fmodels import apply_fmodels
+from filters.emodels.apply_emodels import apply_emodels
 from typing import Dict, Tuple, List
-from filters.register_filters import register_filters
+from filters.register_all import register_filters
 import pandas as pd  # Ensure pandas is imported
 
 DB_PATH = "data/hdf5_data.db"
@@ -46,9 +47,13 @@ def save_to_duckdb(transformed_data: Dict[str, Dict[str, List[float]]], db_path:
     print("🚀 Saving transformed data to DuckDB...")
 
     # Establish connection
+    
     conn = duckdb.connect(db_path)
     register_filters(conn)  # Uncomment if you have filter registration
-
+    # Set up filters
+    # conn.create_function("median_filter_array", median_filter_array, return_type="DOUBLE[]")
+    # setup_filters(conn)
+    
     try:
         # Create table with curve_id (if not exists)
         conn.execute("""
@@ -81,6 +86,7 @@ def save_to_duckdb(transformed_data: Dict[str, Dict[str, List[float]]], db_path:
         raise
     finally:
         conn.close()
+        
 def transform_hdf5_to_db(hdf5_path, db_path):
     """Reads HDF5, transforms it, and saves the result into DuckDB."""
     print("🚀 Processing HDF5 file...")
@@ -156,101 +162,71 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         interp = True
         
         # Define defaults for model parameters
-        model = 'hertz'
-        poisson = 0.5
-        zi_min = 0.0
-        zi_max = 800.0
+        # model = 'hertz'
+        # poisson = 0.5
+        # zi_min = 0.0
+        # zi_max = 800.0
         
         # Get fmodels from filters and override defaults if present
         fmodels = filters.get('f_models', {})
         if fmodels:
-            model = next(iter(fmodels))
-            poisson = fmodels[model].get('poisson', 0.5)
-            zi_min = fmodels[model].get('minInd', 0.0)
-            zi_max = fmodels[model].get('maxInd', 800.0)
-            # print(f"Using fmodels with model: {model}, poisson: {poisson}, zi_min: {zi_min}, zi_max: {zi_max}")
+            query_fmodels = apply_fmodels("", fmodels, curve_ids) if fmodels else None
         
-        emodels = filters.get('e_models', {})  
+        
+        emodels = filters.get('e_models', {})
         if emodels:
-            model = next(iter(emodels))
-            poisson = emodels[model].get('poisson', 0.5)
-            ze_min = emodels[model].get('minInd', 0.0)
-            ze_max = emodels[model].get('maxInd', 800.0)
-            # print(f"Using emodels with model: {model}, poisson: {poisson}, ze_min: {ze_min}, ze_max: {ze_max}")
+            print("emodel exists", emodels)
+            query_emodels = apply_emodels("", emodels, curve_ids) if emodels else None
+        
 
-        # Combined batch query with conditional fmodels calculation
+                # Construct the batch query
         batch_query = f"""
-            WITH cp_data AS (
-                {query_cp}
-            ),
-            indentation_data AS (
+                WITH cp_data AS (
+                    {query_cp}
+                ),
+                indentation_data AS (
+                    SELECT 
+                        curve_id,
+                        calc_indentation(
+                            z_values, 
+                            force_values, 
+                            cp_values,
+                            {spring_constant}, 
+                            {set_zero_force}
+                        ) AS indentation_result
+                    FROM cp_data
+                    WHERE cp_values IS NOT NULL
+                ),
+                base_results AS (
+                    SELECT 
+                        curve_id,
+                        indentation_result AS indentation,
+                        calc_elspectra(
+                            indentation_result[1],
+                            indentation_result[2],
+                            {win}, 
+                            {order}, 
+                            '{tip_geometry}', 
+                            {tip_radius}, 
+                            {tip_angle}, 
+                            {interp}
+                        ) AS elspectra_result
+                    FROM indentation_data
+                    WHERE indentation_result IS NOT NULL
+                ){("," if fmodels or emodels else "")}
+                {f"fmodels_results AS (\n    {query_fmodels}\n)" if fmodels else ""}
+                {("," if fmodels and emodels else "")}
+                {f"emodels_results AS (\n    {query_emodels}\n)" if emodels else ""}
                 SELECT 
-                    curve_id,
-                    calc_indentation(
-                        z_values, 
-                        force_values, 
-                        cp_values,
-                        {spring_constant}, 
-                        {set_zero_force}
-                    ) AS indentation_result
-                FROM cp_data
-                WHERE cp_values IS NOT NULL
-            ),
-            base_results AS (
-                SELECT 
-                    curve_id,
-                    indentation_result AS indentation,
-                    calc_elspectra(
-                        indentation_result[1],
-                        indentation_result[2],
-                        {win}, 
-                        {order}, 
-                        '{tip_geometry}', 
-                        {tip_radius}, 
-                        {tip_angle}, 
-                        {interp}
-                    ) AS elspectra_result
-                FROM indentation_data
-                WHERE indentation_result IS NOT NULL
-            )
-            {", fmodels_results AS ("
-            f"    SELECT "
-            f"        curve_id,"
-            f"        calc_fmodels("
-            f"            indentation_result[1],"
-            f"            indentation_result[2],"
-            f"            {zi_min},"
-            f"            {zi_max},"
-            f"            '{model}',"
-            f"            {poisson}"
-            f"        ) AS hertz_result"
-            f"    FROM indentation_data"
-            f"    WHERE indentation_result IS NOT NULL"
-            f")" if fmodels else ""}
-            {", emodels_results AS ("
-            f"    SELECT "
-            f"        curve_id,"
-            f"        calc_fmodels("
-            f"            elspectra_result[1],"
-            f"            elspectra_result[2],"
-            f"            {ze_min},"
-            f"            {ze_max},"
-            f"            '{model}',"
-            f"            {poisson}"
-            f"        ) AS elastic_result"
-            f"    FROM base_results"
-            f"    WHERE elspectra_result IS NOT NULL"
-            f")" if emodels else ""}
-            SELECT 
-                b.curve_id,
-                b.indentation,
-                b.elspectra_result,
-                {"f.hertz_result" if fmodels else "NULL AS hertz_result"},
-                {"e.elastic_result" if emodels else "NULL AS elastic_result"}
-            FROM base_results b
-            {f"LEFT JOIN fmodels_results f ON b.curve_id = f.curve_id" if fmodels else ""}
-            {f"LEFT JOIN emodels_results e ON b.curve_id = e.curve_id" if emodels else ""}
-        """
+                    b.curve_id,
+                    b.indentation,
+                    b.elspectra_result,
+                    {"f.fmodel_values" if fmodels else "NULL AS hertz_result"},
+                    {"e.emodel_values" if emodels else "NULL AS elastic_result"}
+                FROM base_results b
+                {f"LEFT JOIN fmodels_results f ON b.curve_id = f.curve_id" if fmodels else ""}
+                {f"LEFT JOIN emodels_results e ON b.curve_id = e.curve_id" if emodels else ""}
+            """
         
         try:
             result_batch = conn.execute(batch_query).fetchall()
@@ -271,8 +247,9 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                     "y": fi
                 })
                 if hertz_result is not None and fmodels and single:
-                    # print("hertz_result", hertz_result)
+                    print("hertz_result", len(hertz_result))
                     x, y = hertz_result
+                    print(len(x),len(y))
                     curves_cp.append({
                         "curve_id": f"{curve_id}_hertz",
                         "x": x,
@@ -281,13 +258,14 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             
             if elspectra_result is not None:
                 ze, e = elspectra_result
+                print("ze, e",ze, e)
                 curves_el.append({
                     "curve_id": curve_id,
                     "x": ze,
                     "y": e
                 })
                 if elastic_result is not None and emodels and single:
-                    # print("elastic_result", elastic_result)
+                    print("elastic_result", elastic_result)
                     x, y = elastic_result
                     curves_el.append({
                         "curve_id": f"{curve_id}_elastic",

@@ -1,3 +1,4 @@
+// GraphComponent.jsx
 import React from "react";
 import ReactECharts from "echarts-for-react";
 
@@ -89,7 +90,37 @@ const ForceDisplacementSingle = ({ forceData, domainRange }) => {
       },
     })),
     legend: { show: false, bottom: 0 },
-    grid: { left: "12%", right: "10%", bottom: "10%" },
+    grid: { left: "12%", right: "10%", bottom: "15%" }, // Adjusted bottom for slider
+    dataZoom: [
+      {
+        type: "slider", // Visible slider for x-axis
+        xAxisIndex: 0, // Apply to xAxis
+        start: 0, // Initial zoom range (0% to 100%)
+        end: 100,
+        height: 20, // Height of the slider
+        bottom: 10, // Position above the bottom edge
+      },
+      {
+        type: "slider", // Visible slider for y-axis
+        yAxisIndex: 0, // Apply to yAxis
+        start: 0,
+        end: 100,
+        width: 20, // Width of the slider
+        right: 10, // Position from the right edge
+      },
+      {
+        type: "inside", // Mouse wheel and pinch-to-zoom
+        xAxisIndex: 0, // Apply to xAxis
+        start: 0,
+        end: 100,
+      },
+      {
+        type: "inside", // Mouse wheel and pinch-to-zoom
+        yAxisIndex: 0, // Apply to yAxis
+        start: 0,
+        end: 100,
+      },
+    ],
     animation: false,
     progressive: 5000,
   };

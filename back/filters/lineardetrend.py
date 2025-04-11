@@ -14,6 +14,7 @@ def lineardetrend_filter(x, y, smoothing_window=51, threshold=1e-12):
     # ✅ Ensure inputs are NumPy arrays
     x = np.array(x, dtype=np.float64)
     y = np.array(y, dtype=np.float64)
+    print("y", y)
 
     if len(x) == 0 or len(y) == 0:
         return []  # ✅ Return an empty list if input is empty (prevents errors)

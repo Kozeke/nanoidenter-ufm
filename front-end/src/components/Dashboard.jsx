@@ -6,8 +6,10 @@ import ForceIndentationSingle from "./graphs/ForceIndentationSingle";
 import ElasticitySpectra from "./graphs/SpectraElasticity";
 import ElasticitySpectraSingle from "./graphs/SpectraElasticitySingle";
 import FiltersComponent from "./FiltersComponent";
+import CurveControlsComponent from "./CurveControlsComponent";
 
-const WEBSOCKET_URL = process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:80/ws/data";
+const WEBSOCKET_URL =
+  process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8080/ws/data";
 
 const Dashboard = () => {
   const [forceData, setForceData] = useState([]); // For DataSet graph
@@ -16,6 +18,12 @@ const Dashboard = () => {
   const [indentationDataSingle, setIndentationDataSingle] = useState([]); // For Single indentation graph
   const [elspectraData, setElspectraData] = useState([]); // For DataSet elspectra graph
   const [elspectraDataSingle, setElspectraDataSingle] = useState([]); // For Single elspectra graph
+  const [filterDefaults, setFilterDefaults] = useState([]);
+  const [cpDefaults, setCpDefaults] = useState({
+    autotresh: { range_to_set_zero: 500 },
+  });
+  const [fModelDefaults, setFmodelDefaults] = useState([]);
+  const [eModelDefaults, setEmodelDefaults] = useState([]);
 
   const [domainRange, setDomainRange] = useState({
     xMin: Infinity,
@@ -61,7 +69,7 @@ const Dashboard = () => {
   const [cpFilters, setCpFilters] = useState({});
   const [fModels, setfModels] = useState({});
   const [selectedFmodel, setSelectedFmodel] = useState({});
-  
+
   const [eModels, seteModels] = useState({});
   const [selectedEmodel, setSelectedEmodel] = useState({});
 
@@ -69,54 +77,19 @@ const Dashboard = () => {
   const [selectedCpFilter, setSelectedCpFilter] = useState("");
   const [activeTab, setActiveTab] = useState("forceDisplacement");
   const [curveId, setCurveId] = useState("");
-
-  const filterDefaults = {
-    median: { window_size: 5 },
-    lineardetrend: { threshold: 10, smoothing_window: 101 },
-    notch: { period_nm: 150.0, quality_factor: 20 },
-    polytrend: { baseline_percentile: 90, polynomial_degree: 2 },
-    prominence: { prominency: 40, min_frequency: 25, band_pass: 30 },
-    savgol: { window_size: 25.0, polyorder: 3 },
-    autotresh: { range_to_set_zero: 500 },
-    gof: { fit_window: 200, min_x: 50, max_force: 50 },
-    gofSphere: { fit_window: 200, x_range: 1000, force_threshold: 10 },
-    rov: { safe_threshold: 10, x_range: 1000, windowRov: 200 },
-    stepanddrift: {
-      algin_threshold: 10,
-      threshold_ratio: 25,
-      smoothing_window: 101,
-    },
-    threshold: { starting_threshold: 2, min_x: 1, max_x: 60, force_offset: 0 },
-    hertz: { poisson: 0.5, minInd: 0, maxInd: 800 },
-    hertzEffective: { minInd: 0, maxInd: 800 },
-    driftedHertz: { poisson: 0.5, minInd: 0, maxInd: 800 },
-  
-    // ✅ New filters of emodel added below
-    bilayer: {
-      lambda_coefficient: 1.74,
-      minInd: 0,
-      maxInd: 800,
-    },
-    linemax: {
-      upper_percentile: 100,
-      lower_percentile: 10,
-      minInd: 0,
-      maxInd: 800,
-    },
-    constant: {
-      minInd: 0,
-      maxInd: 800,
-    },
-    sigmoid: {
-      upper_percentile: 100,
-      lower_percentile: 10,
-      minInd: 0,
-      maxInd: 800,
-    },
-  };
-  
   const prevFiltersRef = useRef({ regular: null, cp: null });
   const prevNumCurvesRef = useRef(1); // Initialize with default numCurves
+
+  // Helper to capitalize filter names for display
+  const capitalizeFilterName = (name) => {
+    return (
+      name.charAt(0).toUpperCase() +
+      name
+        .slice(1)
+        .replace(/([A-Z])/g, " $1")
+        .trim()
+    );
+  };
 
   const sendCurveRequest = useCallback(() => {
     console.log("sendcurve");
@@ -124,7 +97,7 @@ const Dashboard = () => {
       const areFiltersEqual = (prev, current) => {
         return JSON.stringify(prev) === JSON.stringify(current);
       };
-  
+
       const filtersChanged = !areFiltersEqual(
         {
           regular: prevFiltersRef.current.regular,
@@ -139,16 +112,16 @@ const Dashboard = () => {
           e_models: eModels,
         }
       );
-  
+
       const numCurvesChanged = prevNumCurvesRef.current !== numCurves;
-  
+
       const resetState = {
         xMin: Infinity,
         xMax: -Infinity,
         yMin: Infinity,
         yMax: -Infinity,
       };
-  
+
       if (filtersChanged || numCurvesChanged) {
         console.log("filters changed");
         setForceData([]);
@@ -163,7 +136,7 @@ const Dashboard = () => {
         setDomainRangeSingle(resetState);
         setIndentationDomainSingle(resetState);
         setElspectraDomainSingle(resetState);
-  
+
         const requestData = {
           num_curves: numCurves,
           filters: {
@@ -183,7 +156,7 @@ const Dashboard = () => {
         setDomainRangeSingle(resetState);
         setIndentationDomainSingle(resetState);
         setElspectraDomainSingle(resetState);
-  
+
         const requestData = {
           curve_id: curveId,
           filters: {
@@ -196,7 +169,7 @@ const Dashboard = () => {
         };
         socketRef.current.send(JSON.stringify(requestData));
       }
-  
+
       prevFiltersRef.current = {
         regular: regularFilters,
         cp: cpFilters,
@@ -205,240 +178,282 @@ const Dashboard = () => {
       };
     }
   }, [curveId, numCurves, regularFilters, cpFilters, fModels, eModels]);
-  
 
-    useEffect(() => {
-      console.log("useeffect")
-      // socketRef.current = new WebSocket(
-      //   WEBSOCKET_URL
-      // );
-      socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
-      socketRef.current.onopen = () => {
-        console.log("WebSocket connected.");
-        if (!initialRequestSent.current) {
-          sendCurveRequest();
-          initialRequestSent.current = true;
-        }
-      };
+  useEffect(() => {
+    console.log("useeffect");
+    // socketRef.current = new WebSocket(WEBSOCKET_URL);
+    socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
+    socketRef.current.onopen = () => {
+      console.log("WebSocket connected.");
+      if (!initialRequestSent.current) {
+        sendCurveRequest();
+        initialRequestSent.current = true;
+      }
+    };
 
-      socketRef.current.onmessage = (event) => {
-        const response = JSON.parse(event.data);
-        if (response.status === "batch" && response.data) {
-          const {
-            graphForcevsZ,
-            graphForceIndentation,
-            graphElspectra,
-            graphForcevsZSingle,
-            graphForceIndentationSingle,
-            graphElspectraSingle,
-          } = response.data;
-          console.log("graphForcevsZ", graphForcevsZ)
-          console.log("graphForceIndentation", graphForceIndentation)
-          console.log("graphElspectra", graphElspectra)
-          console.log("graphForcevsZSingle", graphForcevsZSingle)
-          console.log("graphForceIndentationSingle", graphForceIndentationSingle)
-          console.log("graphElspectraSingle", graphElspectraSingle)
-          // if (curveId) {
-          setForceDataSingle(graphForcevsZSingle?.curves || []);
-          setIndentationDataSingle(graphForceIndentationSingle?.curves || []);
-          setElspectraDataSingle(graphElspectraSingle?.curves || []);
-          // } else {
-          setForceData((prev) => [...prev, ...(graphForcevsZ?.curves || [])]);
-          setIndentationData((prev) => [
-            ...prev,
-            ...(graphForceIndentation?.curves || []),
-          ]);
-          setElspectraData((prev) => [
-            ...prev,
-            ...(graphElspectra?.curves || []),
-          ]);
-          // }
+    socketRef.current.onmessage = (event) => {
+      const response = JSON.parse(event.data);
+      if (response.status === "batch" && response.data) {
+        const {
+          graphForcevsZ,
+          graphForceIndentation,
+          graphElspectra,
+          graphForcevsZSingle,
+          graphForceIndentationSingle,
+          graphElspectraSingle,
+        } = response.data;
+        console.log("graphForcevsZ", graphForcevsZ);
+        console.log("graphForceIndentation", graphForceIndentation);
+        console.log("graphElspectra", graphElspectra);
+        console.log("graphForcevsZSingle", graphForcevsZSingle);
+        console.log("graphForceIndentationSingle", graphForceIndentationSingle);
+        console.log("graphElspectraSingle", graphElspectraSingle);
+        // if (curveId) {
+        setForceDataSingle(graphForcevsZSingle?.curves || []);
+        setIndentationDataSingle(graphForceIndentationSingle?.curves || []);
+        setElspectraDataSingle(graphElspectraSingle?.curves || []);
+        // } else {
+        setForceData((prev) => [...prev, ...(graphForcevsZ?.curves || [])]);
+        setIndentationData((prev) => [
+          ...prev,
+          ...(graphForceIndentation?.curves || []),
+        ]);
+        setElspectraData((prev) => [
+          ...prev,
+          ...(graphElspectra?.curves || []),
+        ]);
+        // }
 
-          // Update all domain ranges
-          setDomainRange((prev) => ({
-            xMin: Math.min(prev.xMin, graphForcevsZ?.domain.xMin ?? Infinity),
-            xMax: Math.max(prev.xMax, graphForcevsZ?.domain.xMax ?? -Infinity),
-            yMin: Math.min(prev.yMin, graphForcevsZ?.domain.yMin ?? Infinity),
-            yMax: Math.max(prev.yMax, graphForcevsZ?.domain.yMax ?? -Infinity),
-          }));
-          setIndentationDomain((prev) => ({
+        // Update all domain ranges
+        setDomainRange((prev) => ({
+          xMin: Math.min(prev.xMin, graphForcevsZ?.domain.xMin ?? Infinity),
+          xMax: Math.max(prev.xMax, graphForcevsZ?.domain.xMax ?? -Infinity),
+          yMin: Math.min(prev.yMin, graphForcevsZ?.domain.yMin ?? Infinity),
+          yMax: Math.max(prev.yMax, graphForcevsZ?.domain.yMax ?? -Infinity),
+        }));
+        setIndentationDomain((prev) => ({
+          xMin: Math.min(
+            prev.xMin,
+            graphForceIndentation?.domain.xMin ?? Infinity
+          ),
+          xMax: Math.max(
+            prev.xMax,
+            graphForceIndentation?.domain.xMax ?? -Infinity
+          ),
+          yMin: Math.min(
+            prev.yMin,
+            graphForceIndentation?.domain.yMin ?? Infinity
+          ),
+          yMax: Math.max(
+            prev.yMax,
+            graphForceIndentation?.domain.yMax ?? -Infinity
+          ),
+        }));
+        setElspectraDomain((prev) => ({
+          xMin: Math.min(prev.xMin, graphElspectra?.domain.xMin ?? Infinity),
+          xMax: Math.max(prev.xMax, graphElspectra?.domain.xMax ?? -Infinity),
+          yMin: Math.min(prev.yMin, graphElspectra?.domain.yMin ?? Infinity),
+          yMax: Math.max(prev.yMax, graphElspectra?.domain.yMax ?? -Infinity),
+        }));
+
+        if (curveId) {
+          setDomainRangeSingle((prev) => ({
             xMin: Math.min(
               prev.xMin,
-              graphForceIndentation?.domain.xMin ?? Infinity
+              graphForcevsZSingle?.domain.xMin ?? Infinity
             ),
             xMax: Math.max(
               prev.xMax,
-              graphForceIndentation?.domain.xMax ?? -Infinity
+              graphForcevsZSingle?.domain.xMax ?? -Infinity
             ),
             yMin: Math.min(
               prev.yMin,
-              graphForceIndentation?.domain.yMin ?? Infinity
+              graphForcevsZSingle?.domain.yMin ?? Infinity
             ),
             yMax: Math.max(
               prev.yMax,
-              graphForceIndentation?.domain.yMax ?? -Infinity
+              graphForcevsZSingle?.domain.yMax ?? -Infinity
             ),
           }));
-          setElspectraDomain((prev) => ({
-            xMin: Math.min(prev.xMin, graphElspectra?.domain.xMin ?? Infinity),
-            xMax: Math.max(prev.xMax, graphElspectra?.domain.xMax ?? -Infinity),
-            yMin: Math.min(prev.yMin, graphElspectra?.domain.yMin ?? Infinity),
-            yMax: Math.max(prev.yMax, graphElspectra?.domain.yMax ?? -Infinity),
+          setIndentationDomainSingle((prev) => ({
+            xMin: Math.min(
+              prev.xMin,
+              graphForceIndentationSingle?.domain.xMin ?? Infinity
+            ),
+            xMax: Math.max(
+              prev.xMax,
+              graphForceIndentationSingle?.domain.xMax ?? -Infinity
+            ),
+            yMin: Math.min(
+              prev.yMin,
+              graphForceIndentationSingle?.domain.yMin ?? Infinity
+            ),
+            yMax: Math.max(
+              prev.yMax,
+              graphForceIndentationSingle?.domain.yMax ?? -Infinity
+            ),
           }));
-
-          if (curveId) {
-            setDomainRangeSingle((prev) => ({
-              xMin: Math.min(
-                prev.xMin,
-                graphForcevsZSingle?.domain.xMin ?? Infinity
-              ),
-              xMax: Math.max(
-                prev.xMax,
-                graphForcevsZSingle?.domain.xMax ?? -Infinity
-              ),
-              yMin: Math.min(
-                prev.yMin,
-                graphForcevsZSingle?.domain.yMin ?? Infinity
-              ),
-              yMax: Math.max(
-                prev.yMax,
-                graphForcevsZSingle?.domain.yMax ?? -Infinity
-              ),
-            }));
-            setIndentationDomainSingle((prev) => ({
-              xMin: Math.min(
-                prev.xMin,
-                graphForceIndentationSingle?.domain.xMin ?? Infinity
-              ),
-              xMax: Math.max(
-                prev.xMax,
-                graphForceIndentationSingle?.domain.xMax ?? -Infinity
-              ),
-              yMin: Math.min(
-                prev.yMin,
-                graphForceIndentationSingle?.domain.yMin ?? Infinity
-              ),
-              yMax: Math.max(
-                prev.yMax,
-                graphForceIndentationSingle?.domain.yMax ?? -Infinity
-              ),
-            }));
-            setElspectraDomainSingle((prev) => ({
-              xMin: Math.min(
-                prev.xMin,
-                graphElspectraSingle?.domain.xMin ?? Infinity
-              ),
-              xMax: Math.max(
-                prev.xMax,
-                graphElspectraSingle?.domain.xMax ?? -Infinity
-              ),
-              yMin: Math.min(
-                prev.yMin,
-                graphElspectraSingle?.domain.yMin ?? Infinity
-              ),
-              yMax: Math.max(
-                prev.yMin,
-                graphElspectraSingle?.domain.yMax ?? -Infinity
-              ),
-            }));
-          }
-        }
-      };
-
-      socketRef.current.onclose = () => {
-        console.log("WebSocket disconnected.");
-      };
-
-      return () => {
-        socketRef.current.close();
-      };
-    }, [curveId]); // Added sendCurveRequest as dependency since it’s used in onopen
-
-    const handleAddFilter = (filterName, isCpFilter = false, isFModel = false, isEModel = false) => {
-      let targetFilters;
-      let setTargetFilters;
-    
-      if (isEModel) {
-        targetFilters = eModels;
-        setTargetFilters = seteModels;
-      } else if (isFModel) {
-        targetFilters = fModels;
-        setTargetFilters = setfModels;
-      } else if (isCpFilter) {
-        targetFilters = cpFilters;
-        setTargetFilters = setCpFilters;
-      } else {
-        targetFilters = regularFilters;
-        setTargetFilters = setRegularFilters;
-      }
-    
-      if (filterName && !targetFilters[filterName]) {
-        if (isCpFilter || isFModel || isEModel) {
-          setTargetFilters(() => ({
-            [filterName]: filterDefaults[filterName],
-          }));
-        } else {
-          setTargetFilters((prev) => ({
-            ...prev,
-            [filterName]: filterDefaults[filterName],
+          setElspectraDomainSingle((prev) => ({
+            xMin: Math.min(
+              prev.xMin,
+              graphElspectraSingle?.domain.xMin ?? Infinity
+            ),
+            xMax: Math.max(
+              prev.xMax,
+              graphElspectraSingle?.domain.xMax ?? -Infinity
+            ),
+            yMin: Math.min(
+              prev.yMin,
+              graphElspectraSingle?.domain.yMin ?? Infinity
+            ),
+            yMax: Math.max(
+              prev.yMin,
+              graphElspectraSingle?.domain.yMax ?? -Infinity
+            ),
           }));
         }
-      }
-    };
-    
-    
+      } else if (response.status === "filter_defaults") {
+        const { regular_filters, cp_filters, fmodels, emodels } = response.data;
+        // Remove "_filter_array" suffix from keys and set state
+        const cleanedRegularFilters = Object.fromEntries(
+          Object.entries(regular_filters).map(([key, value]) => [
+            key.replace("_filter_array", ""),
+            value,
+          ])
+        );
+        const cleanedCpFilters = Object.fromEntries(
+          Object.entries(cp_filters).map(([key, value]) => [
+            key.replace("_filter_array", ""),
+            value,
+          ])
+        );
+        const cleanedFmodels = Object.fromEntries(
+          Object.entries(fmodels).map(([key, value]) => [
+            key.replace("_filter_array", ""),
+            value,
+          ])
+        );
+        const cleanedEmodels = Object.fromEntries(
+          Object.entries(emodels).map(([key, value]) => [
+            key.replace("_filter_array", ""),
+            value,
+          ])
+        );
+        setFilterDefaults(cleanedRegularFilters);
+        setCpDefaults(cleanedCpFilters);
+        setFmodelDefaults(cleanedFmodels); // Assuming you have a state setter for fmodels
+        setEmodelDefaults(cleanedEmodels); // Assuming you have a state setter for emodels
 
-    const handleRemoveFilter = (filterName, isCpFilter = false, isFModel = false, isEModel = false) => {
-      let setTargetFilters;
-    
-      if (isEModel) {
-        setTargetFilters = seteModels;
-      } else if (isFModel) {
-        setTargetFilters = setfModels;
-      } else if (isCpFilter) {
-        setTargetFilters = setCpFilters;
-      } else {
-        setTargetFilters = setRegularFilters;
+        console.log("Received filter defaults:", cleanedRegularFilters);
+        console.log("Received CP filter defaults:", cleanedCpFilters);
       }
-    
-      setTargetFilters((prev) => {
-        const newFilters = { ...prev };
-        delete newFilters[filterName];
-        return newFilters;
-      });
     };
-    
-    
 
-    const handleFilterChange = (filterName, param, value, isCpFilter = false, isFModel = false, isEModel = false) => {
-      let setTargetFilters;
-    
-      if (isEModel) {
-        setTargetFilters = seteModels;
-      } else if (isFModel) {
-        setTargetFilters = setfModels;
-      } else if (isCpFilter) {
-        setTargetFilters = setCpFilters;
-      } else {
-        setTargetFilters = setRegularFilters;
-      }
-    
-      setTargetFilters((prev) => {
-        if (prev[filterName]?.[param] === value) return prev;
-        return {
-          ...prev,
-          [filterName]: {
-            ...prev[filterName],
-            [param]: value,
-          },
-        };
-      });
+    socketRef.current.onclose = () => {
+      console.log("WebSocket disconnected.");
     };
-    
-    
+
+    return () => {
+      socketRef.current.close();
+    };
+  }, [curveId]); // Added sendCurveRequest as dependency since it’s used in onopen
+
+  const handleAddFilter = (
+    filterName,
+    isCpFilter = false,
+    isFModel = false,
+    isEModel = false
+  ) => {
+    let currentFilters; // Renamed from targetFilters
+    let setFilters; // Renamed from setTargetFilters
+    let filterDefaultsSource; // Renamed from defaultsSource
+
+    if (isEModel) {
+      currentFilters = eModels;
+      setFilters = seteModels;
+      filterDefaultsSource = eModelDefaults; // Assuming this exists
+    } else if (isFModel) {
+      currentFilters = fModels;
+      setFilters = setfModels;
+      filterDefaultsSource = fModelDefaults;
+    } else if (isCpFilter) {
+      currentFilters = cpFilters;
+      setFilters = setCpFilters;
+      filterDefaultsSource = cpDefaults;
+    } else {
+      currentFilters = regularFilters;
+      setFilters = setRegularFilters;
+      filterDefaultsSource = filterDefaults;
+    }
+
+    if (filterName && !currentFilters[filterName]) {
+      const defaultParams = filterDefaultsSource[filterName] || {}; // Fallback to empty object
+      setFilters((prev) => ({
+        ...prev, // Merge with existing filters
+        [filterName]: defaultParams,
+      }));
+    }
+  };
+
+  const handleRemoveFilter = (
+    filterName,
+    isCpFilter = false,
+    isFModel = false,
+    isEModel = false
+  ) => {
+    let setTargetFilters;
+
+    if (isEModel) {
+      setTargetFilters = seteModels;
+    } else if (isFModel) {
+      setTargetFilters = setfModels;
+    } else if (isCpFilter) {
+      setTargetFilters = setCpFilters;
+    } else {
+      setTargetFilters = setRegularFilters;
+    }
+
+    setTargetFilters((prev) => {
+      const newFilters = { ...prev };
+      delete newFilters[filterName];
+      return newFilters;
+    });
+  };
+
+  const handleFilterChange = (
+    filterName,
+    param,
+    value,
+    isCpFilter = false,
+    isFModel = false,
+    isEModel = false
+  ) => {
+    let setTargetFilters;
+
+    if (isEModel) {
+      setTargetFilters = seteModels;
+    } else if (isFModel) {
+      setTargetFilters = setfModels;
+    } else if (isCpFilter) {
+      setTargetFilters = setCpFilters;
+    } else {
+      setTargetFilters = setRegularFilters;
+    }
+
+    setTargetFilters((prev) => {
+      if (prev[filterName]?.[param] === value) return prev;
+      return {
+        ...prev,
+        [filterName]: {
+          ...prev[filterName],
+          [param]: value,
+        },
+      };
+    });
+  };
 
   const handleNumCurvesChange = (value) => {
-    console.log("new")
+    console.log("new");
     const newValue = Math.max(1, Math.min(100, parseInt(value, 10)));
     setNumCurves(newValue);
   };
@@ -452,7 +467,14 @@ const Dashboard = () => {
         fontFamily: "'Roboto', sans-serif",
       }}
     >
-      <div style={{ flex: 1, padding: "10px" }}>
+      <div
+        style={{
+          flex: 1,
+          padding: "10px",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
         {/* Tab Navigation */}
         <div style={{ marginBottom: "10px" }}>
           <button
@@ -501,12 +523,47 @@ const Dashboard = () => {
           </button>
         </div>
 
+        {/* Filters Component */}
+        <div
+        >
+          <FiltersComponent
+            filterDefaults={filterDefaults}
+            capitalizeFilterName={capitalizeFilterName}
+            cpDefaults={cpDefaults}
+            fModelDefaults={fModelDefaults}
+            numCurves={numCurves}
+            regularFilters={regularFilters}
+            cpFilters={cpFilters}
+            fModels={fModels}
+            eModels={eModels}
+            eModelDefaults={eModelDefaults}
+            selectedEmodel={selectedEmodel}
+            setSelectedEmodel={setSelectedEmodel}
+            selectedRegularFilter={selectedRegularFilter}
+            selectedCpFilter={selectedCpFilter}
+            selectedFmodel={selectedFmodel}
+            setSelectedFmodel={setSelectedFmodel}
+            handleNumCurvesChange={handleNumCurvesChange}
+            setSelectedRegularFilter={setSelectedRegularFilter}
+            setSelectedCpFilter={setSelectedCpFilter}
+            handleAddFilter={handleAddFilter}
+            handleRemoveFilter={handleRemoveFilter}
+            handleFilterChange={handleFilterChange}
+            sendCurveRequest={sendCurveRequest}
+            curveId={curveId}
+            setCurveId={setCurveId}
+            activeTab={activeTab}
+          />
+        </div>
+
         {/* Tab Content */}
         <div
           style={{
+            flex: 1,
             display: "grid",
             gridTemplateColumns: "1fr 1fr",
             gap: "10px",
+            overflowY: "auto",
           }}
         >
           {activeTab === "forceDisplacement" && (
@@ -551,7 +608,7 @@ const Dashboard = () => {
                   Force vs Displacement (Single)
                 </h2>
                 <ForceDisplacementSingle
-                  forceData={forceDataSingle} // Use separate data for Single graph
+                  forceData={forceDataSingle}
                   domainRange={domainRangeSingle}
                 />
               </div>
@@ -657,26 +714,9 @@ const Dashboard = () => {
           )}
         </div>
       </div>
-
-      <FiltersComponent
+      <CurveControlsComponent
         numCurves={numCurves}
-        regularFilters={regularFilters}
-        cpFilters={cpFilters}
-        fModels={fModels}
-        eModels={eModels}
-        selectedEmodel={selectedEmodel}
-        setSelectedEmodel={setSelectedEmodel}
-        selectedRegularFilter={selectedRegularFilter}
-        selectedCpFilter={selectedCpFilter}
-        selectedFmodel={selectedFmodel}
-        setSelectedFmodel={setSelectedFmodel}
         handleNumCurvesChange={handleNumCurvesChange}
-        setSelectedRegularFilter={setSelectedRegularFilter}
-        setSelectedCpFilter={setSelectedCpFilter}
-        handleAddFilter={handleAddFilter}
-        handleRemoveFilter={handleRemoveFilter}
-        handleFilterChange={handleFilterChange}
-        sendCurveRequest={sendCurveRequest}
         curveId={curveId}
         setCurveId={setCurveId}
       />
