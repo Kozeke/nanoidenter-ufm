@@ -1,4 +1,17 @@
 import React from "react";
+import {
+  Drawer,
+  Typography,
+  Card,
+  CardContent,
+  IconButton,
+  Stack,
+  Tooltip,
+  TextField,
+  Fade,
+  Box
+} from "@mui/material";
+import { Delete } from "@mui/icons-material";
 
 const FilterStatusSidebar = ({
   regularFilters,
@@ -12,304 +25,271 @@ const FilterStatusSidebar = ({
 }) => {
   // Check if any filters are applied
   const hasFilters =
-    Object.keys(regularFilters).length > 0 ||
-    Object.keys(cpFilters).length > 0 ||
-    Object.keys(fModels).length > 0 ||
-    Object.keys(eModels).length > 0;
-
-  if (!hasFilters) return null; // Hide sidebar if no filters are applied
+    Object.keys(regularFilters || {}).length > 0 ||
+    Object.keys(cpFilters || {}).length > 0 ||
+    Object.keys(fModels || {}).length > 0 ||
+    Object.keys(eModels || {}).length > 0;
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        right: 0,
-        top: 0,
-        width: "200px", // Fixed width for sidebar
-        height: "100vh", // Full viewport height
-        backgroundColor: "#f9f9f9",
-        borderLeft: "1px solid #ddd",
-        padding: "10px",
-        overflowY: "auto", // Scroll if content exceeds height
-        boxSizing: "border-box",
-        zIndex:10000
-      }}
-    >
-      <h3 style={{ margin: "0 0 10px 0", fontSize: "16px" }}>Applied Filters</h3>
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column", // Stack vertically in sidebar
-          gap: "10px", // Space between filter blocks
+    <Fade in={hasFilters}>
+      <Drawer
+        anchor="right"
+        variant="persistent"
+        open={hasFilters}
+        sx={{
+          width: 200,
+          flexShrink: 0,
+          "& .MuiDrawer-paper": {
+            width: 200,
+            height: "100vh",
+            bgcolor: "background.paper",
+            borderLeft: 1,
+            borderColor: "divider",
+            p: 1,
+            boxSizing: "border-box",
+            zIndex: 1002, // Above FiltersComponent
+            overflowY: "auto",
+          },
         }}
       >
-        {/* Regular Filters */}
-        {Object.keys(regularFilters).map((filterName) => (
-          <div
-            key={filterName}
-            style={{
-              width: "100%", // Full width within sidebar
-              padding: "5px",
-              border: "1px solid #ddd",
-              borderRadius: "3px",
-              backgroundColor: "#fff",
-            }}
-          >
-            <h4
-              style={{
-                margin: "0",
-                fontSize: "14px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
+        <Typography
+          variant="h6"
+          sx={{ fontSize: 16, fontWeight: "medium", mb: 1 }}
+        >
+          Applied Filters
+        </Typography>
+        <Stack direction="column" spacing={1}>
+          {/* Regular Filters */}
+          {Object.keys(regularFilters || {}).map((filterName) => (
+            <Card
+              key={filterName}
+              sx={{
+                bgcolor: "background.default",
+                boxShadow: 2,
+                transition: "transform 0.2s, box-shadow 0.2s",
+                "&:hover": {
+                  transform: "scale(1.02)",
+                  boxShadow: 4,
+                },
               }}
             >
-              {capitalizeFilterName(filterName)}
-              <button
-                onClick={() => handleRemoveFilter(filterName, false)}
-                style={{
-                  color: "red",
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
-                  fontSize: "14px",
-                  padding: "0",
-                }}
-              >
-                ❌
-              </button>
-            </h4>
-            {Object.keys(regularFilters[filterName]).map((param) => (
-              <div
-                key={param}
-                style={{
-                  marginTop: "2px",
-                  fontSize: "13px",
-                }}
-              >
-                <label style={{ display: "block" }}>
-                  {param.replace("_", " ")}:
-                </label>
-                <input
-                  type="number"
-                  value={regularFilters[filterName][param]}
-                  onChange={(e) =>
-                    handleFilterChange(
-                      filterName,
-                      param,
-                      parseFloat(e.target.value),
-                      false
-                    )
-                  }
-                  style={{ width: "100%", padding: "2px", fontSize: "13px" }}
-                />
-              </div>
-            ))}
-          </div>
-        ))}
+              <CardContent sx={{ p: 1 }}>
+                <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+                  <Typography variant="subtitle2" sx={{ fontSize: 14 }}>
+                    {capitalizeFilterName(filterName)}
+                  </Typography>
+                  <Tooltip title="Remove Filter">
+                    <IconButton
+                      size="small"
+                      color="error"
+                      onClick={() => handleRemoveFilter(filterName, false)}
+                      aria-label={`Remove ${capitalizeFilterName(filterName)} filter`}
+                    >
+                      <Delete fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+                {Object.keys(regularFilters[filterName] || {}).map((param) => (
+                  <Box key={param} sx={{ mt: 0.5 }}>
+                    <Typography variant="caption" sx={{ display: "block", fontSize: 12 }}>
+                      {param.replace("_", " ")}
+                    </Typography>
+                    <TextField
+                      type="number"
+                      size="small"
+                      value={regularFilters[filterName][param] ?? ""}
+                      onChange={(e) =>
+                        handleFilterChange(
+                          filterName,
+                          param,
+                          parseFloat(e.target.value),
+                          false
+                        )
+                      }
+                      fullWidth
+                      sx={{ "& .MuiInputBase-input": { fontSize: 13, p: 0.5 } }}
+                    />
+                  </Box>
+                ))}
+              </CardContent>
+            </Card>
+          ))}
 
-        {/* CP Filters */}
-        {Object.keys(cpFilters).map((filterName) => (
-          <div
-            key={filterName}
-            style={{
-              width: "100%",
-              padding: "5px",
-              border: "1px solid #ddd",
-              borderRadius: "3px",
-              backgroundColor: "#fff",
-            }}
-          >
-            <h4
-              style={{
-                margin: "0",
-                fontSize: "14px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
+          {/* CP Filters */}
+          {Object.keys(cpFilters || {}).map((filterName) => (
+            <Card
+              key={filterName}
+              sx={{
+                bgcolor: "background.default",
+                boxShadow: 2,
+                transition: "transform 0.2s, box-shadow 0.2s",
+                "&:hover": {
+                  transform: "scale(1.02)",
+                  boxShadow: 4,
+                },
               }}
             >
-              {filterName}
-              <button
-                onClick={() => handleRemoveFilter(filterName, true)}
-                style={{
-                  color: "red",
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
-                  fontSize: "14px",
-                  padding: "0",
-                }}
-              >
-                ❌
-              </button>
-            </h4>
-            {Object.keys(cpFilters[filterName]).map((param) => (
-              <div
-                key={param}
-                style={{
-                  marginTop: "2px",
-                  fontSize: "13px",
-                }}
-              >
-                <label style={{ display: "block" }}>
-                  {param.replace("_", " ")}:
-                </label>
-                <input
-                  type="number"
-                  value={cpFilters[filterName][param]}
-                  onChange={(e) =>
-                    handleFilterChange(
-                      filterName,
-                      param,
-                      parseFloat(e.target.value),
-                      true
-                    )
-                  }
-                  style={{ width: "100%", padding: "2px", fontSize: "13px" }}
-                />
-              </div>
-            ))}
-          </div>
-        ))}
+              <CardContent sx={{ p: 1 }}>
+                <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+                  <Typography variant="subtitle2" sx={{ fontSize: 14 }}>
+                    {capitalizeFilterName(filterName)}
+                  </Typography>
+                  <Tooltip title="Remove Filter">
+                    <IconButton
+                      size="small"
+                      color="error"
+                      onClick={() => handleRemoveFilter(filterName, true)}
+                      aria-label={`Remove ${capitalizeFilterName(filterName)} CP filter`}
+                    >
+                      <Delete fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+                {Object.keys(cpFilters[filterName] || {}).map((param) => (
+                  <Box key={param} sx={{ mt: 0.5 }}>
+                    <Typography variant="caption" sx={{ display: "block", fontSize: 12 }}>
+                      {param.replace("_", " ")}
+                    </Typography>
+                    <TextField
+                      type="number"
+                      size="small"
+                      value={cpFilters[filterName][param] ?? ""}
+                      onChange={(e) =>
+                        handleFilterChange(
+                          filterName,
+                          param,
+                          parseFloat(e.target.value),
+                          true
+                        )
+                      }
+                      fullWidth
+                      sx={{ "& .MuiInputBase-input": { fontSize: 13, p: 0.5 } }}
+                    />
+                  </Box>
+                ))}
+              </CardContent>
+            </Card>
+          ))}
 
-        {/* Force Models */}
-        {Object.keys(fModels).map((fmodelName) => (
-          <div
-            key={fmodelName}
-            style={{
-              width: "100%",
-              padding: "5px",
-              border: "1px solid #ddd",
-              borderRadius: "3px",
-              backgroundColor: "#fff",
-            }}
-          >
-            <h4
-              style={{
-                margin: "0",
-                fontSize: "14px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
+          {/* Force Models */}
+          {Object.keys(fModels || {}).map((fmodelName) => (
+            <Card
+              key={fmodelName}
+              sx={{
+                bgcolor: "background.default",
+                boxShadow: 2,
+                transition: "transform 0.2s, box-shadow 0.2s",
+                "&:hover": {
+                  transform: "scale(1.02)",
+                  boxShadow: 4,
+                },
               }}
             >
-              {capitalizeFilterName(fmodelName)}
-              <button
-                onClick={() => handleRemoveFilter(fmodelName, false, true)}
-                style={{
-                  color: "red",
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
-                  fontSize: "14px",
-                  padding: "0",
-                }}
-              >
-                ❌
-              </button>
-            </h4>
-            {Object.keys(fModels[fmodelName]).map((param) => (
-              <div
-                key={param}
-                style={{
-                  marginTop: "2px",
-                  fontSize: "13px",
-                }}
-              >
-                <label style={{ display: "block" }}>
-                  {param.replace("_", " ")}:
-                </label>
-                <input
-                  type="number"
-                  value={
-                    fModels[fmodelName]?.[param] ||
-                    fModelDefaults[fmodelName][param]
-                  }
-                  onChange={(e) =>
-                    handleFilterChange(
-                      fmodelName,
-                      param,
-                      parseFloat(e.target.value),
-                      false,
-                      true
-                    )
-                  }
-                  style={{ width: "100%", padding: "2px", fontSize: "13px" }}
-                />
-              </div>
-            ))}
-          </div>
-        ))}
+              <CardContent sx={{ p: 1 }}>
+                <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+                  <Typography variant="subtitle2" sx={{ fontSize: 14 }}>
+                    {capitalizeFilterName(fmodelName)}
+                  </Typography>
+                  <Tooltip title="Remove Model">
+                    <IconButton
+                      size="small"
+                      color="error"
+                      onClick={() => handleRemoveFilter(fmodelName, false, true)}
+                      aria-label={`Remove ${capitalizeFilterName(fmodelName)} force model`}
+                    >
+                      <Delete fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+                {Object.keys(fModels[fmodelName] || fModelDefaults[fmodelName] || {}).map((param) => (
+                  <Box key={param} sx={{ mt: 0.5 }}>
+                    <Typography variant="caption" sx={{ display: "block", fontSize: 12 }}>
+                      {param.replace("_", " ")}
+                    </Typography>
+                    <TextField
+                      type="number"
+                      size="small"
+                      value={
+                        fModels[fmodelName]?.[param] ?? fModelDefaults[fmodelName]?.[param] ?? ""
+                      }
+                      onChange={(e) =>
+                        handleFilterChange(
+                          fmodelName,
+                          param,
+                          parseFloat(e.target.value),
+                          false,
+                          true
+                        )
+                      }
+                      fullWidth
+                      sx={{ "& .MuiInputBase-input": { fontSize: 13, p: 0.5 } }}
+                    />
+                  </Box>
+                ))}
+              </CardContent>
+            </Card>
+          ))}
 
-        {/* Elasticity Models */}
-        {Object.keys(eModels).map((filterName) => (
-          <div
-            key={filterName}
-            style={{
-              width: "100%",
-              padding: "5px",
-              border: "1px solid #ddd",
-              borderRadius: "3px",
-              backgroundColor: "#fff",
-            }}
-          >
-            <h4
-              style={{
-                margin: "0",
-                fontSize: "14px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
+          {/* Elasticity Models */}
+          {Object.keys(eModels || {}).map((filterName) => (
+            <Card
+              key={filterName}
+              sx={{
+                bgcolor: "background.default",
+                boxShadow: 2,
+                transition: "transform 0.2s, box-shadow 0.2s",
+                "&:hover": {
+                  transform: "scale(1.02)",
+                  boxShadow: 4,
+                },
               }}
             >
-              {filterName}
-              <button
-                onClick={() => handleRemoveFilter(filterName, false, false, true)}
-                style={{
-                  color: "red",
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
-                  fontSize: "14px",
-                  padding: "0",
-                }}
-              >
-                ❌
-              </button>
-            </h4>
-            {Object.keys(eModels[filterName]).map((param) => (
-              <div
-                key={param}
-                style={{
-                  marginTop: "2px",
-                  fontSize: "13px",
-                }}
-              >
-                <label style={{ display: "block" }}>
-                  {param.replace("_", " ")}:
-                </label>
-                <input
-                  type="number"
-                  value={eModels[filterName][param]}
-                  onChange={(e) =>
-                    handleFilterChange(
-                      filterName,
-                      param,
-                      parseFloat(e.target.value),
-                      false,
-                      false,
-                      true
-                    )
-                  }
-                  style={{ width: "100%", padding: "2px", fontSize: "13px" }}
-                />
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
-    </div>
+              <CardContent sx={{ p: 1 }}>
+                <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+                  <Typography variant="subtitle2" sx={{ fontSize: 14 }}>
+                    {capitalizeFilterName(filterName)}
+                  </Typography>
+                  <Tooltip title="Remove Model">
+                    <IconButton
+                      size="small"
+                      color="error"
+                      onClick={() => handleRemoveFilter(filterName, false, false, true)}
+                      aria-label={`Remove ${capitalizeFilterName(filterName)} elasticity model`}
+                    >
+                      <Delete fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
+                {Object.keys(eModels[filterName] || {}).map((param) => (
+                  <Box key={param} sx={{ mt: 0.5 }}>
+                    <Typography variant="caption" sx={{ display: "block", fontSize: 12 }}>
+                      {param.replace("_", " ")}
+                    </Typography>
+                    <TextField
+                      type="number"
+                      size="small"
+                      value={eModels[filterName][param] ?? ""}
+                      onChange={(e) =>
+                        handleFilterChange(
+                          filterName,
+                          param,
+                          parseFloat(e.target.value),
+                          false,
+                          false,
+                          true
+                        )
+                      }
+                      fullWidth
+                      sx={{ "& .MuiInputBase-input": { fontSize: 13, p: 0.5 } }}
+                    />
+                  </Box>
+                ))}
+              </CardContent>
+            </Card>
+          ))}
+        </Stack>
+      </Drawer>
+    </Fade>
   );
 };
 

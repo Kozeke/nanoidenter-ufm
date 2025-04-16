@@ -1,5 +1,19 @@
 import React from "react";
-
+import {
+  Box,
+  Button,
+  Collapse,
+  FormControl,
+  Grid,
+  IconButton,
+  InputLabel,
+  MenuItem,
+  Select,
+  Checkbox,
+  ListItemText,
+  Typography,
+} from "@mui/material";
+import { Close } from "@mui/icons-material";
 import FilterStatusSidebar from "./FilterStatusSidebar";
 
 const FiltersComponent = ({
@@ -9,20 +23,20 @@ const FiltersComponent = ({
   fModelDefaults,
   regularFilters,
   cpFilters,
-  selectedRegularFilter,
-  selectedCpFilter,
+  selectedRegularFilters, // Changed from selectedRegularFilter
+  selectedCpFilters, // Changed from selectedCpFilter
   fModels,
-  selectedFModel,
-  setSelectedFmodel,
+  selectedFModels, // Changed from selectedFModel
+  setSelectedFModels, // Changed from setSelectedFmodel
   eModels,
   selectedEModels,
   eModelDefaults,
-  setSelectedEmodel,
-  setSelectedRegularFilter,
-  setSelectedCpFilter,
+  setSelectedEModels, // Changed from setSelectedEmodel
+  setSelectedRegularFilters, // Changed from setSelectedRegularFilter
+  setSelectedCpFilters, // Changed from setSelectedCpFilter
   handleAddFilter,
   handleRemoveFilter,
-  handleFilterChange,
+  handleFilterChange, // Kept for sidebar compatibility
   sendCurveRequest,
   activeTab,
 }) => {
@@ -32,452 +46,240 @@ const FiltersComponent = ({
     setIsOpen((prev) => !prev);
   };
 
-  if (!isOpen) {
-    return (
-      <div style={{ position: "fixed", right: "10px", top: "10px" }}>
-        <button
-          onClick={toggleFilters}
-          style={{
-            padding: "8px 12px",
-            backgroundColor: "#007bff",
-            color: "white",
-            border: "none",
-            borderRadius: "5px",
-            cursor: "pointer",
-            fontSize: "14px",
-          }}
-        >
-          {/* Filters */}
-        </button>
-      </div>
-    );
-  }
+  // Ensure array values with fallback
+  const safeRegularFilters = Array.isArray(selectedRegularFilters) ? selectedRegularFilters : [];
+  const safeCpFilters = Array.isArray(selectedCpFilters) ? selectedCpFilters : [];
+  const safeFModels = Array.isArray(selectedFModels) ? selectedFModels : [];
+  const safeEModels = Array.isArray(selectedEModels) ? selectedEModels : [];
+
+  // Handle multi-select changes
+  const handleRegularChange = (event) => {
+    const value = event.target.value;
+    const prev = safeRegularFilters;
+    setSelectedRegularFilters(value);
+    value.filter((name) => !prev.includes(name)).forEach((name) => handleAddFilter(name, false));
+    prev.filter((name) => !value.includes(name)).forEach((name) => handleRemoveFilter(name, false));
+  };
+
+  const handleCpChange = (event) => {
+    const value = event.target.value;
+    const prev = safeCpFilters;
+    setSelectedCpFilters(value);
+    value.filter((name) => !prev.includes(name)).forEach((name) => handleAddFilter(name, true));
+    prev.filter((name) => !value.includes(name)).forEach((name) => handleRemoveFilter(name, true));
+  };
+
+  const handleForceChange = (event) => {
+    const value = event.target.value;
+    const prev = safeFModels;
+    setSelectedFModels(value);
+    value.filter((name) => !prev.includes(name)).forEach((name) => handleAddFilter(name, false, true));
+    prev.filter((name) => !value.includes(name)).forEach((name) => handleRemoveFilter(name, false, true));
+  };
+
+  const handleElasticityChange = (event) => {
+    const value = event.target.value;
+    const prev = safeEModels;
+    setSelectedEModels(value);
+    value.filter((name) => !prev.includes(name)).forEach((name) => handleAddFilter(name, false, false, true));
+    prev.filter((name) => !value.includes(name)).forEach((name) => handleRemoveFilter(name, false, false, true));
+  };
 
   return (
-    <div
-      style={{
-        width: "100%", // Full width of parent container
-        padding: "5px", // Reduced padding
-        borderTop: "1px solid #ddd",
-        backgroundColor: "#f9f9f9",
-        height: "100%", // Take up full 15vh from parent
-        display: "flex",
-        flexDirection: "column", // Stack children vertically
-        justifyContent: "flex-start", // Align content from top
-        gap: "5px", // Reduced gap between elements
+    <Box
+      sx={{
+        position: "relative",
+        width: "100%",
+        height: "15vh",
+        bgcolor: "background.paper",
+        borderTop: 1,
+        borderColor: "divider",
+        zIndex: 1000,
       }}
     >
-      {/* Header */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <h3 style={{ margin: "0", fontSize: "14px" }}>Filters</h3>
-        <button
-          onClick={toggleFilters}
-          style={{
-            background: "none",
-            border: "none",
-            color: "#ff4d4d",
-            fontSize: "14px",
-            cursor: "pointer",
-            padding: "0",
+      {/* Toggle Button (Closed State) */}
+      <Collapse in={!isOpen}>
+        <Box sx={{ position: "fixed", right: 10, top: 10, zIndex: 1001 }}>
+          <Button
+            variant="contained"
+            onClick={toggleFilters}
+            size="small"
+            sx={{ fontSize: 14 }}
+          >
+            Show Filters
+          </Button>
+        </Box>
+      </Collapse>
+
+      {/* Main Filters Panel */}
+      <Collapse in={isOpen}>
+        <Box
+          sx={{
+            p: 1,
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+            gap: 1,
+            overflow: "hidden",
+            zIndex: 1000,
           }}
         >
-          ✕
-        </button>
-      </div>
+          {/* Header */}
+          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <Typography variant="h6" sx={{ fontSize: 14, fontWeight: "medium" }}>
+              Filters
+            </Typography>
+            <IconButton onClick={toggleFilters} size="small" color="error">
+              <Close fontSize="small" />
+            </IconButton>
+          </Box>
 
-      {/* Four-Column Select Row */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr 1fr", // Four equal columns
-          gap: "5px", // Space between columns
-        }}
-      >
-        {/* Regular Filter */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-          <label style={{ fontSize: "14px" }}>Regular:</label>
-          <select
-            value={selectedRegularFilter}
-            onChange={(e) => {
-              setSelectedRegularFilter(e.target.value);
-              handleAddFilter(e.target.value, false);
-            }}
-            style={{ width: "100%", padding: "2px", fontSize: "14px" }} // Smaller size
-          >
-            <option value="">None</option>
-            {Object.keys(filterDefaults).map((filterName) => (
-              <option key={filterName} value={filterName}>
-                {capitalizeFilterName(filterName)}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* CP Filter */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-          <label style={{ fontSize: "14px" }}>CP:</label>
-          <select
-            value={selectedCpFilter}
-            onChange={(e) => {
-              setSelectedCpFilter(e.target.value);
-              handleAddFilter(e.target.value, true);
-            }}
-            style={{ width: "100%", padding: "2px", fontSize: "14px" }}
-          >
-            <option value="">None</option>
-            {Object.keys(cpDefaults).map((filterName) => (
-              <option key={filterName} value={filterName}>
-                {capitalizeFilterName(filterName)}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Force Model */}
-        {activeTab === "forceIndentation" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-            <label style={{ fontSize: "14px" }}>Force:</label>
-            <select
-              value={selectedFModel}
-              onChange={(e) => {
-                setSelectedFmodel(e.target.value);
-                handleAddFilter(e.target.value, false, true);
-              }}
-              style={{ width: "100%", padding: "2px", fontSize: "14px" }}
-            >
-              <option value="">None</option>
-              {Object.keys(fModelDefaults).map((fmodelName) => (
-                <option key={fmodelName} value={fmodelName}>
-                  {capitalizeFilterName(fmodelName)}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* Elasticity Model */}
-        {activeTab === "elasticitySpectra" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-            <label style={{ fontSize: "14px" }}>Elasticity:</label>
-            <select
-              value={selectedEModels}
-              onChange={(e) => {
-                setSelectedEmodel(e.target.value);
-                handleAddFilter(e.target.value, false, false, true);
-              }}
-              style={{ width: "100%", padding: "2px", fontSize: "14px" }}
-            >
-              <option value="">None</option>
-              {Object.keys(eModelDefaults).map((emodelName) => (
-                <option key={emodelName} value={emodelName}>
-                  {capitalizeFilterName(emodelName)}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-      </div>
-
-      {/* Filter Status Indicators */}
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap", // Allow wrapping to next line if needed
-          gap: "5px", // Space between filter blocks
-        }}
-      >
-        {Object.keys(regularFilters).map((filterName) => (
-          <div
-            key={filterName}
-            style={{
-              width: "150px", // Fixed width
-              padding: "5px", // Reduced padding
-              border: "1px solid #ddd",
-              borderRadius: "3px", // Smaller radius
-              backgroundColor: "#fff",
-            }}
-          >
-            <h4
-              style={{
-                margin: "0",
-                fontSize: "14px", // Reduced font size
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              {capitalizeFilterName(filterName)}
-              <button
-                onClick={() => handleRemoveFilter(filterName, false)}
-                style={{
-                  color: "red",
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
-                  fontSize: "14px", // Reduced size
-                  padding: "0",
-                }}
-              >
-                ❌
-              </button>
-            </h4>
-            {Object.keys(regularFilters[filterName]).map((param) => (
-              <div
-                key={param}
-                style={{
-                  marginTop: "2px", // Reduced margin
-                  fontSize: "13px", // Smaller font
-                }}
-              >
-                <label style={{ display: "block" }}>
-                  {param.replace("_", " ")}:
-                </label>
-                <input
-                  type="number"
-                  value={regularFilters[filterName][param]}
-                  onChange={(e) =>
-                    handleFilterChange(
-                      filterName,
-                      param,
-                      parseFloat(e.target.value),
-                      false
-                    )
-                  }
-                  style={{ width: "100%", padding: "2px", fontSize: "13px" }} // Compact input
-                />
-              </div>
-            ))}
-          </div>
-        ))}
-
-        {Object.keys(cpFilters).map((filterName) => (
-          <div
-            key={filterName}
-            style={{
-              width: "150px",
-              padding: "5px",
-              border: "1px solid #ddd",
-              borderRadius: "3px",
-              backgroundColor: "#fff",
-            }}
-          >
-            <h4
-              style={{
-                margin: "0",
-                fontSize: "14px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              {filterName}
-              <button
-                onClick={() => handleRemoveFilter(filterName, true)}
-                style={{
-                  color: "red",
-                  border: "none",
-                  background: "none",
-                  cursor: "pointer",
-                  fontSize: "14px",
-                  padding: "0",
-                }}
-              >
-                ❌
-              </button>
-            </h4>
-            {Object.keys(cpFilters[filterName]).map((param) => (
-              <div
-                key={param}
-                style={{
-                  marginTop: "2px",
-                  fontSize: "13px",
-                }}
-              >
-                <label style={{ display: "block" }}>
-                  {param.replace("_", " ")}:
-                </label>
-                <input
-                  type="number"
-                  value={cpFilters[filterName][param]}
-                  onChange={(e) =>
-                    handleFilterChange(
-                      filterName,
-                      param,
-                      parseFloat(e.target.value),
-                      true
-                    )
-                  }
-                  style={{ width: "100%", padding: "2px", fontSize: "13px" }}
-                />
-              </div>
-            ))}
-          </div>
-        ))}
-
-        {/* Force Models (for forceIndentation tab) */}
-        {activeTab === "forceIndentation" &&
-          Object.keys(fModels).map((fmodelName) => (
-            <div
-              key={fmodelName}
-              style={{
-                width: "150px",
-                padding: "5px",
-                border: "1px solid #ddd",
-                borderRadius: "3px",
-                backgroundColor: "#fff",
-              }}
-            >
-              <h4
-                style={{
-                  margin: "0",
-                  fontSize: "14px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                {capitalizeFilterName(fmodelName)}
-                <button
-                  onClick={() => handleRemoveFilter(fmodelName, false, true)}
-                  style={{
-                    color: "red",
-                    border: "none",
-                    background: "none",
-                    cursor: "pointer",
-                    fontSize: "14px",
-                    padding: "0",
-                  }}
+          {/* Four-Column Multi-Select Row */}
+          <Grid container spacing={1} sx={{ flexGrow: 1 }}>
+            {/* Regular Filter */}
+            <Grid item xs={3}>
+              <FormControl fullWidth size="small">
+                <InputLabel id="regular-filter-label" sx={{ fontSize: 14 }}>
+                  Regular
+                </InputLabel>
+                <Select
+                  labelId="regular-filter-label"
+                  label="Regular"
+                  multiple
+                  value={safeRegularFilters}
+                  onChange={handleRegularChange}
+                  renderValue={(selected) => selected.map(capitalizeFilterName).join(", ") || "None"}
+                  sx={{ fontSize: 14 }}
                 >
-                  ❌
-                </button>
-              </h4>
-              {Object.keys(fModels[fmodelName]).map((param) => (
-                <div
-                  key={param}
-                  style={{
-                    marginTop: "2px",
-                    fontSize: "13px",
-                  }}
-                >
-                  <label style={{ display: "block" }}>
-                    {param.replace("_", " ")}:
-                  </label>
-                  <input
-                    type="number"
-                    value={
-                      fModels[fmodelName]?.[param] ||
-                      fModelDefaults[fmodelName][param]
-                    }
-                    onChange={(e) =>
-                      handleFilterChange(
-                        fmodelName,
-                        param,
-                        parseFloat(e.target.value),
-                        false,
-                        true
-                      )
-                    }
-                    style={{ width: "100%", padding: "2px", fontSize: "13px" }}
-                  />
-                </div>
-              ))}
-            </div>
-          ))}
+                  {Object.keys(filterDefaults || {}).map((filterName) => (
+                    <MenuItem key={filterName} value={filterName}>
+                      <Checkbox
+                        checked={safeRegularFilters.includes(filterName)}
+                        size="small"
+                      />
+                      <ListItemText
+                        primary={capitalizeFilterName(filterName)}
+                        primaryTypographyProps={{ fontSize: 14 }}
+                      />
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
 
-        {/* Elasticity Models (for elasticitySpectra tab) */}
-        {activeTab === "elasticitySpectra" &&
-          Object.keys(eModels).map((filterName) => (
-            <div
-              key={filterName}
-              style={{
-                width: "150px",
-                padding: "5px",
-                border: "1px solid #ddd",
-                borderRadius: "3px",
-                backgroundColor: "#fff",
-              }}
-            >
-              <h4
-                style={{
-                  margin: "0",
-                  fontSize: "14px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                {filterName}
-                <button
-                  onClick={() =>
-                    handleRemoveFilter(filterName, false, false, true)
-                  }
-                  style={{
-                    color: "red",
-                    border: "none",
-                    background: "none",
-                    cursor: "pointer",
-                    fontSize: "14px",
-                    padding: "0",
-                  }}
+            {/* CP Filter */}
+            <Grid item xs={3}>
+              <FormControl fullWidth size="small">
+                <InputLabel id="cp-filter-label" sx={{ fontSize: 14 }}>
+                  CP
+                </InputLabel>
+                <Select
+                  labelId="cp-filter-label"
+                  label="CP"
+                  multiple
+                  value={safeCpFilters}
+                  onChange={handleCpChange}
+                  renderValue={(selected) => selected.map(capitalizeFilterName).join(", ") || "None"}
+                  sx={{ fontSize: 14 }}
                 >
-                  ❌
-                </button>
-              </h4>
-              {Object.keys(eModels[filterName]).map((param) => (
-                <div
-                  key={param}
-                  style={{
-                    marginTop: "2px",
-                    fontSize: "13px",
-                  }}
-                >
-                  <label style={{ display: "block" }}>
-                    {param.replace("_", " ")}:
-                  </label>
-                  <input
-                    type="number"
-                    value={eModels[filterName][param]}
-                    onChange={(e) =>
-                      handleFilterChange(
-                        filterName,
-                        param,
-                        parseFloat(e.target.value),
-                        false,
-                        false,
-                        true
-                      )
-                    }
-                    style={{ width: "100%", padding: "2px", fontSize: "13px" }}
-                  />
-                </div>
-              ))}
-            </div>
-          ))}
-      </div>
+                  {Object.keys(cpDefaults || {}).map((filterName) => (
+                    <MenuItem key={filterName} value={filterName}>
+                      <Checkbox
+                        checked={safeCpFilters.includes(filterName)}
+                        size="small"
+                      />
+                      <ListItemText
+                        primary={capitalizeFilterName(filterName)}
+                        primaryTypographyProps={{ fontSize: 14 }}
+                      />
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
 
-      {/* Update Curves Button */}
-      <button
-        onClick={sendCurveRequest}
-        style={{
-          width: "100%",
-          padding: "5px",
-          backgroundColor: "#28a745",
-          color: "white",
-          border: "none",
-          borderRadius: "3px",
-          cursor: "pointer",
-          fontSize: "12px",
-        }}
-      >
-        Update Curves
-      </button>
-      {/* Sidebar with Filter Status */}
+            {/* Force Model */}
+            {activeTab === "forceIndentation" && (
+              <Grid item xs={3}>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="force-model-label" sx={{ fontSize: 14 }}>
+                    Force
+                  </InputLabel>
+                  <Select
+                    labelId="force-model-label"
+                    label="Force"
+                    multiple
+                    value={safeFModels}
+                    onChange={handleForceChange}
+                    renderValue={(selected) => selected.map(capitalizeFilterName).join(", ") || "None"}
+                    sx={{ fontSize: 14 }}
+                  >
+                    {Object.keys(fModelDefaults || {}).map((fmodelName) => (
+                      <MenuItem key={fmodelName} value={fmodelName}>
+                        <Checkbox
+                          checked={safeFModels.includes(fmodelName)}
+                          size="small"
+                        />
+                        <ListItemText
+                          primary={capitalizeFilterName(fmodelName)}
+                          primaryTypographyProps={{ fontSize: 14 }}
+                        />
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+            )}
+
+            {/* Elasticity Model */}
+            {activeTab === "elasticitySpectra" && (
+              <Grid item xs={3}>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="elasticity-model-label" sx={{ fontSize: 14 }}>
+                    Elasticity
+                  </InputLabel>
+                  <Select
+                    labelId="elasticity-model-label"
+                    label="Elasticity"
+                    multiple
+                    value={safeEModels}
+                    onChange={handleElasticityChange}
+                    renderValue={(selected) => selected.map(capitalizeFilterName).join(", ") || "None"}
+                    sx={{ fontSize: 14 }}
+                  >
+                    {Object.keys(eModelDefaults || {}).map((emodelName) => (
+                      <MenuItem key={emodelName} value={emodelName}>
+                        <Checkbox
+                          checked={safeEModels.includes(emodelName)}
+                          size="small"
+                        />
+                        <ListItemText
+                          primary={capitalizeFilterName(emodelName)}
+                          primaryTypographyProps={{ fontSize: 14 }}
+                        />
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+            )}
+          </Grid>
+
+          {/* Update Curves Button */}
+          <Button
+            variant="contained"
+            color="success"
+            onClick={sendCurveRequest}
+            fullWidth
+            size="small"
+            sx={{ fontSize: 12, py: 0.5, zIndex: 1000 }}
+          >
+            Update Curves
+          </Button>
+        </Box>
+      </Collapse>
+
+      {/* Sidebar */}
       <FilterStatusSidebar
         regularFilters={regularFilters}
         cpFilters={cpFilters}
@@ -487,8 +289,9 @@ const FiltersComponent = ({
         capitalizeFilterName={capitalizeFilterName}
         handleRemoveFilter={handleRemoveFilter}
         handleFilterChange={handleFilterChange}
+        sx={{ zIndex: 1002 }}
       />
-    </div>
+    </Box>
   );
 };
 

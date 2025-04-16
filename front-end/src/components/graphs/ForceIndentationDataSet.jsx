@@ -21,7 +21,7 @@ const ForceIndentationDataSet = ({ forceData, domainRange }) => {
   const yScaleFactor = getScaleFactor(domainRange.yMin);
 
   const chartOptions = {
-    title: { text: "Force Indentation (Data set)", left: "center" },
+    // title: { text: "Force Indentation (Data set)", left: "center" },
     tooltip: { trigger: "axis" },
     xAxis: {
       type: "value",
@@ -96,10 +96,10 @@ const ForceIndentationDataSet = ({ forceData, domainRange }) => {
 
   return (
     <div style={{ flex: 1 }}>
-      <h2>Force Indentation (Data Set)</h2>
+      {/* <h2>Force Indentation (Data Set)</h2> */}
       <ReactECharts
         option={chartOptions}
-        style={{ height: 600 }}
+        style={{ height: 500 }}
         notMerge={true}
         opts={{ renderer: "canvas" }}
       />
