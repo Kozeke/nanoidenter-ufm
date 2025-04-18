@@ -1,23 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import ForceDisplacementDataSet from "./graphs/ForceDisplacementDataSet";
-import ForceDisplacementSingle from "./graphs/ForceDisplacementSingle";
 import ForceIndentationDataSet from "./graphs/ForceIndentationDataSet";
-import ForceIndentationSingle from "./graphs/ForceIndentationSingle";
 import ElasticitySpectra from "./graphs/SpectraElasticity";
-import ElasticitySpectraSingle from "./graphs/SpectraElasticitySingle";
 import FiltersComponent from "./FiltersComponent";
 import CurveControlsComponent from "./CurveControlsComponent";
 
 const WEBSOCKET_URL =
-  process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8080/ws/data";
+  process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8000/ws/data";
 
 const Dashboard = () => {
   const [forceData, setForceData] = useState([]); // For DataSet graph
-  const [forceDataSingle, setForceDataSingle] = useState([]); // For Single Force vs Z graph
   const [indentationData, setIndentationData] = useState([]); // For DataSet indentation graph
-  const [indentationDataSingle, setIndentationDataSingle] = useState([]); // For Single indentation graph
   const [elspectraData, setElspectraData] = useState([]); // For DataSet elspectra graph
-  const [elspectraDataSingle, setElspectraDataSingle] = useState([]); // For Single elspectra graph
   const [filterDefaults, setFilterDefaults] = useState([]);
   const [cpDefaults, setCpDefaults] = useState({
     autotresh: { range_to_set_zero: 500 },
@@ -33,36 +27,21 @@ const Dashboard = () => {
     yMin: Infinity,
     yMax: -Infinity,
   });
-  const [domainRangeSingle, setDomainRangeSingle] = useState({
-    xMin: Infinity,
-    xMax: -Infinity,
-    yMin: Infinity,
-    yMax: -Infinity,
-  });
+
   const [indentationDomain, setIndentationDomain] = useState({
     xMin: Infinity,
     xMax: -Infinity,
     yMin: Infinity,
     yMax: -Infinity,
   });
-  const [indentationDomainSingle, setIndentationDomainSingle] = useState({
-    xMin: Infinity,
-    xMax: -Infinity,
-    yMin: Infinity,
-    yMax: -Infinity,
-  });
+
   const [elspectraDomain, setElspectraDomain] = useState({
     xMin: Infinity,
     xMax: -Infinity,
     yMin: Infinity,
     yMax: -Infinity,
   });
-  const [elspectraDomainSingle, setElspectraDomainSingle] = useState({
-    xMin: Infinity,
-    xMax: -Infinity,
-    yMin: Infinity,
-    yMax: -Infinity,
-  });
+
 
   const [numCurves, setNumCurves] = useState(1);
   const socketRef = useRef(null);
@@ -71,10 +50,8 @@ const Dashboard = () => {
   const [cpFilters, setCpFilters] = useState([]);
   const [fModels, setfModels] = useState([]);
   const [selectedFModels, setselectedFModels] = useState([]);
-
   const [eModels, seteModels] = useState([]);
   const [selectedEModels, setSelectedEModels] = useState([]);
-
   const [selectedRegularFilters, setSelectedRegularFilters] = useState([]);
   const [selectedCpFilters, setSelectedCpFilters] = useState([]);
   const [activeTab, setActiveTab] = useState("forceDisplacement");
@@ -92,7 +69,6 @@ const Dashboard = () => {
         .trim()
     );
   };
-
   // Callback to handle curve selection
   const handleForceDisplacementCurveSelect = (curveData) => {
     console.log(curveData)
@@ -101,7 +77,6 @@ const Dashboard = () => {
     // const parsedCurveId = parseInt(curveData.curve_id.replace("curve", ""), 10);
     // setCurveId(isNaN(parsedCurveId) ? null : parsedCurveId);
   };
-
   const sendCurveRequest = useCallback(() => {
     console.log("sendcurve");
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
@@ -138,15 +113,9 @@ const Dashboard = () => {
         setForceData([]);
         setIndentationData([]);
         setElspectraData([]);
-        setForceDataSingle([]);
-        setIndentationDataSingle([]);
-        setElspectraDataSingle([]);
         setDomainRange(resetState);
         setIndentationDomain(resetState);
         setElspectraDomain(resetState);
-        setDomainRangeSingle(resetState);
-        setIndentationDomainSingle(resetState);
-        setElspectraDomainSingle(resetState);
 
         const requestData = {
           num_curves: numCurves,
@@ -158,25 +127,6 @@ const Dashboard = () => {
           },
           ...(curveId && { curve_id: curveId }),
           filters_changed: true,
-        };
-        socketRef.current.send(JSON.stringify(requestData));
-      } else if (curveId) {
-        setForceDataSingle([]);
-        setIndentationDataSingle([]);
-        setElspectraDataSingle([]);
-        setDomainRangeSingle(resetState);
-        setIndentationDomainSingle(resetState);
-        setElspectraDomainSingle(resetState);
-
-        const requestData = {
-          curve_id: curveId,
-          filters: {
-            regular: regularFilters,
-            cp_filters: cpFilters,
-            f_models: fModels,
-            e_models: eModels,
-          },
-          filters_changed: false,
         };
         socketRef.current.send(JSON.stringify(requestData));
       }
@@ -207,44 +157,11 @@ const Dashboard = () => {
       console.log("WebSocket response:", JSON.stringify(response, null, 2));
   
       if (response.status === "batch" && response.data) {
-        const {
-          graphForcevsZ,
-          graphForceIndentation,
-          graphElspectra,
-          graphForcevsZSingle,
-          graphForceIndentationSingle,
-          graphElspectraSingle,
-        } = response.data;
+        const { graphForcevsZ, graphForceIndentation, graphElspectra } = response.data;
   
         console.log("graphForcevsZ:", JSON.stringify(graphForcevsZ, null, 2));
         console.log("graphForceIndentation:", JSON.stringify(graphForceIndentation, null, 2));
         console.log("graphElspectra:", JSON.stringify(graphElspectra, null, 2));
-        console.log("graphForcevsZSingle:", JSON.stringify(graphForcevsZSingle, null, 2));
-        console.log("graphForceIndentationSingle:", JSON.stringify(graphForceIndentationSingle, null, 2));
-        console.log("graphElspectraSingle:", JSON.stringify(graphElspectraSingle, null, 2));
-  
-        // Handle single curve data
-        if (graphForcevsZSingle?.curves && graphForcevsZSingle.curves.length > 0) {
-          if (graphForcevsZSingle.curves.length > 1) {
-            console.warn("Expected single curve in graphForcevsZSingle, got:", graphForcevsZSingle.curves.length);
-          }
-          setForceDataSingle(graphForcevsZSingle.curves[0]);
-        } else {
-          console.warn("No curves in graphForcevsZSingle");
-          setForceDataSingle({});
-        }
-  
-        if (graphForceIndentationSingle?.curves && graphForceIndentationSingle.curves.length > 0) {
-          setIndentationDataSingle(graphForceIndentationSingle.curves[0]);
-        } else {
-          setIndentationDataSingle({});
-        }
-  
-        if (graphElspectraSingle?.curves && graphElspectraSingle.curves.length > 0) {
-          setElspectraDataSingle(graphElspectraSingle.curves[0]);
-        } else {
-          setElspectraDataSingle({});
-        }
   
         // Handle multi-curve data
         setForceData((prev) => [...prev, ...(graphForcevsZ?.curves || [])]);
@@ -271,27 +188,6 @@ const Dashboard = () => {
           xMax: Math.max(prev.xMax, graphElspectra?.domain.xMax ?? -Infinity),
           yMin: Math.min(prev.yMin, graphElspectra?.domain.yMin ?? Infinity),
           yMax: Math.max(prev.yMax, graphElspectra?.domain.yMax ?? -Infinity),
-        }));
-  
-        setDomainRangeSingle((prev) => ({
-          xMin: Math.min(prev.xMin, graphForcevsZSingle?.domain.xMin ?? Infinity),
-          xMax: Math.max(prev.xMax, graphForcevsZSingle?.domain.xMax ?? -Infinity),
-          yMin: Math.min(prev.yMin, graphForcevsZSingle?.domain.yMin ?? Infinity),
-          yMax: Math.max(prev.yMax, graphForcevsZSingle?.domain.yMax ?? -Infinity),
-        }));
-  
-        setIndentationDomainSingle((prev) => ({
-          xMin: Math.min(prev.xMin, graphForceIndentationSingle?.domain.xMin ?? Infinity),
-          xMax: Math.max(prev.xMax, graphForceIndentationSingle?.domain.xMax ?? -Infinity),
-          yMin: Math.min(prev.yMin, graphForceIndentationSingle?.domain.yMin ?? Infinity),
-          yMax: Math.max(prev.yMax, graphForceIndentationSingle?.domain.yMax ?? -Infinity),
-        }));
-  
-        setElspectraDomainSingle((prev) => ({
-          xMin: Math.min(prev.xMin, graphElspectraSingle?.domain.xMin ?? Infinity),
-          xMax: Math.max(prev.xMax, graphElspectraSingle?.domain.xMax ?? -Infinity),
-          yMin: Math.min(prev.yMin, graphElspectraSingle?.domain.yMin ?? Infinity),
-          yMax: Math.max(prev.yMax, graphElspectraSingle?.domain.yMax ?? -Infinity),
         }));
       }
   
@@ -448,270 +344,202 @@ const Dashboard = () => {
     setNumCurves(newValue);
   };
 
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+  // Update window width on resize
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // Determine if mobile view (e.g., < 768px)
+  const isMobile = windowWidth < 768;
+
+  // Dynamic styles based on window size
+  const containerStyle = {
+    display: "flex",
+    flexDirection: isMobile ? "column" : "row",
+    height: "100vh",
+    backgroundColor: "#f4f6f8",
+    fontFamily: "'Roboto', sans-serif",
+    overflow: "hidden",
+  };
+
+  const mainContentStyle = {
+    flex: isMobile ? "none" : 1,
+    padding: isMobile ? "8px" : "10px",
+    display: "flex",
+    flexDirection: "column",
+    minWidth: isMobile ? "auto" : "300px",
+    overflowY: isMobile ? "auto" : "hidden",
+  };
+
+  const tabNavStyle = {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "5px",
+    marginBottom: "10px",
+  };
+
+  const buttonStyle = (isActive) => ({
+    padding: isMobile ? "6px 12px" : "8px 16px",
+    backgroundColor: isActive ? "#007bff" : "#fff",
+    color: isActive ? "#fff" : "#333",
+    border: "1px solid #ccc",
+    borderRadius: "4px",
+    cursor: "pointer",
+    fontSize: isMobile ? "14px" : "16px",
+    flex: isMobile ? "1 1 auto" : "none",
+  });
+
+  const filtersContainerStyle = {
+    marginBottom: "10px",
+    padding: isMobile ? "8px" : "10px",
+    backgroundColor: "#fff",
+    borderRadius: "8px",
+    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+  };
+
+  const tabContentStyle = {
+    flex: 1,
+    display: "flex",
+    flexDirection: "column",
+    gap: "10px",
+    overflowY: "auto",
+  };
+
+  const chartContainerStyle = {
+    backgroundColor: "#fff",
+    borderRadius: "8px",
+    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+    padding: isMobile ? "8px" : "10px",
+    height: isMobile ? "auto" : "100%",
+    minHeight: isMobile ? "400px" : "auto",
+  };
+
+  const curveControlsStyle = {
+    width: isMobile ? "auto" : "300px",
+    padding: isMobile ? "8px" : "10px",
+    backgroundColor: "#fff",
+    borderRadius: "8px",
+    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+    margin: isMobile ? "8px" : "10px",
+    overflowY: isMobile ? "visible" : "auto",
+  };
+  
   return (
-    <div
-      style={{
-        display: "flex",
-        height: "100vh",
-        backgroundColor: "#f4f6f8",
-        fontFamily: "'Roboto', sans-serif",
-      }}
-    >
-      <div
-        style={{
-          flex: 1,
-          padding: "10px",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-        {/* Tab Navigation */}
-        <div style={{ marginBottom: "10px" }}>
-          <button
-            onClick={() => setActiveTab("forceDisplacement")}
-            style={{
-              padding: "8px 16px",
-              marginRight: "5px",
-              backgroundColor:
-                activeTab === "forceDisplacement" ? "#007bff" : "#fff",
-              color: activeTab === "forceDisplacement" ? "#fff" : "#333",
-              border: "1px solid #ccc",
-              borderRadius: "4px",
-              cursor: "pointer",
-            }}
-          >
-            Force vs Displacement
-          </button>
-          <button
-            onClick={() => setActiveTab("forceIndentation")}
-            style={{
-              padding: "8px 16px",
-              marginRight: "5px",
-              backgroundColor:
-                activeTab === "forceIndentation" ? "#007bff" : "#fff",
-              color: activeTab === "forceIndentation" ? "#fff" : "#333",
-              border: "1px solid #ccc",
-              borderRadius: "4px",
-              cursor: "pointer",
-            }}
-          >
-            Force vs Indentation
-          </button>
-          <button
-            onClick={() => setActiveTab("elasticitySpectra")}
-            style={{
-              padding: "8px 16px",
-              backgroundColor:
-                activeTab === "elasticitySpectra" ? "#007bff" : "#fff",
-              color: activeTab === "elasticitySpectra" ? "#fff" : "#333",
-              border: "1px solid #ccc",
-              borderRadius: "4px",
-              cursor: "pointer",
-            }}
-          >
-            Elasticity Spectra
-          </button>
-        </div>
-
-        {/* Filters Component */}
-        <div
+    <div style={containerStyle}>
+    <div style={mainContentStyle}>
+      {/* Tab Navigation */}
+      <div style={tabNavStyle}>
+        <button
+          onClick={() => setActiveTab("forceDisplacement")}
+          style={buttonStyle(activeTab === "forceDisplacement")}
         >
-          <FiltersComponent
-            filterDefaults={filterDefaults}
-            capitalizeFilterName={capitalizeFilterName}
-            cpDefaults={cpDefaults}
-            fModelDefaults={fModelDefaults}
-            numCurves={numCurves}
-            regularFilters={regularFilters}
-            cpFilters={cpFilters}
-            fModels={fModels}
-            eModels={eModels}
-            eModelDefaults={eModelDefaults}
-            selectedEModels={selectedEModels}
-            setSelectedEModels={setSelectedEModels}
-            selectedRegularFilters={selectedRegularFilters}
-            selectedCpFilters={selectedCpFilters}
-            selectedFModels={selectedFModels}
-            setSelectedFModels={setselectedFModels}
-            handleNumCurvesChange={handleNumCurvesChange}
-            setSelectedRegularFilters={setSelectedRegularFilters}
-            setSelectedCpFilters={setSelectedCpFilters}
-            handleAddFilter={handleAddFilter}
-            handleRemoveFilter={handleRemoveFilter}
-            handleFilterChange={handleFilterChange}
-            sendCurveRequest={sendCurveRequest}
-            curveId={curveId}
-            setCurveId={setCurveId}
-            activeTab={activeTab}
-          />
-        </div>
-
-        {/* Tab Content */}
-        <div
-          style={{
-            flex: 1,
-            display: "grid",
-            // gridTemplateColumns: "1fr 1fr",
-            gap: "10px",
-            overflowY: "auto",
-          }}
+          Force vs Displacement
+        </button>
+        <button
+          onClick={() => setActiveTab("forceIndentation")}
+          style={buttonStyle(activeTab === "forceIndentation")}
         >
-          {activeTab === "forceDisplacement" && (
-            <>
-              <div
-                style={{
-                  backgroundColor: "#fff",
-                  borderRadius: "8px",
-                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-                  padding: "10px",
-                }}
-              >
-                <h2
-                  style={{
-                    margin: "0 0 5px 0",
-                    fontSize: "14px",
-                    color: "#333",
-                  }}
-                >
-                  {/* Force vs Displacement (DataSet) */}
-                </h2>
-                <ForceDisplacementDataSet
-                  forceData={forceData}
-                  domainRange={domainRange}
-                  onCurveSelect={handleForceDisplacementCurveSelect}
-                  setSelectedCurveIds={setSelectedCurveIds}
-                  selectedCurveIds={selectedCurveIds}
-                  graphType={graphType}
-                />
-              </div>
-              {/* <div
-                style={{
-                  backgroundColor: "#fff",
-                  borderRadius: "8px",
-                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-                  padding: "10px",
-                }}
-              >
-                <h2
-                  style={{
-                    margin: "0 0 5px 0",
-                    fontSize: "14px",
-                    color: "#333",
-                  }}
-                >
-                  Force vs Displacement (Single)
-                </h2>
-                <ForceDisplacementSingle
-                  forceData={forceDataSingle}
-                  domainRange={domainRangeSingle}
-                />
-              </div> */}
-            </>
-          )}
+          Force vs Indentation
+        </button>
+        <button
+          onClick={() => setActiveTab("elasticitySpectra")}
+          style={buttonStyle(activeTab === "elasticitySpectra")}
+        >
+          Elasticity Spectra
+        </button>
+      </div>
 
-          {activeTab === "forceIndentation" && (
-            <>
-              <div
-                style={{
-                  backgroundColor: "#fff",
-                  borderRadius: "8px",
-                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-                  padding: "10px",
-                }}
-              >
+      {/* Filters Component */}
+      <div style={filtersContainerStyle}>
+        <FiltersComponent
+          filterDefaults={filterDefaults}
+          capitalizeFilterName={capitalizeFilterName}
+          cpDefaults={cpDefaults}
+          fModelDefaults={fModelDefaults}
+          numCurves={numCurves}
+          regularFilters={regularFilters}
+          cpFilters={cpFilters}
+          fModels={fModels}
+          eModels={eModels}
+          eModelDefaults={eModelDefaults}
+          selectedEModels={selectedEModels}
+          setSelectedEModels={setSelectedEModels}
+          selectedRegularFilters={selectedRegularFilters}
+          selectedCpFilters={selectedCpFilters}
+          selectedFModels={selectedFModels}
+          setSelectedFModels={setselectedFModels}
+          handleNumCurvesChange={handleNumCurvesChange}
+          setSelectedRegularFilters={setSelectedRegularFilters}
+          setSelectedCpFilters={setSelectedCpFilters}
+          handleAddFilter={handleAddFilter}
+          handleRemoveFilter={handleRemoveFilter}
+          handleFilterChange={handleFilterChange}
+          sendCurveRequest={sendCurveRequest}
+          curveId={curveId}
+          setCurveId={setCurveId}
+          activeTab={activeTab}
+        />
+      </div>
 
-                <ForceIndentationDataSet
-                  forceData={indentationData}
-                  domainRange={indentationDomain}
-                />
-              </div>
-              <div
-                style={{
-                  backgroundColor: "#fff",
-                  borderRadius: "8px",
-                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-                  padding: "10px",
-                }}
-              >
-                <h2
-                  style={{
-                    margin: "0 0 5px 0",
-                    fontSize: "14px",
-                    color: "#333",
-                  }}
-                >
-                  Force vs Indentation (Single)
-                </h2>
-                {/* <ForceIndentationSingle
-                  forceData={indentationDataSingle}
-                  domainRange={indentationDomainSingle}
-                /> */}
-              </div>
-            </>
-          )}
+      {/* Tab Content */}
+      <div style={tabContentStyle}>
+        {activeTab === "forceDisplacement" && (
+          <div style={chartContainerStyle}>
+            <ForceDisplacementDataSet
+              forceData={forceData}
+              domainRange={domainRange}
+              onCurveSelect={handleForceDisplacementCurveSelect}
+              setSelectedCurveIds={setSelectedCurveIds}
+              selectedCurveIds={selectedCurveIds}
+              graphType={graphType}
+            />
+          </div>
+        )}
 
-          {activeTab === "elasticitySpectra" && (
-            <>
-              <div
-                style={{
-                  backgroundColor: "#fff",
-                  borderRadius: "8px",
-                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-                  padding: "10px",
-                }}
-              >
-                <h2
-                  style={{
-                    margin: "0 0 5px 0",
-                    fontSize: "14px",
-                    color: "#333",
-                  }}
-                >
-                  Elasticity Spectra
-                </h2>
-                <ElasticitySpectra
-                  forceData={elspectraData}
-                  domainRange={elspectraDomain}
-                />
-              </div>
-              <div
-                style={{
-                  backgroundColor: "#fff",
-                  borderRadius: "8px",
-                  boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-                  padding: "10px",
-                }}
-              >
-                <h2
-                  style={{
-                    margin: "0 0 5px 0",
-                    fontSize: "14px",
-                    color: "#333",
-                  }}
-                >
-                  Elasticity Spectra (Single)
-                </h2>
-                {/* <ElasticitySpectraSingle
-                  forceData={elspectraDataSingle}
-                  domainRange={elspectraDomainSingle}
-                /> */}
-              </div>
-            </>
-          )}
-        </div>
+        {activeTab === "forceIndentation" && (
+          <div style={chartContainerStyle}>
+            <ForceIndentationDataSet
+              forceData={indentationData}
+              domainRange={indentationDomain}
+              setSelectedCurveIds={setSelectedCurveIds}
+              onCurveSelect={handleForceDisplacementCurveSelect}
+              selectedCurveIds={selectedCurveIds}
+              graphType={graphType}
+            />
+          </div>
+        )}
+
+        {activeTab === "elasticitySpectra" && (
+          <div style={chartContainerStyle}>
+            <ElasticitySpectra
+              forceData={elspectraData}
+              domainRange={elspectraDomain}
+              setSelectedCurveIds={setSelectedCurveIds}
+              onCurveSelect={handleForceDisplacementCurveSelect}
+              selectedCurveIds={selectedCurveIds}
+              graphType={graphType}
+            />
+          </div>
+        )}
       </div>
       <CurveControlsComponent
-                numCurves={numCurves}
-                handleNumCurvesChange={handleNumCurvesChange}
-                curveId={curveId}
-                setCurveId={setCurveId}
-                forceData={forceData}
-                selectedCurveIds={selectedCurveIds}
-                setSelectedCurveIds={setSelectedCurveIds}
-                setGraphType={setGraphType}
-                graphType={graphType}
+        numCurves={numCurves}
+        handleNumCurvesChange={handleNumCurvesChange}
+        curveId={curveId}
+        setCurveId={setCurveId}
+        forceData={forceData}
+        selectedCurveIds={selectedCurveIds}
+        setSelectedCurveIds={setSelectedCurveIds}
+        setGraphType={setGraphType}
+        graphType={graphType}
       />
+    </div>    
     </div>
+
   );
 };
 

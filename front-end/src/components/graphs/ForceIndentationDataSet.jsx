@@ -1,91 +1,133 @@
-// GraphComponent.jsx
-import React from "react";
+import React, { useState, useEffect } from "react";
 import ReactECharts from "echarts-for-react";
 
-const ForceIndentationDataSet = ({ forceData, domainRange }) => {
+const ForceIndentationDataSet = ({
+  forceData = [],
+  domainRange = { xMin: 0, xMax: 0, yMin: 0, yMax: 0 },
+  setSelectedCurveIds = () => {},
+  onCurveSelect = () => {},
+  selectedCurveIds = [],
+  graphType = "line",
+}) => {
+  // Track window height for responsive chart
+  const [windowHeight, setWindowHeight] = useState(window.innerHeight);
+
+  useEffect(() => {
+    const handleResize = () => setWindowHeight(window.innerHeight);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const isMobile = window.innerWidth < 768;
+  const headerHeight = isMobile ? 100 : 120; // Tabs + filters
+  const footerHeight = isMobile ? 50 : 0; // Controls (stacked on mobile)
+  const chartHeight = Math.min(
+    Math.max(windowHeight - headerHeight - footerHeight- 300, 300), // Min 300px
+    800 // Max 800px
+  );
+
   function getScaleFactor(minValue, dataArray = []) {
-    if (!minValue && minValue !== 0) return 1; // Handle undefined or null
+    if (!minValue && minValue !== 0) return 1;
     if (minValue === 0 && dataArray.length > 0) {
-      // If min is 0, find the smallest non-zero value in the data
       const nonZeroValues = dataArray.filter((v) => v > 0);
-      if (nonZeroValues.length === 0) return 1; // Fallback if all values are 0
+      if (nonZeroValues.length === 0) return 1;
       minValue = Math.min(...nonZeroValues);
     }
     const absMin = Math.abs(minValue);
     const magnitude = Math.floor(Math.log10(absMin));
-    return Math.pow(10, -magnitude); // Inverse to scale up (e.g., 1e9 for 1e-9)
+    return Math.pow(10, -magnitude);
   }
 
-  const xData = forceData.length > 0 ? forceData[0].x : []; // Use the first curve's x values
-  const xScaleFactor = getScaleFactor(domainRange.xMin, xData); // Pass x data for non-zero check
+  const validForceData = Array.isArray(forceData)
+    ? forceData.map((curve) => ({
+        ...curve,
+        curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
+        x: Array.isArray(curve?.x) ? curve.x : [],
+        y: Array.isArray(curve?.y) ? curve.y : [],
+      }))
+    : [];
+  console.log("forceData (Indentation):", JSON.stringify(validForceData, null, 2));
+
+  const xData = validForceData.length > 0 && validForceData[0]?.x.length > 0 ? validForceData[0].x : [];
+  const xScaleFactor = getScaleFactor(domainRange.xMin, xData);
   const yScaleFactor = getScaleFactor(domainRange.yMin);
 
   const chartOptions = {
-    // title: { text: "Force Indentation (Data set)", left: "center" },
     tooltip: { trigger: "axis" },
     xAxis: {
       type: "value",
-      name: `Z (x10^-${Math.log10(xScaleFactor)} m)`, // Reflect the scale factor in the unit
+      name: `Z (x10^-${Math.log10(xScaleFactor)} m)`,
       nameLocation: "middle",
       nameGap: 25,
-      min: domainRange.xMin * xScaleFactor, // Scale the domain min
-      max: domainRange.xMax * xScaleFactor, // Scale the domain max
+      min: domainRange.xMin * xScaleFactor,
+      max: domainRange.xMax * xScaleFactor,
       axisLabel: {
         formatter: function (value) {
-          return value.toFixed(0); // Display as whole numbers
+          return value.toFixed(0);
         },
       },
     },
     yAxis: {
       type: "value",
-      name: `Force (x10^-${Math.log10(yScaleFactor)} N)`, // Reflect the scale factor in the unit
+      name: `Force (x10^-${Math.log10(yScaleFactor)} N)`,
       nameLocation: "middle",
       nameGap: 40,
       scale: true,
-      min: domainRange.yMin * yScaleFactor, // Scale the domain min
-      max: domainRange.yMax * yScaleFactor, // Scale the domain max
+      min: domainRange.yMin * yScaleFactor,
+      max: domainRange.yMax * yScaleFactor,
       axisLabel: {
         formatter: function (value) {
-          return value.toFixed(0); // Display as whole numbers
+          return value.toFixed(0);
         },
       },
     },
-    series: forceData.map((curve) => ({
+    series: validForceData.map((curve) => ({
       name: curve.curve_id,
-      type: "line",
-      smooth: false,
-      showSymbol: false,
+      type: graphType,
+      smooth: graphType === "line" ? false : undefined,
+      showSymbol: graphType === "scatter" ? true : false,
+      symbolSize: graphType === "scatter" ? 4 : undefined,
       large: true,
-      data: curve.x.map((x, i) => [x * xScaleFactor, curve.y[i] * yScaleFactor]) || [], // Apply different scales
+      triggerEvent: true,
+      data:
+        (selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
+        Array.isArray(curve.x) &&
+        Array.isArray(curve.y) &&
+        curve.x.length === curve.y.length
+          ? curve.x.map((x, i) => [
+              x * xScaleFactor,
+              curve.y[i] !== undefined ? curve.y[i] * yScaleFactor : 0,
+            ])
+          : [],
     })),
-    legend: { show: false, bottom: 0 },
-    grid: { left: "12%", right: "10%", bottom: "15%" }, // Adjusted bottom to accommodate slider
+    legend: { show: false },
+    grid: { left: "12%", right: "10%", bottom: "15%", top: "8%" },
     dataZoom: [
       {
-        type: "slider", // Visible slider for x-axis
-        xAxisIndex: 0, // Apply to xAxis
-        start: 0, // Initial zoom range (0% to 100%)
-        end: 100,
-        height: 20, // Height of the slider
-        bottom: 10, // Position above the bottom edge
-      },
-      {
-        type: "slider", // Visible slider for y-axis
-        yAxisIndex: 0, // Apply to yAxis
+        type: "slider",
+        xAxisIndex: 0,
         start: 0,
         end: 100,
-        width: 20, // Width of the slider
-        right: 10, // Position from the right edge
+        height: 20,
+        bottom: 10,
       },
       {
-        type: "inside", // Mouse wheel and pinch-to-zoom
-        xAxisIndex: 0, // Apply to xAxis
+        type: "slider",
+        yAxisIndex: 0,
+        start: 0,
+        end: 100,
+        width: 20,
+        right: 10,
+      },
+      {
+        type: "inside",
+        xAxisIndex: 0,
         start: 0,
         end: 100,
       },
       {
-        type: "inside", // Mouse wheel and pinch-to-zoom
-        yAxisIndex: 0, // Apply to yAxis
+        type: "inside",
+        yAxisIndex: 0,
         start: 0,
         end: 100,
       },
@@ -94,14 +136,53 @@ const ForceIndentationDataSet = ({ forceData, domainRange }) => {
     progressive: 5000,
   };
 
+  const onChartEvents = {
+    click: (params) => {
+      console.log("Chart click event (Indentation):", {
+        componentType: params.componentType,
+        seriesType: params.seriesType,
+        seriesIndex: params.seriesIndex,
+        name: params.name,
+      });
+      if (params.componentType === "series") {
+        const curveIndex = params.seriesIndex;
+        const selectedCurve = validForceData[curveIndex];
+        console.log("Selected curve (Indentation):", {
+          curve_id: selectedCurve?.curve_id,
+          x: selectedCurve?.x?.slice(0, 5),
+          y: selectedCurve?.y?.slice(0, 5),
+        });
+        if (selectedCurve && selectedCurve.curve_id) {
+          setSelectedCurveIds([selectedCurve.curve_id]);
+          if (onCurveSelect) {
+            onCurveSelect({
+              curve_id: selectedCurve.curve_id, // Use raw curve_id (e.g., "0")
+              x: selectedCurve.x || [],
+              y: selectedCurve.y || [],
+            });
+          }
+        }
+      }
+    },
+  };
+
   return (
-    <div style={{ flex: 1 }}>
-      {/* <h2>Force Indentation (Data Set)</h2> */}
+    <div style={{ flex: 1, height: "100%" }}>
+      <h2
+        style={{
+          margin: "0 0 5px 0",
+          fontSize: isMobile ? "14px" : "16px",
+          color: "#333",
+        }}
+      >
+        Force vs Indentation
+      </h2>
       <ReactECharts
         option={chartOptions}
-        style={{ height: 500 }}
+        style={{ height: chartHeight, width: "100%" }}
         notMerge={true}
         opts={{ renderer: "canvas" }}
+        onEvents={onChartEvents}
       />
     </div>
   );

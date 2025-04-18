@@ -1,112 +1,188 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import ReactECharts from "echarts-for-react";
 
-const ElasticitySpectra = ({ forceData, domainRange }) => {
-  // Function to determine scale factor based on a min value
+const ElasticitySpectra = ({
+  forceData = [],
+  domainRange = { xMin: 0, xMax: 0, yMin: 0, yMax: 0 },
+  setSelectedCurveIds = () => {},
+  onCurveSelect = () => {},
+  selectedCurveIds = [],
+  graphType = "line",
+}) => {
+  // Track window height for responsive chart
+  const [windowHeight, setWindowHeight] = useState(window.innerHeight);
+
+  useEffect(() => {
+    const handleResize = () => setWindowHeight(window.innerHeight);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const isMobile = window.innerWidth < 768;
+  const headerHeight = isMobile ? 100 : 120; // Tabs + filters
+  const footerHeight = isMobile ? 50 : 0; // Controls (stacked on mobile)
+  const chartHeight = Math.min(
+    Math.max(windowHeight - headerHeight - footerHeight - 300, 300), // Min 300px
+    800 // Max 800px
+  );
+
   function getScaleFactor(minValue, dataArray = []) {
-    if (!minValue && minValue !== 0) return 1; // Handle undefined or null
+    if (!minValue && minValue !== 0) return 1;
     if (minValue === 0 && dataArray.length > 0) {
-      // If min is 0, find the smallest non-zero value in the data
       const nonZeroValues = dataArray.filter((v) => v > 0);
-      if (nonZeroValues.length === 0) return 1; // Fallback if all values are 0
+      if (nonZeroValues.length === 0) return 1;
       minValue = Math.min(...nonZeroValues);
     }
     const absMin = Math.abs(minValue);
     const magnitude = Math.floor(Math.log10(absMin));
-    return Math.pow(10, -magnitude); // Inverse to scale up (e.g., 1e9 for 1e-9)
+    return Math.pow(10, -magnitude);
   }
 
-  const xData = forceData.length > 0 ? forceData[0].x : []; // Use the first curve's x values
-  const xScaleFactor = getScaleFactor(domainRange?.xMin, xData); // Pass x data for non-zero check
+  const validForceData = Array.isArray(forceData)
+    ? forceData.map((curve) => ({
+        ...curve,
+        curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
+        x: Array.isArray(curve?.x) ? curve.x : [],
+        y: Array.isArray(curve?.y) ? curve.y : [],
+      }))
+    : [];
+  console.log("forceData (Elasticity):", JSON.stringify(validForceData, null, 2));
+
+  const xData = validForceData.length > 0 && validForceData[0]?.x.length > 0 ? validForceData[0].x : [];
+  const xScaleFactor = getScaleFactor(domainRange.xMin, xData);
+  const yScaleFactor = getScaleFactor(domainRange.yMin);
 
   const chartOptions = {
     tooltip: { trigger: "axis" },
     xAxis: {
       type: "value",
-      name: `Z (x10^${-Math.log10(xScaleFactor)} m)`, // Reflect the scale factor in the unit
+      name: `Z (x10^-${Math.log10(xScaleFactor)} m)`,
       nameLocation: "middle",
       nameGap: 25,
-      min: domainRange?.xMin ? domainRange.xMin * xScaleFactor : undefined, // Scale the domain min
-      max: domainRange?.xMax ? domainRange.xMax * xScaleFactor : undefined, // Scale the domain max
+      min: domainRange.xMin ? domainRange.xMin * xScaleFactor : undefined,
+      max: domainRange.xMax ? domainRange.xMax * xScaleFactor : undefined,
       axisLabel: {
         formatter: function (value) {
-          return value.toFixed(0); // Display as whole numbers
+          return value.toFixed(0);
         },
       },
     },
     yAxis: {
       type: "value",
-      name: "E (Pa)", // No scale factor in the unit
+      name: "E (Pa)",
       nameLocation: "middle",
       nameGap: 40,
       scale: true,
-      min: domainRange?.yMin, // Use raw domain min
-      max: domainRange?.yMax, // Use raw domain max
+      min: domainRange.yMin * yScaleFactor,
+      max: domainRange.yMax * yScaleFactor,
       axisLabel: {
         formatter: function (value) {
-          return value.toFixed(0); // Display as whole numbers
+          return value.toFixed(0);
         },
       },
     },
-    series: forceData.map((curve) => ({
+    series: validForceData.map((curve) => ({
       name: curve.curve_id,
-      type: "line",
-      smooth: false,
-      showSymbol: false,
+      type: graphType,
+      smooth: graphType === "line" ? false : undefined,
+      showSymbol: graphType === "scatter" ? true : false,
+      symbolSize: graphType === "scatter" ? 4 : undefined,
       large: true,
-      data: curve.x.map((x, i) => [x * xScaleFactor, curve.y[i]]) || [], // Only scale x
+      triggerEvent: true,
+      data:
+        (selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
+        Array.isArray(curve.x) &&
+        Array.isArray(curve.y) &&
+        curve.x.length === curve.y.length
+          ? curve.x.map((x, i) => [
+              x * xScaleFactor,
+              curve.y[i] !== undefined ? curve.y[i] * yScaleFactor : 0,
+            ])
+          : [],
     })),
-    legend: { show: false, bottom: 0 },
-    grid: { left: "12%", right: "10%", bottom: "15%", top: "10%" }, // Adjusted for sliders
+    legend: { show: false },
+    grid: { left: "12%", right: "10%", bottom: "15%", top: "8%" },
     dataZoom: [
       {
-        type: "slider", // X-axis slider
+        type: "slider",
         xAxisIndex: 0,
-        show: true,
-        startValue: domainRange?.xMin ? domainRange.xMin * xScaleFactor : undefined,
-        endValue: domainRange?.xMax ? domainRange.xMax * xScaleFactor : undefined,
-        bottom: 10, // Position below chart
+        start: 0,
+        end: 100,
         height: 20,
+        bottom: 10,
       },
       {
-        type: "slider", // Y-axis slider
+        type: "slider",
         yAxisIndex: 0,
-        show: true,
-        startValue: domainRange?.yMin,
-        endValue: domainRange?.yMax,
-        right: 10, // Position to the right
+        start: 0,
+        end: 100,
         width: 20,
+        right: 10,
       },
       {
-        type: "inside", // X-axis wheel/pinch zoom
+        type: "inside",
         xAxisIndex: 0,
-        disabled: false,
-        zoomOnMouseWheel: true,
-        moveOnMouseMove: true, // Enable panning
-        startValue: domainRange?.xMin ? domainRange.xMin * xScaleFactor : undefined,
-        endValue: domainRange?.xMax ? domainRange.xMax * xScaleFactor : undefined,
+        start: 0,
+        end: 100,
       },
       {
-        type: "inside", // Y-axis wheel/pinch zoom
+        type: "inside",
         yAxisIndex: 0,
-        disabled: false,
-        zoomOnMouseWheel: true,
-        moveOnMouseMove: true, // Enable panning
-        startValue: domainRange?.yMin,
-        endValue: domainRange?.yMax,
+        start: 0,
+        end: 100,
       },
     ],
     animation: false,
     progressive: 5000,
   };
 
+  const onChartEvents = {
+    click: (params) => {
+      console.log("Chart click event (Elasticity):", {
+        componentType: params.componentType,
+        seriesType: params.seriesType,
+        seriesIndex: params.seriesIndex,
+        name: params.name,
+      });
+      if (params.componentType === "series") {
+        const curveIndex = params.seriesIndex;
+        const selectedCurve = validForceData[curveIndex];
+        console.log("Selected curve (Elasticity):", {
+          curve_id: selectedCurve?.curve_id,
+          x: selectedCurve?.x?.slice(0, 5),
+          y: selectedCurve?.y?.slice(0, 5),
+        });
+        if (selectedCurve && selectedCurve.curve_id) {
+          setSelectedCurveIds([selectedCurve.curve_id]);
+          if (onCurveSelect) {
+            onCurveSelect({
+              curve_id: selectedCurve.curve_id,
+              x: selectedCurve.x || [],
+              y: selectedCurve.y || [],
+            });
+          }
+        }
+      }
+    },
+  };
+
   return (
-    <div style={{ flex: 1 }}>
+    <div style={{ flex: 1, height: "100%" }}>
+      <h2
+        style={{
+          margin: "0 0 5px 0",
+          fontSize: isMobile ? "14px" : "16px",
+          color: "#333",
+        }}
+      >
+        Elasticity Spectra
+      </h2>
       <ReactECharts
         option={chartOptions}
-        style={{ height: 500 }}
+        style={{ height: chartHeight, width: "100%" }}
         notMerge={true}
         opts={{ renderer: "canvas" }}
+        onEvents={onChartEvents}
       />
     </div>
   );

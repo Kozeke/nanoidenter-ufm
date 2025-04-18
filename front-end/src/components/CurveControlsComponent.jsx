@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import {
   Select,
   MenuItem,
@@ -11,14 +11,84 @@ import {
 const CurveControlsComponent = ({
   numCurves,
   handleNumCurvesChange,
-  curveId,
-  setCurveId,
   forceData,
   selectedCurveIds,
   setSelectedCurveIds,
   graphType,
   setGraphType,
 }) => {
+  // Track window width for responsive styling
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const isMobile = windowWidth < 768;
+
+  // Dynamic styles
+  const containerStyle = {
+    display: "flex",
+    flexDirection: isMobile ? "column" : "row",
+    alignItems: isMobile ? "stretch" : "center",
+    gap: isMobile ? "8px" : "6px", // Reduced gap for tighter layout
+    backgroundColor: "#fff",
+    padding: isMobile ? "8px" : "10px",
+    boxSizing: "border-box",
+    height: "auto",
+    minHeight: isMobile ? "auto" : "100px",
+    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+    borderRadius: "8px",
+  };
+
+  const formControlStyle = {
+    flex: isMobile ? "none" : "0 1 auto", // Grow less aggressively on desktop
+    minWidth: isMobile ? "100%" : "120px",
+    maxWidth: isMobile ? "100%" : "180px", // Slightly smaller maxWidth
+  };
+
+  const selectStyle = {
+    height: isMobile ? "40px" : "36px",
+    fontSize: isMobile ? "14px" : "12px",
+  };
+
+  const inputLabelStyle = {
+    fontSize: isMobile ? "14px" : "12px",
+  };
+
+  const menuItemStyle = {
+    padding: isMobile ? "4px 12px" : "2px 8px",
+  };
+
+  const checkboxStyle = {
+    padding: isMobile ? "6px" : "4px",
+  };
+
+  const numberInputContainerStyle = {
+    display: "flex",
+    alignItems: "center",
+    gap: "5px",
+    flex: isMobile ? "none" : "1 1 auto", // Takes remaining space
+    width: isMobile ? "100%" : "auto",
+    marginLeft: isMobile ? "0" : "auto", // Pushes to right on desktop
+  };
+
+  const numberInputStyle = {
+    width: isMobile ? "80px" : "60px",
+    padding: isMobile ? "6px" : "3px",
+    fontSize: isMobile ? "14px" : "12px",
+    textAlign: "center",
+    borderRadius: "4px",
+    border: "1px solid #ccc",
+  };
+
+  const labelStyle = {
+    fontSize: isMobile ? "14px" : "12px",
+    color: "#333",
+  };
+
   // Handle multi-select change
   const handleSelectChange = (event) => {
     const value = event.target.value;
@@ -34,23 +104,10 @@ const CurveControlsComponent = ({
   };
 
   return (
-    <div
-      style={{
-        position: "absolute",
-        bottom: 0,
-        width: "100%",
-        height: "50px",
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        backgroundColor: "#f9f9f9",
-        padding: "5px",
-        boxSizing: "border-box",
-      }}
-    >
+    <div style={containerStyle}>
       {/* Multi-Select Curves */}
-      <FormControl style={{ flex: 1, minWidth: 150 }}>
-        <InputLabel id="curve-select-label" style={{ fontSize: "12px" }}>
+      <FormControl style={formControlStyle}>
+        <InputLabel id="curve-select-label" style={inputLabelStyle}>
           Select Curves
         </InputLabel>
         <Select
@@ -61,60 +118,60 @@ const CurveControlsComponent = ({
           renderValue={(selected) =>
             selected.length === 0 ? "All Curves" : selected.join(", ")
           }
-          style={{ height: "30px", fontSize: "12px" }}
+          style={selectStyle}
         >
           {forceData.map((curve) => (
             <MenuItem
               key={curve.curve_id}
               value={curve.curve_id}
-              style={{ padding: "2px 8px" }}
+              style={menuItemStyle}
             >
               <Checkbox
                 checked={selectedCurveIds.includes(curve.curve_id)}
                 size="small"
+                style={checkboxStyle}
               />
               <ListItemText
                 primary={curve.curve_id}
-                primaryTypographyProps={{ fontSize: "12px" }}
+                primaryTypographyProps={{ fontSize: isMobile ? "14px" : "12px" }}
               />
             </MenuItem>
           ))}
         </Select>
       </FormControl>
 
-      {/* Number of Curves */}
-      <div style={{ flex: 1, display: "flex", alignItems: "center", gap: "5px" }}>
-        <label style={{ fontSize: "12px" }}>Curves:</label>
-        <input
-          type="number"
-          min="1"
-          max="100"
-          value={numCurves}
-          onChange={(e) => handleNumCurvesChange(e.target.value)}
-          style={{
-            width: "60px",
-            padding: "3px",
-            fontSize: "12px",
-            textAlign: "center",
-          }}
-        />
-      </div>
-
       {/* Graph Type Selector */}
-      <FormControl style={{ flex: 1, minWidth: 150 }}>
-        <InputLabel id="graph-type-label" style={{ fontSize: "12px" }}>
+      <FormControl style={formControlStyle}>
+        <InputLabel id="graph-type-label" style={inputLabelStyle}>
           Graph Type
         </InputLabel>
         <Select
           labelId="graph-type-label"
           value={graphType}
           onChange={handleGraphTypeChange}
-          style={{ height: "30px", fontSize: "12px" }}
+          style={selectStyle}
         >
-          <MenuItem value="line">Line</MenuItem>
-          <MenuItem value="scatter">Scatter</MenuItem>
+          <MenuItem value="line" style={menuItemStyle}>
+            Line
+          </MenuItem>
+          <MenuItem value="scatter" style={menuItemStyle}>
+            Scatter
+          </MenuItem>
         </Select>
       </FormControl>
+
+      {/* Number of Curves */}
+      <div style={numberInputContainerStyle}>
+        <label style={labelStyle}>Curves:</label>
+        <input
+          type="number"
+          min="1"
+          max="100"
+          value={numCurves}
+          onChange={(e) => handleNumCurvesChange(e.target.value)}
+          style={numberInputStyle}
+        />
+      </div>
     </div>
   );
 };

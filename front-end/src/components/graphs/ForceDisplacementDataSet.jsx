@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import ReactECharts from "echarts-for-react";
 
 const ForceDisplacementDataSet = ({
@@ -9,6 +9,22 @@ const ForceDisplacementDataSet = ({
   selectedCurveIds,
   graphType,
 }) => {
+  const [windowHeight, setWindowHeight] = useState(window.innerHeight);
+  // Update window height on resize
+  useEffect(() => {
+    const handleResize = () => setWindowHeight(window.innerHeight);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+    // Calculate chart height based on window size
+    const isMobile = window.innerWidth < 768;
+    const headerHeight = isMobile ? 100 : 120; // Approximate space for tabs + filters
+    const footerHeight = isMobile ? 50 : 0; // Space for any bottom controls
+    const chartHeight = Math.min(
+      Math.max(windowHeight - headerHeight - footerHeight - 300, 300), // Min 300px
+      800 // Max 800px
+    );
 
   function getScaleFactor(minValue, dataArray = []) {
     if (!minValue && minValue !== 0) return 1;
@@ -153,11 +169,10 @@ const ForceDisplacementDataSet = ({
   };
 
   return (
-    <div style={{ flex: 1 }}>
-
+    <div style={{ flex: 1, height: "100%" }}>
       <ReactECharts
         option={chartOptions}
-        style={{ height: 500 }}
+        style={{ height: chartHeight, width: "100%" }}
         notMerge={true}
         opts={{ renderer: "canvas" }}
         onEvents={onChartEvents}

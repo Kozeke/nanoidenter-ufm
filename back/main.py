@@ -138,7 +138,7 @@ async def websocket_data_stream(websocket: WebSocket):
                     "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
                 ).fetchall()
                 curve_ids = [str(row[0]) for row in curve_ids]  # Ensure string IDs
-                print(f"Total curve IDs fetched: {len(curve_ids)}")
+                print(f"Total curve IDs fetched: {curve_ids}")
                 
                 # If curve_id is provided, ensure it's included or handled separately
                 if curve_id and curve_id not in curve_ids:

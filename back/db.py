@@ -132,13 +132,13 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     
     curves_regular = [
         {
-            "curve_id": row[0],
+            "curve_id": f"curve{row[0]}",
             "x": row[1],
             "y": row[2]
         }
         for row in result_regular
     ]
-    
+    # print("graphgorcevsz",curves_regular)
     domain_regular = compute_domain(conn, curves_regular, "curves_temp_regular")
     graph_force_vs_z = {"curves": curves_regular, "domain": domain_regular}
     
@@ -249,7 +249,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             if indentation_result is not None:
                 zi, fi = indentation_result
                 curves_cp.append({
-                    "curve_id": f"{curve_id}_indentation",
+                    "curve_id": f"curve{curve_id}",
                     "x": zi,
                     "y": fi
                 })
@@ -267,7 +267,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                 ze, e = elspectra_result
                 # print("ze, e",ze, e)
                 curves_el.append({
-                    "curve_id": curve_id,
+                    "curve_id": f"curve{curve_id}",
                     "x": ze,
                     "y": e
                 })

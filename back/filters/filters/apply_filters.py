@@ -39,7 +39,7 @@ def apply(query: str, filters: Dict, curve_ids: List[str]) -> str:
 
     # Construct the final SQL query
     query = f"""
-        SELECT curve_name, 
+        SELECT curve_id, 
                {z_col}, 
                {filter_chain} AS force_values
         FROM force_vs_z 
