@@ -8,7 +8,8 @@ from typing import Dict, Tuple, List
 from filters.register_all import register_filters
 import pandas as pd  # Ensure pandas is imported
 
-DB_PATH = "data/hdf5_data.db"
+DB_PATH = "data/device_data.db"
+
 
 def transform_data_for_force_vs_z(hdf5_file):
     """Transforms HDF5 data into Force vs Z format before saving."""

@@ -11,7 +11,7 @@ import {
   Fade,
   Box
 } from "@mui/material";
-import { Delete } from "@mui/icons-material";
+import { Delete, Close } from "@mui/icons-material";
 
 const FilterStatusSidebar = ({
   regularFilters,
@@ -22,6 +22,8 @@ const FilterStatusSidebar = ({
   capitalizeFilterName,
   handleRemoveFilter,
   handleFilterChange,
+  toggleFilters,
+  isOpen
 }) => {
   // Check if any filters are applied
   const hasFilters =
@@ -31,7 +33,7 @@ const FilterStatusSidebar = ({
     Object.keys(eModels || {}).length > 0;
 
   return (
-    <Fade in={hasFilters}>
+    <Fade in={isOpen}>
       <Drawer
         anchor="right"
         variant="persistent"
@@ -58,6 +60,14 @@ const FilterStatusSidebar = ({
         >
           Applied Filters
         </Typography>
+        <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <Typography variant="h6" sx={{ fontSize: 14, fontWeight: "medium" }}>
+                      Filters
+                    </Typography>
+                    <IconButton onClick={toggleFilters} size="small" color="error">
+                      <Close fontSize="small" />
+                    </IconButton>
+                  </Box>
         <Stack direction="column" spacing={1}>
           {/* Regular Filters */}
           {Object.keys(regularFilters || {}).map((filterName) => (
@@ -75,7 +85,7 @@ const FilterStatusSidebar = ({
             >
               <CardContent sx={{ p: 1 }}>
                 <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
-                  <Typography variant="subtitle2" sx={{ fontSize: 14 }}>
+                  <Typography variant="subtitle2" sx={{ fontSize: 14, color: "#3DA58A", }}>
                     {capitalizeFilterName(filterName)}
                   </Typography>
                   <Tooltip title="Remove Filter">
@@ -91,7 +101,7 @@ const FilterStatusSidebar = ({
                 </Box>
                 {Object.keys(regularFilters[filterName] || {}).map((param) => (
                   <Box key={param} sx={{ mt: 0.5 }}>
-                    <Typography variant="caption" sx={{ display: "block", fontSize: 12 }}>
+                    <Typography variant="caption" sx={{ display: "block", fontSize: 12,  }}>
                       {param.replace("_", " ")}
                     </Typography>
                     <TextField

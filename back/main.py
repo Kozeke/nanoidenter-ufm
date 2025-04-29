@@ -24,8 +24,8 @@ app.add_middleware(
 )
 
 # Paths
-HDF5_FILE_PATH = "data/all.hdf5"  # HDF5 file path
-DB_PATH = "data/hdf5_data.db"  # DuckDB database file
+HDF5_FILE_PATH = "data/device_data.hdf5"  # HDF5 file path
+DB_PATH = "data/device_data.db"  # DuckDB database file
 BATCH_SIZE = 10  # Process 10 curves per batch (adjust based on your needs)
 MAX_WORKERS = 8  # Number of parallel workers (tune based on CPU cores)
 

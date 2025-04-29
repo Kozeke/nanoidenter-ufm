@@ -104,15 +104,15 @@ const FiltersComponent = ({
             variant="contained"
             onClick={toggleFilters}
             size="small"
-            sx={{ fontSize: 14 }}
+            sx={{ fontSize: 14, backgroundColor: "#A4A9FC", color:"#141414" }}
           >
-            Show Filters
+            Show Sidebar
           </Button>
         </Box>
       </Collapse>
 
       {/* Main Filters Panel */}
-      <Collapse in={isOpen}>
+      <Box >
         <Box
           sx={{
             p: 1,
@@ -129,9 +129,9 @@ const FiltersComponent = ({
             <Typography variant="h6" sx={{ fontSize: 14, fontWeight: "medium" }}>
               Filters
             </Typography>
-            <IconButton onClick={toggleFilters} size="small" color="error">
-              <Close fontSize="small" />
-            </IconButton>
+            {/* <IconButton onClick={toggleFilters} size="small" color="error"> */}
+              {/* <Close fontSize="small" /> */}
+            {/* </IconButton> */}
           </Box>
 
           {/* Four-Column Multi-Select Row */}
@@ -268,16 +268,24 @@ const FiltersComponent = ({
           {/* Update Curves Button */}
           <Button
             variant="contained"
-            color="success"
             onClick={sendCurveRequest}
             fullWidth
             size="small"
-            sx={{ fontSize: 12, py: 0.5, zIndex: 1000 }}
+            sx={{
+              fontSize: 12,
+              py: 0.5,
+              zIndex: 1000,
+              backgroundColor: "#3DA58A",
+              "&:hover": {
+                backgroundColor: "#359D7F", // optional hover shade
+              },
+            }}
           >
             Update Curves
           </Button>
+
         </Box>
-      </Collapse>
+      </Box>
 
       {/* Sidebar */}
       <FilterStatusSidebar
@@ -290,6 +298,8 @@ const FiltersComponent = ({
         handleRemoveFilter={handleRemoveFilter}
         handleFilterChange={handleFilterChange}
         sx={{ zIndex: 1002 }}
+        toggleFilters={toggleFilters}
+        isOpen={isOpen}
       />
     </Box>
   );

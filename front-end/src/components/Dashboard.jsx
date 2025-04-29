@@ -6,7 +6,7 @@ import FiltersComponent from "./FiltersComponent";
 import CurveControlsComponent from "./CurveControlsComponent";
 
 const WEBSOCKET_URL =
-  process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8000/ws/data";
+  process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8080/ws/data";
 
 const Dashboard = () => {
   const [forceData, setForceData] = useState([]); // For DataSet graph
@@ -384,8 +384,8 @@ const Dashboard = () => {
 
   const buttonStyle = (isActive) => ({
     padding: isMobile ? "6px 12px" : "8px 16px",
-    backgroundColor: isActive ? "#007bff" : "#fff",
-    color: isActive ? "#fff" : "#333",
+    backgroundColor: isActive ? "#A4A9FC" : "#fff",
+    color: isActive ? "#141414" : "#333",
     border: "1px solid #ccc",
     borderRadius: "4px",
     cursor: "pointer",
