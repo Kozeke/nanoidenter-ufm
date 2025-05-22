@@ -4,9 +4,10 @@ import ForceIndentationDataSet from "./graphs/ForceIndentationDataSet";
 import ElasticitySpectra from "./graphs/SpectraElasticity";
 import FiltersComponent from "./FiltersComponent";
 import CurveControlsComponent from "./CurveControlsComponent";
+import FileOpener from "./FileOpener";
 
 const WEBSOCKET_URL =
-  process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8080/ws/data";
+  process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8090/ws/data";
 
 const Dashboard = () => {
   const [forceData, setForceData] = useState([]); // For DataSet graph
@@ -142,6 +143,16 @@ const Dashboard = () => {
 
   useEffect(() => {
     console.log("useEffect: Initializing WebSocket");
+    initializeWebSocket()
+  }, []);
+
+  const initializeWebSocket = useCallback(() => {
+    console.log("initializeWebSocket: Initializing WebSocket");
+    // Close existing connection if open
+    if (socketRef.current) {
+      socketRef.current.close();
+    }
+
     // socketRef.current = new WebSocket(WEBSOCKET_URL);
     socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
     socketRef.current.onopen = () => {
@@ -151,23 +162,23 @@ const Dashboard = () => {
         initialRequestSent.current = true;
       }
     };
-  
+
     socketRef.current.onmessage = (event) => {
       const response = JSON.parse(event.data);
       console.log("WebSocket response:", JSON.stringify(response, null, 2));
-  
+
       if (response.status === "batch" && response.data) {
         const { graphForcevsZ, graphForceIndentation, graphElspectra } = response.data;
-  
+
         console.log("graphForcevsZ:", JSON.stringify(graphForcevsZ, null, 2));
         console.log("graphForceIndentation:", JSON.stringify(graphForceIndentation, null, 2));
         console.log("graphElspectra:", JSON.stringify(graphElspectra, null, 2));
-  
+
         // Handle multi-curve data
         setForceData((prev) => [...prev, ...(graphForcevsZ?.curves || [])]);
         setIndentationData((prev) => [...prev, ...(graphForceIndentation?.curves || [])]);
         setElspectraData((prev) => [...prev, ...(graphElspectra?.curves || [])]);
-  
+
         // Update domain ranges
         setDomainRange((prev) => ({
           xMin: Math.min(prev.xMin, graphForcevsZ?.domain.xMin ?? Infinity),
@@ -175,14 +186,14 @@ const Dashboard = () => {
           yMin: Math.min(prev.yMin, graphForcevsZ?.domain.yMin ?? Infinity),
           yMax: Math.max(prev.yMax, graphForcevsZ?.domain.yMax ?? -Infinity),
         }));
-  
+
         setIndentationDomain((prev) => ({
           xMin: Math.min(prev.xMin, graphForceIndentation?.domain.xMin ?? Infinity),
           xMax: Math.max(prev.xMax, graphForceIndentation?.domain.xMax ?? -Infinity),
           yMin: Math.min(prev.yMin, graphForceIndentation?.domain.yMin ?? Infinity),
           yMax: Math.max(prev.yMax, graphForceIndentation?.domain.yMax ?? -Infinity),
         }));
-  
+
         setElspectraDomain((prev) => ({
           xMin: Math.min(prev.xMin, graphElspectra?.domain.xMin ?? Infinity),
           xMax: Math.max(prev.xMax, graphElspectra?.domain.xMax ?? -Infinity),
@@ -190,7 +201,7 @@ const Dashboard = () => {
           yMax: Math.max(prev.yMax, graphElspectra?.domain.yMax ?? -Infinity),
         }));
       }
-  
+
       if (response.status === "filter_defaults") {
         const { regular_filters, cp_filters, fmodels, emodels } = response.data;
         const cleanedRegularFilters = Object.fromEntries(
@@ -221,20 +232,18 @@ const Dashboard = () => {
         setCpDefaults(cleanedCpFilters);
         setFmodelDefaults(cleanedFmodels);
         setEmodelDefaults(cleanedEmodels);
-  
+
         console.log("Received filter defaults:", cleanedRegularFilters);
         console.log("Received CP filter defaults:", cleanedCpFilters);
       }
     };
-  
+
     socketRef.current.onclose = () => {
       console.log("WebSocket disconnected.");
+      initialRequestSent.current = false; // Allow reinitialization
     };
-  
-    return () => {
-      socketRef.current.close();
-    };
-  }, []);
+  }, [sendCurveRequest, setForceData, setIndentationData, setElspectraData, setDomainRange, setIndentationDomain, setElspectraDomain, setFilterDefaults, setCpDefaults, setFmodelDefaults, setEmodelDefaults]);
+
 
   // Send request when curveId changes
   useEffect(() => {
@@ -338,6 +347,15 @@ const Dashboard = () => {
     });
   };
 
+   const handleProcessSuccess = (result) => {
+    console.log('File processed successfully:', result);
+    if (result.curves) {
+      setNumCurves(result.curves); // e.g., 100 curves
+    }
+    initializeWebSocket(); // Initialize WebSocket connection
+    // sendCurveRequest will be called in onopen if initialRequestSent.current is false
+  };
+
   const handleNumCurvesChange = (value) => {
     console.log("new");
     const newValue = Math.max(1, Math.min(100, parseInt(value, 10)));
@@ -427,117 +445,171 @@ const Dashboard = () => {
     margin: isMobile ? "8px" : "10px",
     overflowY: isMobile ? "visible" : "auto",
   };
-  
+//   const handleOpenFile = async () => {
+//   const input = document.createElement('input');
+//   input.type = 'file';
+//   input.accept = '.json,.hdf5'; // Restrict to supported file types
+
+//   input.onchange = async (event) => {
+//     const file = event.target.files[0];
+//     if (!file) return;
+
+//     const formData = new FormData();
+//     formData.append("file", file);
+
+//     try {
+//       const response = await fetch("http://localhost:8090/load-experiment", {
+//         method: "POST",
+//         body: formData,
+//       });
+
+//       if (!response.ok) {
+//         throw new Error(`HTTP error! Status: ${response.status}`);
+//       }
+
+//       const result = await response.json();
+//       console.log("File read result:", result);
+
+//       // Display the message from the response
+//       alert(result.message || "File processed successfully");
+//     } catch (err) {
+//       console.error("Error uploading file:", err);
+//       alert(`Failed to open file: ${err.message}`);
+//     }
+//   };
+
+//   input.click();
+// };
+
   return (
     <div style={containerStyle}>
-    <div style={mainContentStyle}>
-      {/* Tab Navigation */}
-      <div style={tabNavStyle}>
-        <button
-          onClick={() => setActiveTab("forceDisplacement")}
-          style={buttonStyle(activeTab === "forceDisplacement")}
-        >
-          Force vs Displacement
-        </button>
-        <button
-          onClick={() => setActiveTab("forceIndentation")}
-          style={buttonStyle(activeTab === "forceIndentation")}
-        >
-          Force vs Indentation
-        </button>
-        <button
-          onClick={() => setActiveTab("elasticitySpectra")}
-          style={buttonStyle(activeTab === "elasticitySpectra")}
-        >
-          Elasticity Spectra
-        </button>
-      </div>
+      <div style={mainContentStyle}>
+        {/* Tab Navigation */}
+        <div style={{ ...tabNavStyle, display: 'flex', alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              onClick={() => setActiveTab("forceDisplacement")}
+              style={buttonStyle(activeTab === "forceDisplacement")}
+            >
+              Force vs Displacement
+            </button>
+            <button
+              onClick={() => setActiveTab("forceIndentation")}
+              style={buttonStyle(activeTab === "forceIndentation")}
+            >
+              Force vs Indentation
+            </button>
+            <button
+              onClick={() => setActiveTab("elasticitySpectra")}
+              style={buttonStyle(activeTab === "elasticitySpectra")}
+            >
+              Elasticity Spectra
+            </button>
+          </div>
 
-      {/* Filters Component */}
-      <div style={filtersContainerStyle}>
-        <FiltersComponent
-          filterDefaults={filterDefaults}
-          capitalizeFilterName={capitalizeFilterName}
-          cpDefaults={cpDefaults}
-          fModelDefaults={fModelDefaults}
+          {/* <button
+            onClick={handleOpenFile} // Define this handler elsewhere
+            style={{
+              marginLeft: '10%',
+              padding: '8px 16px',
+              backgroundColor: '#007bff',
+              color: '#fff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            Open File
+          </button> */}
+      <FileOpener onProcessSuccess={handleProcessSuccess} />
+        </div>
+
+
+        {/* Filters Component */}
+        <div style={filtersContainerStyle}>
+          <FiltersComponent
+            filterDefaults={filterDefaults}
+            capitalizeFilterName={capitalizeFilterName}
+            cpDefaults={cpDefaults}
+            fModelDefaults={fModelDefaults}
+            numCurves={numCurves}
+            regularFilters={regularFilters}
+            cpFilters={cpFilters}
+            fModels={fModels}
+            eModels={eModels}
+            eModelDefaults={eModelDefaults}
+            selectedEModels={selectedEModels}
+            setSelectedEModels={setSelectedEModels}
+            selectedRegularFilters={selectedRegularFilters}
+            selectedCpFilters={selectedCpFilters}
+            selectedFModels={selectedFModels}
+            setSelectedFModels={setselectedFModels}
+            handleNumCurvesChange={handleNumCurvesChange}
+            setSelectedRegularFilters={setSelectedRegularFilters}
+            setSelectedCpFilters={setSelectedCpFilters}
+            handleAddFilter={handleAddFilter}
+            handleRemoveFilter={handleRemoveFilter}
+            handleFilterChange={handleFilterChange}
+            sendCurveRequest={sendCurveRequest}
+            curveId={curveId}
+            setCurveId={setCurveId}
+            activeTab={activeTab}
+          />
+        </div>
+
+        {/* Tab Content */}
+        <div style={tabContentStyle}>
+          {activeTab === "forceDisplacement" && (
+            <div style={chartContainerStyle}>
+              <ForceDisplacementDataSet
+                forceData={forceData}
+                domainRange={domainRange}
+                onCurveSelect={handleForceDisplacementCurveSelect}
+                setSelectedCurveIds={setSelectedCurveIds}
+                selectedCurveIds={selectedCurveIds}
+                graphType={graphType}
+              />
+            </div>
+          )}
+
+          {activeTab === "forceIndentation" && (
+            <div style={chartContainerStyle}>
+              <ForceIndentationDataSet
+                forceData={indentationData}
+                domainRange={indentationDomain}
+                setSelectedCurveIds={setSelectedCurveIds}
+                onCurveSelect={handleForceDisplacementCurveSelect}
+                selectedCurveIds={selectedCurveIds}
+                graphType={graphType}
+              />
+            </div>
+          )}
+
+          {activeTab === "elasticitySpectra" && (
+            <div style={chartContainerStyle}>
+              <ElasticitySpectra
+                forceData={elspectraData}
+                domainRange={elspectraDomain}
+                setSelectedCurveIds={setSelectedCurveIds}
+                onCurveSelect={handleForceDisplacementCurveSelect}
+                selectedCurveIds={selectedCurveIds}
+                graphType={graphType}
+              />
+            </div>
+          )}
+        </div>
+        <CurveControlsComponent
           numCurves={numCurves}
-          regularFilters={regularFilters}
-          cpFilters={cpFilters}
-          fModels={fModels}
-          eModels={eModels}
-          eModelDefaults={eModelDefaults}
-          selectedEModels={selectedEModels}
-          setSelectedEModels={setSelectedEModels}
-          selectedRegularFilters={selectedRegularFilters}
-          selectedCpFilters={selectedCpFilters}
-          selectedFModels={selectedFModels}
-          setSelectedFModels={setselectedFModels}
           handleNumCurvesChange={handleNumCurvesChange}
-          setSelectedRegularFilters={setSelectedRegularFilters}
-          setSelectedCpFilters={setSelectedCpFilters}
-          handleAddFilter={handleAddFilter}
-          handleRemoveFilter={handleRemoveFilter}
-          handleFilterChange={handleFilterChange}
-          sendCurveRequest={sendCurveRequest}
           curveId={curveId}
           setCurveId={setCurveId}
-          activeTab={activeTab}
+          forceData={forceData}
+          selectedCurveIds={selectedCurveIds}
+          setSelectedCurveIds={setSelectedCurveIds}
+          setGraphType={setGraphType}
+          graphType={graphType}
         />
       </div>
-
-      {/* Tab Content */}
-      <div style={tabContentStyle}>
-        {activeTab === "forceDisplacement" && (
-          <div style={chartContainerStyle}>
-            <ForceDisplacementDataSet
-              forceData={forceData}
-              domainRange={domainRange}
-              onCurveSelect={handleForceDisplacementCurveSelect}
-              setSelectedCurveIds={setSelectedCurveIds}
-              selectedCurveIds={selectedCurveIds}
-              graphType={graphType}
-            />
-          </div>
-        )}
-
-        {activeTab === "forceIndentation" && (
-          <div style={chartContainerStyle}>
-            <ForceIndentationDataSet
-              forceData={indentationData}
-              domainRange={indentationDomain}
-              setSelectedCurveIds={setSelectedCurveIds}
-              onCurveSelect={handleForceDisplacementCurveSelect}
-              selectedCurveIds={selectedCurveIds}
-              graphType={graphType}
-            />
-          </div>
-        )}
-
-        {activeTab === "elasticitySpectra" && (
-          <div style={chartContainerStyle}>
-            <ElasticitySpectra
-              forceData={elspectraData}
-              domainRange={elspectraDomain}
-              setSelectedCurveIds={setSelectedCurveIds}
-              onCurveSelect={handleForceDisplacementCurveSelect}
-              selectedCurveIds={selectedCurveIds}
-              graphType={graphType}
-            />
-          </div>
-        )}
-      </div>
-      <CurveControlsComponent
-        numCurves={numCurves}
-        handleNumCurvesChange={handleNumCurvesChange}
-        curveId={curveId}
-        setCurveId={setCurveId}
-        forceData={forceData}
-        selectedCurveIds={selectedCurveIds}
-        setSelectedCurveIds={setSelectedCurveIds}
-        setGraphType={setGraphType}
-        graphType={graphType}
-      />
-    </div>    
     </div>
 
   );
