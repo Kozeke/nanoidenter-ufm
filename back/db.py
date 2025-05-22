@@ -8,95 +8,7 @@ from typing import Dict, Tuple, List
 from filters.register_all import register_filters
 import pandas as pd  # Ensure pandas is imported
 
-DB_PATH = "data/device_data.db"
-
-
-def transform_data_for_force_vs_z(hdf5_file):
-    """Transforms HDF5 data into Force vs Z format before saving."""
-    curves = {}  # ✅ Dictionary to store transformed data
-
-    for curve_name in hdf5_file.keys():  # Iterate over curves
-        curve_group = hdf5_file[curve_name]
-
-        for segment_name in curve_group.keys():  # Iterate over segments
-            segment_group = curve_group[segment_name]
-
-            if "Force" in segment_group and "Z" in segment_group:
-                force_values = segment_group["Force"][()].tolist()
-                z_values = segment_group["Z"][()].tolist()
-
-                # ✅ Ensure both arrays have the same length
-                min_length = min(len(z_values), len(force_values))
-                if min_length == 0:
-                    continue  # Skip empty curves
-
-                curves[curve_name] = {
-                    "x": z_values[:min_length],  
-                    "y": force_values[:min_length]
-                }
-
-    return curves
-
-def save_to_duckdb(transformed_data: Dict[str, Dict[str, List[float]]], db_path: str) -> None:
-    """
-    Saves transformed Force vs Z data into DuckDB in bulk with curve_id.
-
-    Args:
-        transformed_data: Dictionary with curve_name as key and {'x': z_values, 'y': force_values} as value
-        db_path: Path to DuckDB database file
-    """
-    print("🚀 Saving transformed data to DuckDB...")
-
-    # Establish connection
-    
-    conn = duckdb.connect(db_path)
-    register_filters(conn)  # Uncomment if you have filter registration
-    # Set up filters
-    # conn.create_function("median_filter_array", median_filter_array, return_type="DOUBLE[]")
-    # setup_filters(conn)
-    
-    try:
-        # Create table with curve_id (if not exists)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS force_vs_z (
-                curve_id INTEGER PRIMARY KEY,  -- Added integer curve_id as primary key
-                curve_name TEXT UNIQUE,        -- Keep curve_name as unique text
-                z_values DOUBLE[],             -- Store Z points as array
-                force_values DOUBLE[]          -- Store Force points as array
-            )
-        """)
-
-        # Prepare batch data with curve_id
-        batch_data: List[Tuple[int, str, List[float], List[float]]] = [
-            (i, curve_name, values["x"], values["y"])
-            for i, (curve_name, values) in enumerate(transformed_data.items())
-        ]
-
-        # Bulk insert with executemany
-        conn.executemany(
-            "INSERT INTO force_vs_z (curve_id, curve_name, z_values, force_values) VALUES (?, ?, ?, ?)",
-            batch_data
-        )
-
-        # Verify row count (optional, for debugging)
-        row_count = conn.execute("SELECT COUNT(*) FROM force_vs_z").fetchone()[0]
-        print(f"✅ Inserted {row_count} rows into {db_path}!")
-
-    except duckdb.Error as e:
-        print(f"❌ DuckDB error: {e}")
-        raise
-    finally:
-        conn.close()
-        
-def transform_hdf5_to_db(hdf5_path, db_path):
-    """Reads HDF5, transforms it, and saves the result into DuckDB."""
-    print("🚀 Processing HDF5 file...")
-    
-    with h5py.File(hdf5_path, "r") as f:
-        transformed_data = transform_data_for_force_vs_z(f)
-
-    save_to_duckdb(transformed_data, db_path)
-    print("✅ HDF5 to DuckDB transformation complete!")
+DB_PATH = "data/all.db"
 
 
 def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict, single = False) -> Tuple[List[Dict], Dict]:
@@ -244,9 +156,10 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         
         curves_cp = []
         curves_el = []
+        print("result batch", result_batch)
         for row in result_batch:
             curve_id, indentation_result, elspectra_result, hertz_result, elastic_result = row
-            
+            print("indentation_result",indentation_result)
             if indentation_result is not None:
                 zi, fi = indentation_result
                 curves_cp.append({
@@ -255,7 +168,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                     "y": fi
                 })
                 if hertz_result is not None and fmodels and single:
-                    # print("hertz_result", len(hertz_result))
+                    print("hertz_result", len(hertz_result))
                     x, y = hertz_result
                     # print(len(x),len(y))
                     curves_cp.append({

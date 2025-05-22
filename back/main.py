@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import json
 import duckdb
 import os
-from db import transform_hdf5_to_db
+# from db import transform_hdf5_to_db
 from filters.register_all import register_filters
 from db import fetch_curves_batch
 import asyncio
@@ -16,16 +16,16 @@ app = FastAPI()
 # Enable CORS for frontend requests
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://nanoidenter-ufm-front-end.onrender.com/"],
-    # allow_origins=["*"],  
+    # allow_origins=["https://nanoidenter-ufm-front-end.onrender.com/"],
+    allow_origins=["*"],  
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Paths
-HDF5_FILE_PATH = "data/device_data.hdf5"  # HDF5 file path
-DB_PATH = "data/device_data.db"  # DuckDB database file
+HDF5_FILE_PATH = "data/all.hdf5"  # HDF5 file path
+DB_PATH = "data/experiment.db"  # DuckDB database file
 BATCH_SIZE = 10  # Process 10 curves per batch (adjust based on your needs)
 MAX_WORKERS = 8  # Number of parallel workers (tune based on CPU cores)
 
@@ -272,9 +272,103 @@ async def process_and_stream_batch(
 async def startup_event():
     """Load HDF5 data into DuckDB and set up filters when the server starts."""
     # Check if DB needs initialization
-    if not os.path.exists(DB_PATH) or os.stat(DB_PATH).st_size == 0:
-        print("🚀 Loading HDF5 data into DuckDB...")
-        transform_hdf5_to_db(HDF5_FILE_PATH, DB_PATH)
-    else:
-        print("✅ DuckDB database already exists, skipping reload.")
+    # if not os.path.exists(DB_PATH) or os.stat(DB_PATH).st_size == 0:
+    #     print("🚀 Loading HDF5 data into DuckDB...")
+    #     transform_hdf5_to_db(HDF5_FILE_PATH, DB_PATH)
+    # else:
+    #     print("✅ DuckDB database already exists, skipping reload.")
     print("✅ Startup complete.")
+
+
+from opener import detect_file_type, load_experiment
+from fastapi import FastAPI, UploadFile, HTTPException
+from pydantic import BaseModel
+
+# Pydantic model for response
+class ExperimentResponse(BaseModel):
+    status: str
+    message: str
+    curves: int
+    filename: str
+    duckdb_status: str
+    spring_constant: float = None
+    tip_radius_um: float = None
+
+from file_types.json import read_json, transform_data_for_force_vs_z_json
+from openers.hdf5_opener import HDF5Opener
+from openers.json_opener import JSONOpener
+from storage.duckdb_storage import save_to_duckdb
+from transform.transform import transform_data
+from typing import Dict, List, Any
+from file_types.hdf5 import get_hdf5_structure, process_hdf5
+from file_types.json import get_json_structure
+from fastapi import FastAPI, File, UploadFile
+
+
+@app.post("/load-experiment")
+async def load_experiment_endpoint(file: UploadFile = File(...)):
+    """Handle file upload and return file structure."""
+    file_path = os.path.join("uploads", file.filename)
+    os.makedirs("uploads", exist_ok=True)
+    
+    try:
+        with open(file_path, "wb") as f:
+            f.write(await file.read())
+
+        file_type = detect_file_type(file_path)
+        if file_type == "json":
+            with open(file_path, "r") as f:
+                json_data = json.load(f)
+            structure = get_json_structure(json_data)
+            return {
+                "status": "structure",
+                "message": "Select dataset paths and metadata",
+                "filename": file_path,
+                "file_type": "json",
+                "structure": structure
+            }
+        elif file_type == "hdf5":
+            structure = get_hdf5_structure(file_path)
+            return {
+                "status": "structure",
+                "message": "Select dataset paths and metadata",
+                "filename": file_path,
+                "file_type": "hdf5",
+                "structure": structure
+            }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
+
+@app.post("/process-file")
+async def process_file_endpoint(data: Dict[str, Any]):
+    """Process file with user-selected dataset paths and metadata."""
+    file_path = data.get("file_path")
+    file_type = data.get("file_type")
+    force_path = data.get("force_path")
+    z_path = data.get("z_path")
+    metadata = data.get("metadata", {})
+    print("process file", force_path, z_path)
+    if not all([file_path, file_type, force_path, z_path]):
+        raise HTTPException(status_code=400, detail="Missing file_path, file_type, force_path, or z_path")
+
+    try:
+        if file_type == "json":
+            with open(file_path, "r") as f:
+                json_data = json.load(f)
+            curves = transform_data_for_force_vs_z_json(json_data, force_path, z_path, metadata)
+        elif file_type == "hdf5":
+            curves = process_hdf5(file_path, force_path, z_path, metadata)
+        else:
+            raise ValueError(f"Unsupported file type: {file_type}")
+
+        transformed_curves = transform_data(curves)
+        db_path = "data/experiment.db"
+        save_to_duckdb(transformed_curves, db_path)
+        return {
+            "status": "success",
+            "message": f"{file_type.upper()} file processed",
+            "curves": len(curves),
+            "filename": file_path
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")

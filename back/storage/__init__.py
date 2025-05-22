@@ -1,0 +1,1 @@
+from .duckdb_storage import save_to_duckdb
