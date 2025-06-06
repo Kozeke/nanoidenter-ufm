@@ -2,6 +2,18 @@ from typing import Dict
 from file_types.hdf5 import read_hdf5
 from models.force_curve import ForceCurve
 from .base import Opener
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("hdf5_processing.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 class HDF5Opener(Opener):
     def open(self, file_path: str) -> Dict[str, ForceCurve]:
@@ -9,4 +21,18 @@ class HDF5Opener(Opener):
 
     def validate_metadata(self, metadata: Dict) -> bool:
         mandatory_fields = ["file_id", "date", "instrument", "sample", "spring_constant", "inv_ols", "tip_geometry", "tip_radius"]
-        return all(k in metadata for k in mandatory_fields)
+        try:
+            for field in mandatory_fields:
+                if field not in metadata or metadata[field] is None:
+                    logger.warning(f"Missing or None metadata field: {field}")
+                    return False
+                if field in ["spring_constant", "inv_ols", "tip_radius"] and not isinstance(metadata[field], (int, float)):
+                    logger.warning(f"Invalid type for {field}: expected number, got {type(metadata[field])}")
+                    return False
+                if field in ["spring_constant", "inv_ols", "tip_radius"] and float(metadata[field]) <= 0:
+                    logger.warning(f"Invalid value for {field}: must be positive, got {metadata[field]}")
+                    return False
+            return True
+        except Exception as e:
+            logger.error(f"Metadata validation error: {str(e)}")
+            return False

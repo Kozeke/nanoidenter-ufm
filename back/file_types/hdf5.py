@@ -1,7 +1,9 @@
 import h5py
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 import numpy as np
 from models.force_curve import ForceCurve, Segment
+import logging
+import os
 
 def read_hdf5(file_path: str) -> Dict[str, ForceCurve]:
     """Read HDF5 file interactively to select dataset paths, then process all curves."""
@@ -149,106 +151,225 @@ def transform_data_for_force_vs_z(hdf5_file: h5py.File, file_path: str) -> Dict[
 import h5py
 from typing import Dict, List, Any
 import numpy as np
-from models.force_curve import ForceCurve, Segment
 
 def get_hdf5_structure(file_path: str) -> Dict[str, Any]:
     """Return the HDF5 file structure as a nested dictionary for frontend display."""
-    structure = {"groups": {}, "datasets": []}
+    structure = {"groups": {}, "datasets": [], "attributes": {}}
     
     def collect_items(group: h5py.Group, path: str = "", parent_dict: Dict = structure["groups"]):
-        # Initialize datasets list for this group if not present
         if "datasets" not in parent_dict:
             parent_dict["datasets"] = []
-        
+        if "attributes" not in parent_dict:
+            parent_dict["attributes"] = {}
+
+        # Collect group attributes
+        for attr_name, attr_value in group.attrs.items():
+            try:
+                if isinstance(attr_value, np.ndarray):
+                    attr_value = attr_value.tolist()
+                elif isinstance(attr_value, (np.integer, np.floating)):
+                    attr_value = float(attr_value) if isinstance(attr_value, np.floating) else int(attr_value)
+                elif isinstance(attr_value, bytes):
+                    attr_value = attr_value.decode('utf-8')
+                parent_dict["attributes"][attr_name] = attr_value
+            except Exception as e:
+                print(f"Warning: Skipping attribute {attr_name} at {path}: {e}")
+
         for name, item in group.items():
             new_path = f"{path}/{name}" if path else name
             try:
                 if isinstance(item, h5py.Group):
-                    parent_dict[name] = {"groups": {}, "datasets": []}
+                    parent_dict[name] = {"groups": {}, "datasets": [], "attributes": {}}
+                    print(f"Processing group: {new_path}")
                     collect_items(item, new_path, parent_dict[name]["groups"])
                 elif isinstance(item, h5py.Dataset):
-                    parent_dict["datasets"].append({
+                    dataset_info = {
                         "path": new_path,
                         "name": name,
-                        "shape": list(item.shape),  # Convert tuple to list for JSON
-                        "dtype": str(item.dtype)
-                    })
-                # Ignore other item types (e.g., attributes)
+                        "shape": list(item.shape),
+                        "dtype": str(item.dtype),
+                        "attributes": {}
+                    }
+                    for attr_name, attr_value in item.attrs.items():
+                        try:
+                            if isinstance(attr_value, np.ndarray):
+                                attr_value = attr_value.tolist()
+                            elif isinstance(attr_value, (np.integer, np.floating)):
+                                attr_value = float(attr_value) if isinstance(attr_value, np.floating) else int(attr_value)
+                            elif isinstance(attr_value, bytes):
+                                attr_value = attr_value.decode('utf-8')
+                            dataset_info["attributes"][attr_name] = attr_value
+                        except Exception as e:
+                            print(f"Warning: Skipping dataset attribute {attr_name} at {new_path}: {e}")
+                    parent_dict["datasets"].append(dataset_info)
+                    print(f"Found dataset: {new_path}, Shape: {item.shape}, Dtype: {item.dtype}")
             except Exception as e:
-                print(f"Warning: Skipping item {new_path} due to error: {e}")
-                continue
-    
+                print(f"Error processing item {new_path}: {e}")
+
     try:
         with h5py.File(file_path, "r") as f:
+            print(f"Opening HDF5 file: {file_path}")
             collect_items(f)
+            print(f"Final structure: {structure}")
     except Exception as e:
         raise ValueError(f"Failed to read HDF5 structure: {e}")
     
     return structure
 
-def process_hdf5(file_path: str, force_path: str, z_path: str, metadata: Dict[str, Any]) -> Dict[str, ForceCurve]:
-    """Process all curves in HDF5 file using user-selected dataset paths and metadata."""
-    curves = {}
-    
-    with h5py.File(file_path, "r") as f:
-        # List top-level curve groups
-        curve_groups = [(name, item) for name, item in f.items() if isinstance(item, h5py.Group)]
-        if not curve_groups:
-            raise ValueError("No curve groups found in HDF5")
 
-        # Extract relative paths (e.g., segment0/Force)
-        sample_curve_name = curve_groups[0][0]
-        if not (force_path.startswith(f"{sample_curve_name}/") and z_path.startswith(f"{sample_curve_name}/")):
-            raise ValueError("Selected paths must belong to a curve group")
-        
-        force_relative_path = force_path[len(sample_curve_name) + 1:]
-        z_relative_path = z_path[len(sample_curve_name) + 1:]
-        print("force_relative_path", force_relative_path)
-        print("z_relative_path", z_relative_path)
-        # Process all curves
-        for curve_name, curve_group in curve_groups:
-            try:
-                force_dataset = curve_group[force_relative_path]
-                z_dataset = curve_group[z_relative_path]
-                
-                deflection = force_dataset[()]
-                z_sensor = z_dataset[()]
-                min_length = min(len(deflection), len(z_sensor))
-                if min_length == 0:
-                    print(f"Warning: Skipping {curve_name} due to empty Force or Z data")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("hdf5_processing.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+def validate_dataset(dataset: h5py.Dataset, path: str) -> None:
+    """Validate that a dataset is non-empty and has a compatible shape."""
+    if not isinstance(dataset, h5py.Dataset):
+        raise ValueError(f"{path} is not a dataset")
+    if dataset.size == 0:
+        raise ValueError(f"Dataset {path} is empty")
+    if len(dataset.shape) != 1:
+        raise ValueError(f"Dataset {path} must be 1D, got shape {dataset.shape}")
+
+def process_hdf5(file_path: str, force_path: str, z_path: str, metadata: Dict[str, Any]) -> Dict[str, ForceCurve]:
+    """Process all curves in HDF5 file with validation and error handling."""
+    # Validate file
+    if not os.path.exists(file_path):
+        logger.error(f"File not found: {file_path}")
+        raise ValueError(f"File not found: {file_path}")
+    
+    curves = {}
+    try:
+        with h5py.File(file_path, "r") as f:
+            # Validate curve groups
+            curve_groups = [(name, item) for name, item in f.items() if isinstance(item, h5py.Group)]
+            if not curve_groups:
+                logger.error("No curve groups found in HDF5 file")
+                raise ValueError("No curve groups found in HDF5")
+
+            # Validate dataset paths
+            sample_curve_name = curve_groups[0][0]
+            if not (force_path.startswith(f"{sample_curve_name}/") and z_path.startswith(f"{sample_curve_name}/")):
+                logger.error(f"Invalid paths: force_path={force_path}, z_path={z_path} must start with {sample_curve_name}/")
+                raise ValueError("Selected paths must belong to a curve group")
+
+            force_relative_path = force_path[len(sample_curve_name) + 1:]
+            z_relative_path = z_path[len(sample_curve_name) + 1:]
+            logger.info(f"Using relative paths: Force={force_relative_path}, Z={z_relative_path}")
+
+            # Process each curve
+            for curve_name, curve_group in curve_groups:
+                try:
+                    # Validate datasets
+                    force_dataset = curve_group[force_relative_path]
+                    z_dataset = curve_group[z_relative_path]
+                    validate_dataset(force_dataset, force_path)
+                    validate_dataset(z_dataset, z_path)
+
+                    # Validate data compatibility
+                    deflection = np.array(force_dataset[()])
+                    z_sensor = np.array(z_dataset[()])
+                    min_length = min(len(deflection), len(z_sensor))
+                    if min_length == 0:
+                        logger.warning(f"Skipping {curve_name}: Empty Force or Z data")
+                        continue
+
+                    # Validate metadata
+                    validated_metadata = validate_and_fill_metadata(metadata, curve_name)
+
+                    # Create segment
+                    segments = [
+                        Segment(
+                            type="approach",
+                            deflection=deflection[:min_length],
+                            z_sensor=z_sensor[:min_length],
+                            sampling_rate=float(validated_metadata.get("sampling_rate", 1e5)),
+                            velocity=float(validated_metadata.get("velocity", 1e-6)),
+                            no_points=min_length
+                        )
+                    ]
+
+                    # Validate segment data
+                    if not all(np.isfinite(segments[0].deflection)) or not all(np.isfinite(segments[0].z_sensor)):
+                        logger.warning(f"Skipping {curve_name}: Invalid data (non-finite values)")
+                        continue
+
+                    curves[curve_name] = ForceCurve(
+                        file_id=validated_metadata["file_id"],
+                        date=validated_metadata["date"],
+                        instrument=validated_metadata["instrument"],
+                        sample=validated_metadata["sample"],
+                        spring_constant=float(validated_metadata["spring_constant"]),
+                        inv_ols=float(validated_metadata["inv_ols"]),
+                        tip_geometry=validated_metadata["tip_geometry"],
+                        tip_radius=float(validated_metadata["tip_radius"]),
+                        segments=segments
+                    )
+                    logger.info(f"Processed curve: {curve_name}")
+                except KeyError as e:
+                    logger.warning(f"Skipping {curve_name} due to missing dataset: {e}")
+                    continue
+                except Exception as e:
+                    logger.error(f"Error processing {curve_name}: {str(e)}")
                     continue
 
-                segments = [
-                    Segment(
-                        type="approach",
-                        deflection=np.array(deflection[:min_length]),
-                        z_sensor=np.array(z_sensor[:min_length]),
-                        sampling_rate=float(metadata.get("sampling_rate", 1e5)),
-                        velocity=float(metadata.get("velocity", 1e-6)),
-                        no_points=min_length
-                    )
-                ]
+        if not curves:
+            logger.error("No valid Force and Z datasets found in HDF5")
+            raise ValueError("No valid Force and Z datasets found in HDF5")
 
-                curves[curve_name] = ForceCurve(
-                    file_id=metadata.get("file_id", "file_0"),
-                    date=metadata.get("date", "2025-05-20"),
-                    instrument=metadata.get("instrument", "unknown"),
-                    sample=metadata.get("sample", "unknown"),
-                    spring_constant=float(metadata.get("spring_constant", 0.1)),
-                    inv_ols=float(metadata.get("inv_ols", 22e-9)),
-                    tip_geometry=metadata.get("tip_geometry", "pyramid"),
-                    tip_radius=float(metadata.get("tip_radius", 1e-6)),
-                    segments=segments
-                )
-            except KeyError as e:
-                print(f"Warning: Skipping {curve_name} due to missing dataset: {e}")
-                continue
-            except Exception as e:
-                print(f"Warning: Skipping {curve_name} due to error: {e}")
-                continue
+        logger.info(f"Processed {len(curves)} curves: {list(curves.keys())[:5]}{'...' if len(curves) > 5 else ''}")
+        return curves
+    except Exception as e:
+        logger.error(f"Failed to process HDF5 file {file_path}: {str(e)}")
+        raise
+    
+    
+    
+def validate_and_fill_metadata(metadata: Dict, curve_name: str) -> Dict:
+    """Validate metadata and fill missing fields with defaults or inferred values."""
+    defaults = {
+        "file_id": "file_0",
+        "date": "2025-05-20",
+        "instrument": "unknown",
+        "sample": "unknown",
+        "spring_constant": 0.1,
+        "inv_ols": 22e-9,
+        "tip_geometry": "pyramid",
+        "tip_radius": 1e-6,
+        "sampling_rate": 1e5,
+        "velocity": 1e-6
+    }
+    validated_metadata = metadata.copy()
+    
+    for key, default in defaults.items():
+        if key not in validated_metadata or validated_metadata[key] is None:
+            logger.warning(f"Missing metadata field {key} for {curve_name}, using default: {default}")
+            validated_metadata[key] = default
+        elif key in ["spring_constant", "inv_ols", "tip_radius", "sampling_rate", "velocity"]:
+            try:
+                validated_metadata[key] = float(validated_metadata[key])
+                if validated_metadata[key] <= 0:
+                    logger.warning(f"Invalid {key} for {curve_name}: {validated_metadata[key]}, using default: {default}")
+                    validated_metadata[key] = default
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid type for {key} in {curve_name}: {validated_metadata[key]}, using default: {default}")
+                validated_metadata[key] = default
 
-    if not curves:
-        raise ValueError("No valid Force and Z datasets found in HDF5")
+    # Optional: Infer sampling_rate from dataset attributes if available
+    try:
+        with h5py.File(metadata.get("file_path", ""), "r") as f:
+            if "sampling_rate" in f.attrs and validated_metadata["sampling_rate"] == defaults["sampling_rate"]:
+                validated_metadata["sampling_rate"] = float(f.attrs["sampling_rate"])
+                logger.info(f"Inferred sampling_rate for {curve_name}: {validated_metadata['sampling_rate']}")
+    except Exception:
+        pass  # Fallback to default if inference fails
 
-    print(f"Processed {len(curves)} curves: {list(curves.keys())[:5]}{'...' if len(curves) > 5 else ''}")
-    return curves
+    return validated_metadata
+

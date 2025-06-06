@@ -303,7 +303,20 @@ from typing import Dict, List, Any
 from file_types.hdf5 import get_hdf5_structure, process_hdf5
 from file_types.json import get_json_structure
 from fastapi import FastAPI, File, UploadFile
+import json
+import os
+import logging
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("hdf5_processing.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 @app.post("/load-experiment")
 async def load_experiment_endpoint(file: UploadFile = File(...)):
@@ -320,24 +333,29 @@ async def load_experiment_endpoint(file: UploadFile = File(...)):
             with open(file_path, "r") as f:
                 json_data = json.load(f)
             structure = get_json_structure(json_data)
-            return {
-                "status": "structure",
-                "message": "Select dataset paths and metadata",
-                "filename": file_path,
-                "file_type": "json",
-                "structure": structure
-            }
         elif file_type == "hdf5":
             structure = get_hdf5_structure(file_path)
-            return {
-                "status": "structure",
-                "message": "Select dataset paths and metadata",
-                "filename": file_path,
-                "file_type": "hdf5",
-                "structure": structure
-            }
+        else:
+            logger.error(f"Unsupported file type: {file_type}")
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {file_type}")
+
+        logger.info(f"Loaded file structure for {file_path} (type: {file_type})")
+        return {
+            "status": "structure",
+            "message": "Select dataset paths and metadata",
+            "filename": file_path,
+            "file_type": file_type,
+            "structure": structure,
+            "errors": []
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
+        logger.error(f"Failed to process file {file.filename}: {str(e)}")
+        raise HTTPException(status_code=500, detail={
+            "status": "error",
+            "message": f"Failed to process file: {str(e)}",
+            "filename": file.filename,
+            "errors": [str(e)]
+        })
 
 @app.post("/process-file")
 async def process_file_endpoint(data: Dict[str, Any]):
@@ -347,9 +365,17 @@ async def process_file_endpoint(data: Dict[str, Any]):
     force_path = data.get("force_path")
     z_path = data.get("z_path")
     metadata = data.get("metadata", {})
-    print("process file", force_path, z_path)
+    errors = []
+
     if not all([file_path, file_type, force_path, z_path]):
-        raise HTTPException(status_code=400, detail="Missing file_path, file_type, force_path, or z_path")
+        errors.append("Missing file_path, file_type, force_path, or z_path")
+        logger.error(f"Missing required fields: {errors}")
+        raise HTTPException(status_code=400, detail={
+            "status": "error",
+            "message": "Missing required fields",
+            "filename": file_path or "unknown",
+            "errors": errors
+        })
 
     try:
         if file_type == "json":
@@ -357,18 +383,39 @@ async def process_file_endpoint(data: Dict[str, Any]):
                 json_data = json.load(f)
             curves = transform_data_for_force_vs_z_json(json_data, force_path, z_path, metadata)
         elif file_type == "hdf5":
+            opener = HDF5Opener()
+            if not opener.validate_metadata(metadata):
+                errors.append("Invalid or incomplete metadata")
+                logger.error(f"Metadata validation failed: {metadata}")
+                raise ValueError("Invalid or incomplete metadata")
             curves = process_hdf5(file_path, force_path, z_path, metadata)
         else:
+            errors.append(f"Unsupported file type: {file_type}")
+            logger.error(f"Unsupported file type: {file_type}")
             raise ValueError(f"Unsupported file type: {file_type}")
 
         transformed_curves = transform_data(curves)
         db_path = "data/experiment.db"
         save_to_duckdb(transformed_curves, db_path)
+        logger.info(f"Saved {len(curves)} curves to DuckDB at {db_path}")
+
         return {
             "status": "success",
             "message": f"{file_type.upper()} file processed",
             "curves": len(curves),
-            "filename": file_path
+            "filename": file_path,
+            "duckdb_status": "saved",
+            "spring_constant": float(metadata.get("spring_constant", 0.1)),
+            "tip_radius_um": float(metadata.get("tip_radius", 1e-6)) * 1e6,
+            "errors": errors
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
+        errors.append(str(e))
+        logger.error(f"Failed to process file {file_path}: {str(e)}")
+        raise HTTPException(status_code=500, detail={
+            "status": "error",
+            "message": f"Failed to process file: {str(e)}",
+            "filename": file_path,
+            "errors": errors
+        })
+
