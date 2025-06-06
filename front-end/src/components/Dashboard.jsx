@@ -7,7 +7,7 @@ import CurveControlsComponent from "./CurveControlsComponent";
 import FileOpener from "./FileOpener";
 
 const WEBSOCKET_URL =
-  process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8090/ws/data";
+  process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8000/ws/data";
 
 const Dashboard = () => {
   const [forceData, setForceData] = useState([]); // For DataSet graph
@@ -21,6 +21,7 @@ const Dashboard = () => {
   const [eModelDefaults, setEmodelDefaults] = useState([]);
   const [selectedCurveIds, setSelectedCurveIds] = useState([]);
   const [graphType, setGraphType] = useState("line"); // Default to line
+const [filename, setFilename] = useState("");
 
   const [domainRange, setDomainRange] = useState({
     xMin: Infinity,
@@ -59,7 +60,7 @@ const Dashboard = () => {
   const [curveId, setCurveId] = useState("");
   const prevFiltersRef = useRef({ regular: null, cp: null });
   const prevNumCurvesRef = useRef(1); // Initialize with default numCurves
-
+  const [forceRequest, setForceRequest] = useState(false);
   // Helper to capitalize filter names for display
   const capitalizeFilterName = (name) => {
     return (
@@ -79,7 +80,7 @@ const Dashboard = () => {
     // setCurveId(isNaN(parsedCurveId) ? null : parsedCurveId);
   };
   const sendCurveRequest = useCallback(() => {
-    console.log("sendcurve");
+    console.log("sendcurve", forceRequest);
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
       const areFiltersEqual = (prev, current) => {
         return JSON.stringify(prev) === JSON.stringify(current);
@@ -109,8 +110,8 @@ const Dashboard = () => {
         yMax: -Infinity,
       };
 
-      if (filtersChanged || numCurvesChanged) {
-        console.log("filters changed");
+      if (filtersChanged || numCurvesChanged || forceRequest) {
+        console.log("Request triggered: filtersChanged:", filtersChanged, "numCurvesChanged:", numCurvesChanged, "forceRequest:", forceRequest);
         setForceData([]);
         setIndentationData([]);
         setElspectraData([]);
@@ -130,21 +131,23 @@ const Dashboard = () => {
           filters_changed: true,
         };
         socketRef.current.send(JSON.stringify(requestData));
+
+        prevFiltersRef.current = {
+          regular: regularFilters,
+          cp: cpFilters,
+          f_models: fModels,
+          e_models: eModels,
+        };
+        prevNumCurvesRef.current = numCurves;
+        setForceRequest(false); // Reset after sending
       }
-
-      prevFiltersRef.current = {
-        regular: regularFilters,
-        cp: cpFilters,
-        f_models: fModels,
-        e_models: eModels,
-      };
     }
-  }, [curveId, numCurves, regularFilters, cpFilters, fModels, eModels]);
+  }, [curveId, numCurves, regularFilters, cpFilters, fModels, eModels, forceRequest]);
 
-  useEffect(() => {
-    console.log("useEffect: Initializing WebSocket");
-    initializeWebSocket()
-  }, []);
+  // useEffect(() => {
+  //   console.log("useEffect: Initializing WebSocket");
+  //   initializeWebSocket()
+  // }, []);
 
   const initializeWebSocket = useCallback(() => {
     console.log("initializeWebSocket: Initializing WebSocket");
@@ -157,22 +160,22 @@ const Dashboard = () => {
     socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
     socketRef.current.onopen = () => {
       console.log("WebSocket connected.");
-      if (!initialRequestSent.current) {
-        sendCurveRequest();
-        initialRequestSent.current = true;
-      }
+      // if (!initialRequestSent.current) {
+      //   sendCurveRequest();
+      //   initialRequestSent.current = true;
+      // }
     };
 
     socketRef.current.onmessage = (event) => {
       const response = JSON.parse(event.data);
-      console.log("WebSocket response:", JSON.stringify(response, null, 2));
+      // console.log("WebSocket response:", JSON.stringify(response, null, 2));
 
       if (response.status === "batch" && response.data) {
         const { graphForcevsZ, graphForceIndentation, graphElspectra } = response.data;
 
-        console.log("graphForcevsZ:", JSON.stringify(graphForcevsZ, null, 2));
-        console.log("graphForceIndentation:", JSON.stringify(graphForceIndentation, null, 2));
-        console.log("graphElspectra:", JSON.stringify(graphElspectra, null, 2));
+        // console.log("graphForcevsZ:", JSON.stringify(graphForcevsZ, null, 2));
+        // console.log("graphForceIndentation:", JSON.stringify(graphForceIndentation, null, 2));
+        // console.log("graphElspectra:", JSON.stringify(graphElspectra, null, 2));
 
         // Handle multi-curve data
         setForceData((prev) => [...prev, ...(graphForcevsZ?.curves || [])]);
@@ -242,7 +245,7 @@ const Dashboard = () => {
       console.log("WebSocket disconnected.");
       initialRequestSent.current = false; // Allow reinitialization
     };
-  }, [sendCurveRequest, setForceData, setIndentationData, setElspectraData, setDomainRange, setIndentationDomain, setElspectraDomain, setFilterDefaults, setCpDefaults, setFmodelDefaults, setEmodelDefaults]);
+  }, []);
 
 
   // Send request when curveId changes
@@ -347,14 +350,27 @@ const Dashboard = () => {
     });
   };
 
-   const handleProcessSuccess = (result) => {
-    console.log('File processed successfully:', result);
-    if (result.curves) {
-      setNumCurves(result.curves); // e.g., 100 curves
-    }
-    initializeWebSocket(); // Initialize WebSocket connection
-    // sendCurveRequest will be called in onopen if initialRequestSent.current is false
+  const handleProcessSuccess = (result) => {
+  console.log('File processed successfully:', result);
+  setForceData([]);
+  setIndentationData([]);
+  setElspectraData([]);
+  setDomainRange({ xMin: Infinity, xMax: -Infinity, yMin: Infinity, yMax: -Infinity });
+  setIndentationDomain({ xMin: Infinity, xMax: -Infinity, yMin: Infinity, yMax: -Infinity });
+  setElspectraDomain({ xMin: Infinity, xMax: -Infinity, yMin: Infinity, yMax: -Infinity });
+  if (result.curves) {
+    setNumCurves(result.curves);
+  }
+  setFilename(result.filename || ""); // Set filename from result
+  setForceRequest(true);
+  initialRequestSent.current = false;
+  initializeWebSocket();
+  socketRef.current.onopen = () => {
+    console.log("WebSocket connected in handleProcessSuccess.");
+    sendCurveRequest();
   };
+};
+
 
   const handleNumCurvesChange = (value) => {
     console.log("new");
@@ -445,41 +461,41 @@ const Dashboard = () => {
     margin: isMobile ? "8px" : "10px",
     overflowY: isMobile ? "visible" : "auto",
   };
-//   const handleOpenFile = async () => {
-//   const input = document.createElement('input');
-//   input.type = 'file';
-//   input.accept = '.json,.hdf5'; // Restrict to supported file types
+  //   const handleOpenFile = async () => {
+  //   const input = document.createElement('input');
+  //   input.type = 'file';
+  //   input.accept = '.json,.hdf5'; // Restrict to supported file types
 
-//   input.onchange = async (event) => {
-//     const file = event.target.files[0];
-//     if (!file) return;
+  //   input.onchange = async (event) => {
+  //     const file = event.target.files[0];
+  //     if (!file) return;
 
-//     const formData = new FormData();
-//     formData.append("file", file);
+  //     const formData = new FormData();
+  //     formData.append("file", file);
 
-//     try {
-//       const response = await fetch("http://localhost:8090/load-experiment", {
-//         method: "POST",
-//         body: formData,
-//       });
+  //     try {
+  //       const response = await fetch("http://localhost:8090/load-experiment", {
+  //         method: "POST",
+  //         body: formData,
+  //       });
 
-//       if (!response.ok) {
-//         throw new Error(`HTTP error! Status: ${response.status}`);
-//       }
+  //       if (!response.ok) {
+  //         throw new Error(`HTTP error! Status: ${response.status}`);
+  //       }
 
-//       const result = await response.json();
-//       console.log("File read result:", result);
+  //       const result = await response.json();
+  //       console.log("File read result:", result);
 
-//       // Display the message from the response
-//       alert(result.message || "File processed successfully");
-//     } catch (err) {
-//       console.error("Error uploading file:", err);
-//       alert(`Failed to open file: ${err.message}`);
-//     }
-//   };
+  //       // Display the message from the response
+  //       alert(result.message || "File processed successfully");
+  //     } catch (err) {
+  //       console.error("Error uploading file:", err);
+  //       alert(`Failed to open file: ${err.message}`);
+  //     }
+  //   };
 
-//   input.click();
-// };
+  //   input.click();
+  // };
 
   return (
     <div style={containerStyle}>
@@ -507,21 +523,23 @@ const Dashboard = () => {
             </button>
           </div>
 
-          {/* <button
-            onClick={handleOpenFile} // Define this handler elsewhere
+
+          <FileOpener onProcessSuccess={handleProcessSuccess} />
+          <button
+            disabled
             style={{
-              marginLeft: '10%',
+              marginLeft: 'auto',
+              marginRight: '150px',
               padding: '8px 16px',
-              backgroundColor: '#007bff',
-              color: '#fff',
+              backgroundColor: 'grey',
+              color: 'black',
               border: 'none',
               borderRadius: '4px',
-              cursor: 'pointer'
+              cursor: 'not-allowed'
             }}
           >
-            Open File
-          </button> */}
-      <FileOpener onProcessSuccess={handleProcessSuccess} />
+            Export
+          </button>
         </div>
 
 
@@ -608,6 +626,8 @@ const Dashboard = () => {
           setSelectedCurveIds={setSelectedCurveIds}
           setGraphType={setGraphType}
           graphType={graphType}
+            filename={filename} // Pass filename
+
         />
       </div>
     </div>

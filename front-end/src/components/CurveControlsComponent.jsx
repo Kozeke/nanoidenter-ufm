@@ -6,6 +6,7 @@ import {
   ListItemText,
   FormControl,
   InputLabel,
+  Box,
 } from "@mui/material";
 
 const CurveControlsComponent = ({
@@ -16,9 +17,10 @@ const CurveControlsComponent = ({
   setSelectedCurveIds,
   graphType,
   setGraphType,
+  filename,
 }) => {
-  // Track window width for responsive styling
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  const [selectedExportCurveIds, setSelectedExportCurveIds] = useState([]);
 
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
@@ -26,14 +28,17 @@ const CurveControlsComponent = ({
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  useEffect(() => {
+    setSelectedExportCurveIds(forceData.map((curve) => curve.curve_id));
+  }, [forceData]);
+
   const isMobile = windowWidth < 768;
 
-  // Dynamic styles
   const containerStyle = {
     display: "flex",
     flexDirection: isMobile ? "column" : "row",
     alignItems: isMobile ? "stretch" : "center",
-    gap: isMobile ? "8px" : "6px", // Reduced gap for tighter layout
+    gap: isMobile ? "8px" : "6px",
     backgroundColor: "#fff",
     padding: isMobile ? "8px" : "10px",
     boxSizing: "border-box",
@@ -44,9 +49,9 @@ const CurveControlsComponent = ({
   };
 
   const formControlStyle = {
-    flex: isMobile ? "none" : "0 1 auto", // Grow less aggressively on desktop
+    flex: isMobile ? "none" : "0 1 auto",
     minWidth: isMobile ? "100%" : "120px",
-    maxWidth: isMobile ? "100%" : "180px", // Slightly smaller maxWidth
+    maxWidth: isMobile ? "100%" : "180px",
   };
 
   const selectStyle = {
@@ -60,6 +65,21 @@ const CurveControlsComponent = ({
 
   const menuItemStyle = {
     padding: isMobile ? "4px 12px" : "2px 8px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+  };
+
+  const headerStyle = {
+    padding: isMobile ? "4px 12px" : "2px 8px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    fontWeight: "bold",
+    fontSize: isMobile ? "14px" : "12px",
+    backgroundColor: "#f5f5f5",
+    borderBottom: "1px solid #ccc",
+    pointerEvents: "none",
   };
 
   const checkboxStyle = {
@@ -70,9 +90,9 @@ const CurveControlsComponent = ({
     display: "flex",
     alignItems: "center",
     gap: "5px",
-    flex: isMobile ? "none" : "1 1 auto", // Takes remaining space
+    flex: isMobile ? "none" : "1 1 auto",
     width: isMobile ? "100%" : "auto",
-    marginLeft: isMobile ? "0" : "auto", // Pushes to right on desktop
+    marginLeft: isMobile ? "0" : "auto",
   };
 
   const numberInputStyle = {
@@ -89,14 +109,26 @@ const CurveControlsComponent = ({
     color: "#333",
   };
 
-  // Handle multi-select change
   const handleSelectChange = (event) => {
     const value = event.target.value;
     setSelectedCurveIds(value);
-    console.log("Selected curves:", value);
+    console.log("Selected curves for display:", value);
   };
 
-  // Handle graph type change
+  const handleExportChange = (curveId) => (event) => {
+    const isChecked = event.target.checked;
+    setSelectedExportCurveIds((prev) =>
+      isChecked ? [...prev, curveId] : prev.filter((id) => id !== curveId)
+    );
+    if (!isChecked) {
+      setSelectedCurveIds((prev) => prev.filter((id) => id !== curveId));
+    }
+    console.log(
+      `Export ${curveId}: ${isChecked}, Updated export curves:`,
+      selectedExportCurveIds
+    );
+  };
+
   const handleGraphTypeChange = (event) => {
     const value = event.target.value;
     setGraphType(value);
@@ -105,7 +137,9 @@ const CurveControlsComponent = ({
 
   return (
     <div style={containerStyle}>
-      {/* Multi-Select Curves */}
+      <div style={{ ...labelStyle, marginRight: isMobile ? "0" : "10px" }}>
+        File: {filename || "No file selected"}
+      </div>
       <FormControl style={formControlStyle}>
         <InputLabel id="curve-select-label" style={inputLabelStyle}>
           Select Curves
@@ -120,27 +154,56 @@ const CurveControlsComponent = ({
           }
           style={selectStyle}
         >
+          <MenuItem style={headerStyle} disabled>
+            <Box display="flex" alignItems="center" width="100%">
+              <Box width="50px" textAlign="center">
+                Display
+              </Box>
+              <Box flexGrow={1} textAlign="left">
+                Curve
+              </Box>
+              <Box width="50px" textAlign="center">
+                Export
+              </Box>
+            </Box>
+          </MenuItem>
+
           {forceData.map((curve) => (
             <MenuItem
               key={curve.curve_id}
               value={curve.curve_id}
               style={menuItemStyle}
             >
-              <Checkbox
-                checked={selectedCurveIds.includes(curve.curve_id)}
-                size="small"
-                style={checkboxStyle}
-              />
-              <ListItemText
-                primary={curve.curve_id}
-                primaryTypographyProps={{ fontSize: isMobile ? "14px" : "12px" }}
-              />
+              <Box display="flex" alignItems="center" width="100%">
+                <Box width="50px" textAlign="center">
+                  <Checkbox
+                    checked={selectedCurveIds.includes(curve.curve_id)}
+                    size="small"
+                    style={checkboxStyle}
+                  />
+                </Box>
+                <Box flexGrow={1}>
+                  <ListItemText
+                    primary={curve.curve_id}
+                    primaryTypographyProps={{
+                      fontSize: isMobile ? "14px" : "12px",
+                    }}
+                  />
+                </Box>
+                <Box width="50px" textAlign="center">
+                  <Checkbox
+                    checked={selectedExportCurveIds.includes(curve.curve_id)}
+                    onChange={handleExportChange(curve.curve_id)}
+                    size="small"
+                    style={{ ...checkboxStyle, marginLeft: "10px" }}
+                    title="Export"
+                  />
+                </Box>
+              </Box>
             </MenuItem>
           ))}
         </Select>
       </FormControl>
-
-      {/* Graph Type Selector */}
       <FormControl style={formControlStyle}>
         <InputLabel id="graph-type-label" style={inputLabelStyle}>
           Graph Type
@@ -159,8 +222,6 @@ const CurveControlsComponent = ({
           </MenuItem>
         </Select>
       </FormControl>
-
-      {/* Number of Curves */}
       <div style={numberInputContainerStyle}>
         <label style={labelStyle}>Curves:</label>
         <input

@@ -38,7 +38,7 @@ const ForceDisplacementDataSet = ({
     return Math.pow(10, -magnitude);
   }
 
-  console.log("forceData:", JSON.stringify(forceData, null, 2));
+  // console.log("forceData:", JSON.stringify(forceData, null, 2));
 
   const xData = forceData.length > 0 ? forceData[0].x : [];
   const xScaleFactor = getScaleFactor(domainRange.xMin, xData);
