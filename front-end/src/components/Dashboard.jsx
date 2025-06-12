@@ -5,6 +5,8 @@ import ElasticitySpectra from "./graphs/SpectraElasticity";
 import FiltersComponent from "./FiltersComponent";
 import CurveControlsComponent from "./CurveControlsComponent";
 import FileOpener from "./FileOpener";
+import ExportButton from "./ExportButton";
+import { debounce } from 'lodash';
 
 const WEBSOCKET_URL =
   process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8000/ws/data";
@@ -21,7 +23,7 @@ const Dashboard = () => {
   const [eModelDefaults, setEmodelDefaults] = useState([]);
   const [selectedCurveIds, setSelectedCurveIds] = useState([]);
   const [graphType, setGraphType] = useState("line"); // Default to line
-const [filename, setFilename] = useState("");
+  const [filename, setFilename] = useState("");
 
   const [domainRange, setDomainRange] = useState({
     xMin: Infinity,
@@ -61,6 +63,8 @@ const [filename, setFilename] = useState("");
   const prevFiltersRef = useRef({ regular: null, cp: null });
   const prevNumCurvesRef = useRef(1); // Initialize with default numCurves
   const [forceRequest, setForceRequest] = useState(false);
+  const [selectedExportCurveIds, setSelectedForExportCurveIds] = useState([]);
+
   // Helper to capitalize filter names for display
   const capitalizeFilterName = (name) => {
     return (
@@ -143,12 +147,40 @@ const [filename, setFilename] = useState("");
       }
     }
   }, [curveId, numCurves, regularFilters, cpFilters, fModels, eModels, forceRequest]);
+  useEffect(() => {
+    console.log("useEffect: Initializing WebSocket with debounce");
 
-  // useEffect(() => {
-  //   console.log("useEffect: Initializing WebSocket");
-  //   initializeWebSocket()
-  // }, []);
+    setForceRequest(true);
 
+    const debouncedInit = debounce(() => {
+      initializeWebSocket();
+    }, 300);
+
+    debouncedInit();
+
+    return () => {
+      debouncedInit.cancel();
+    };
+  }, []);
+  useEffect(() => {
+    const allCurveIds = forceData.map((curve) => curve.curve_id);
+    setSelectedForExportCurveIds((prev) => {
+      // Only update if the curve IDs have changed to avoid redundant updates
+      if (JSON.stringify(prev) !== JSON.stringify(allCurveIds)) {
+        console.log("Initializing export curve IDs:", allCurveIds);
+        return allCurveIds;
+      }
+      return prev;
+    });
+    setSelectedCurveIds((prev) => {
+      // Only update if the curve IDs have changed to avoid redundant updates
+      if (JSON.stringify(prev) !== JSON.stringify(allCurveIds)) {
+        console.log("Initializing export curve IDs:", allCurveIds);
+        return allCurveIds;
+      }
+      return prev;
+    });
+  }, [forceData]);
   const initializeWebSocket = useCallback(() => {
     console.log("initializeWebSocket: Initializing WebSocket");
     // Close existing connection if open
@@ -156,14 +188,14 @@ const [filename, setFilename] = useState("");
       socketRef.current.close();
     }
 
-    // socketRef.current = new WebSocket(WEBSOCKET_URL);
-    socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
+    socketRef.current = new WebSocket(WEBSOCKET_URL);
+    // socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
     socketRef.current.onopen = () => {
       console.log("WebSocket connected.");
-      // if (!initialRequestSent.current) {
-      //   sendCurveRequest();
-      //   initialRequestSent.current = true;
-      // }
+      if (!initialRequestSent.current) {
+        sendCurveRequest();
+        initialRequestSent.current = true;
+      }
     };
 
     socketRef.current.onmessage = (event) => {
@@ -351,25 +383,25 @@ const [filename, setFilename] = useState("");
   };
 
   const handleProcessSuccess = (result) => {
-  console.log('File processed successfully:', result);
-  setForceData([]);
-  setIndentationData([]);
-  setElspectraData([]);
-  setDomainRange({ xMin: Infinity, xMax: -Infinity, yMin: Infinity, yMax: -Infinity });
-  setIndentationDomain({ xMin: Infinity, xMax: -Infinity, yMin: Infinity, yMax: -Infinity });
-  setElspectraDomain({ xMin: Infinity, xMax: -Infinity, yMin: Infinity, yMax: -Infinity });
-  if (result.curves) {
-    setNumCurves(result.curves);
-  }
-  setFilename(result.filename || ""); // Set filename from result
-  setForceRequest(true);
-  initialRequestSent.current = false;
-  initializeWebSocket();
-  socketRef.current.onopen = () => {
-    console.log("WebSocket connected in handleProcessSuccess.");
-    sendCurveRequest();
+    console.log('File processed successfully:', result);
+    setForceData([]);
+    setIndentationData([]);
+    setElspectraData([]);
+    setDomainRange({ xMin: Infinity, xMax: -Infinity, yMin: Infinity, yMax: -Infinity });
+    setIndentationDomain({ xMin: Infinity, xMax: -Infinity, yMin: Infinity, yMax: -Infinity });
+    setElspectraDomain({ xMin: Infinity, xMax: -Infinity, yMin: Infinity, yMax: -Infinity });
+    if (result.curves) {
+      setNumCurves(result.curves);
+    }
+    setFilename(result.filename || ""); // Set filename from result
+    setForceRequest(true);
+    initialRequestSent.current = false;
+    initializeWebSocket();
+    // socketRef.current.onopen = () => {
+    //   console.log("WebSocket connected in handleProcessSuccess.");
+    //   sendCurveRequest();
+    // };
   };
-};
 
 
   const handleNumCurvesChange = (value) => {
@@ -386,6 +418,11 @@ const [filename, setFilename] = useState("");
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  const handleExportCurveIdsChange = debounce((curveIds) => {
+    console.log("Selected export curve IDs:", curveIds);
+    setSelectedForExportCurveIds(curveIds);
+  }, 300);
 
   // Determine if mobile view (e.g., < 768px)
   const isMobile = windowWidth < 768;
@@ -525,21 +562,8 @@ const [filename, setFilename] = useState("");
 
 
           <FileOpener onProcessSuccess={handleProcessSuccess} />
-          <button
-            disabled
-            style={{
-              marginLeft: 'auto',
-              marginRight: '150px',
-              padding: '8px 16px',
-              backgroundColor: 'grey',
-              color: 'black',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'not-allowed'
-            }}
-          >
-            Export
-          </button>
+          <ExportButton curveIds={selectedExportCurveIds} />
+          {/* <ExportButton  /> */}
         </div>
 
 
@@ -626,8 +650,9 @@ const [filename, setFilename] = useState("");
           setSelectedCurveIds={setSelectedCurveIds}
           setGraphType={setGraphType}
           graphType={graphType}
-            filename={filename} // Pass filename
-
+          filename={filename} // Pass filename
+          onExportCurveIdsChange={handleExportCurveIdsChange} // Pass the handler
+          selectedExportCurveIds={selectedExportCurveIds}
         />
       </div>
     </div>

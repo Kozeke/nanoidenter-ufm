@@ -16,7 +16,7 @@ const ForceDisplacementDataSet = ({
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
-
+  console.log("selectedCurveIds",selectedCurveIds)
     // Calculate chart height based on window size
     const isMobile = window.innerWidth < 768;
     const headerHeight = isMobile ? 100 : 120; // Approximate space for tabs + filters

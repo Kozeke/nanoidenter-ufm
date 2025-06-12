@@ -373,3 +373,58 @@ def validate_and_fill_metadata(metadata: Dict, curve_name: str) -> Dict:
 
     return validated_metadata
 
+
+import duckdb
+
+def export_from_duckdb_to_hdf5(db_path: str, output_path: str, curve_ids: list = None) -> None:
+    """Export transformed curves from DuckDB to an HDF5 file."""
+    try:
+        conn = duckdb.connect(db_path)
+        query = """
+            SELECT curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
+                   tip_geometry, tip_radius, segment_type, force_values AS deflection, z_values AS z_sensor,
+                   sampling_rate, velocity, no_points
+            FROM force_vs_z
+        """
+        if curve_ids:
+            query += " WHERE curve_id IN ({})".format(",".join("?" for _ in curve_ids))
+        
+        results = conn.execute(query, curve_ids or []).fetchall()
+        if not results:
+            logger.error("No curves found in database")
+            raise ValueError("No curves found in database")
+
+        with h5py.File(output_path, "w") as f:
+            for row in results:
+                (curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
+                 tip_geometry, tip_radius, segment_type, deflection, z_sensor,
+                 sampling_rate, velocity, no_points) = row
+
+                # Convert curve_id and segment_type to strings
+                curve_id = str(curve_id) if curve_id is not None else f"curve_{id(row)}"
+                segment_type = str(segment_type) if segment_type is not None else "unknown"
+
+                # Create a group for each curve
+                curve_group = f.create_group(curve_id)
+                curve_group.attrs["file_id"] = file_id or ""
+                curve_group.attrs["date"] = date or ""
+                curve_group.attrs["instrument"] = instrument or ""
+                curve_group.attrs["sample"] = sample or ""
+                curve_group.attrs["spring_constant"] = float(spring_constant or 0.1)
+                curve_group.attrs["inv_ols"] = float(inv_ols or 1.0)
+                curve_group.attrs["tip_geometry"] = tip_geometry or "unknown"
+                curve_group.attrs["tip_radius"] = float(tip_radius or 1e-6)
+
+                # Create segment group
+                segment_group = curve_group.create_group(segment_type)
+                segment_group.create_dataset("deflection", data=np.array(deflection or []))
+                segment_group.create_dataset("z_sensor", data=np.array(z_sensor or []))
+                segment_group.attrs["sampling_rate"] = float(sampling_rate or 1e5)
+                segment_group.attrs["velocity"] = float(velocity or 1e-6)
+                segment_group.attrs["no_points"] = int(no_points or 0)
+
+        logger.info(f"Exported {len(results)} curves from DuckDB to HDF5 file at {output_path}")
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to export to HDF5 file {output_path}: {str(e)}")
+        raise

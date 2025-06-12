@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   Select,
   MenuItem,
@@ -18,19 +18,16 @@ const CurveControlsComponent = ({
   graphType,
   setGraphType,
   filename,
+  onExportCurveIdsChange,
+  selectedExportCurveIds, // Add this prop from parent
 }) => {
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
-  const [selectedExportCurveIds, setSelectedExportCurveIds] = useState([]);
 
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
-
-  useEffect(() => {
-    setSelectedExportCurveIds(forceData.map((curve) => curve.curve_id));
-  }, [forceData]);
 
   const isMobile = windowWidth < 768;
 
@@ -109,31 +106,45 @@ const CurveControlsComponent = ({
     color: "#333",
   };
 
-  const handleSelectChange = (event) => {
+  const handleSelectChange = useCallback((event) => {
     const value = event.target.value;
     setSelectedCurveIds(value);
     console.log("Selected curves for display:", value);
-  };
+  }, [setSelectedCurveIds]);
 
-  const handleExportChange = (curveId) => (event) => {
+  const handleExportChange = useCallback(
+  (curveId) => (event) => {
+    event.stopPropagation();
     const isChecked = event.target.checked;
-    setSelectedExportCurveIds((prev) =>
-      isChecked ? [...prev, curveId] : prev.filter((id) => id !== curveId)
-    );
-    if (!isChecked) {
-      setSelectedCurveIds((prev) => prev.filter((id) => id !== curveId));
-    }
-    console.log(
-      `Export ${curveId}: ${isChecked}, Updated export curves:`,
-      selectedExportCurveIds
-    );
-  };
+    const newExportCurveIds = isChecked
+      ? [...selectedExportCurveIds, curveId]
+      : selectedExportCurveIds.filter((id) => id !== curveId);
 
-  const handleGraphTypeChange = (event) => {
+    // Only call onExportCurveIdsChange if the selection actually changed
+    if (JSON.stringify(newExportCurveIds) !== JSON.stringify(selectedExportCurveIds)) {
+      console.log(`Export ${curveId}: ${isChecked}, Updated export curves:`, newExportCurveIds);
+      onExportCurveIdsChange(newExportCurveIds);
+    }
+
+    // Update display selection based on export action
+    setSelectedCurveIds((prev) => {
+      if (isChecked) {
+        // When checking export, ensure display is checked
+        return prev.includes(curveId) ? prev : [...prev, curveId];
+      } else {
+        // When unchecking export, uncheck display only if it's currently checked
+        return prev.includes(curveId) ? prev.filter((id) => id !== curveId) : prev;
+      }
+    });
+  },
+  [selectedExportCurveIds, onExportCurveIdsChange, setSelectedCurveIds]
+);
+
+  const handleGraphTypeChange = useCallback((event) => {
     const value = event.target.value;
     setGraphType(value);
     console.log("Graph type changed to:", value);
-  };
+  }, [setGraphType]);
 
   return (
     <div style={containerStyle}>
@@ -167,7 +178,6 @@ const CurveControlsComponent = ({
               </Box>
             </Box>
           </MenuItem>
-
           {forceData.map((curve) => (
             <MenuItem
               key={curve.curve_id}
@@ -237,4 +247,4 @@ const CurveControlsComponent = ({
   );
 };
 
-export default CurveControlsComponent;
+export default React.memo(CurveControlsComponent);

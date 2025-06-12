@@ -300,12 +300,14 @@ from openers.json_opener import JSONOpener
 from storage.duckdb_storage import save_to_duckdb
 from transform.transform import transform_data
 from typing import Dict, List, Any
-from file_types.hdf5 import get_hdf5_structure, process_hdf5
+from file_types.hdf5 import get_hdf5_structure, process_hdf5, export_from_duckdb_to_hdf5
 from file_types.json import get_json_structure
 from fastapi import FastAPI, File, UploadFile
 import json
 import os
 import logging
+import re
+from fastapi.responses import FileResponse
 
 # Configure logging
 logging.basicConfig(
@@ -419,3 +421,84 @@ async def process_file_endpoint(data: Dict[str, Any]):
             "errors": errors
         })
 
+
+@app.post("/export-hdf5")
+async def export_hdf5_endpoint(data: Dict[str, Any]):
+    """Export curves from DuckDB to an HDF5 file."""
+    export_hdf5_path = data.get("export_hdf5_path")
+    curve_ids = data.get("curve_ids", [])
+    num_curves = data.get("num_curves")  # Optional limit on number of curves
+    db_path = "data/experiment.db"  # Same DB path as used in process_file_endpoint
+    errors = []
+
+    if not export_hdf5_path:
+        errors.append("Missing export_hdf5_path")
+        logger.error("Missing export_hdf5_path")
+        raise HTTPException(status_code=400, detail={
+            "status": "error",
+            "message": "Missing export_hdf5_path",
+            "errors": errors
+        })
+
+    try:
+        # Convert string curve_ids (e.g., "curve6") to integers (e.g., 6)
+        if curve_ids:
+            converted_curve_ids = []
+            for curve_id in curve_ids:
+                try:
+                    # Extract numeric part from curve_id (e.g., "curve6" -> 6)
+                    match = re.match(r"curve(\d+)", curve_id)
+                    if not match:
+                        raise ValueError(f"Invalid curve_id format: {curve_id}")
+                    converted_curve_ids.append(int(match.group(1)))
+                except ValueError as e:
+                    errors.append(str(e))
+                    logger.error(f"Invalid curve_id: {curve_id}, error: {str(e)}")
+                    raise HTTPException(status_code=400, detail={
+                        "status": "error",
+                        "message": f"Invalid curve_id format: {curve_id}",
+                        "errors": errors
+                    })
+        else:
+            converted_curve_ids = None
+
+        # If no curve_ids provided and num_curves is specified, fetch curve_ids
+        if not converted_curve_ids and num_curves:
+            conn = duckdb.connect(db_path)
+            curve_ids_result = conn.execute(
+                "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
+            ).fetchall()
+            converted_curve_ids = [row[0] for row in curve_ids_result]
+            conn.close()
+
+        os.makedirs(os.path.dirname(export_hdf5_path), exist_ok=True)
+        num_exported = export_from_duckdb_to_hdf5(db_path, export_hdf5_path, converted_curve_ids or None)
+
+        return {
+            "status": "success",
+            "message": f"Exported {num_exported} curves to HDF5",
+            "export_hdf5_path": export_hdf5_path,
+            "exported_curves": num_exported,
+            "errors": errors
+        }
+    except Exception as e:
+        errors.append(str(e))
+        logger.error(f"Failed to export to HDF5: {str(e)}")
+        raise HTTPException(status_code=500, detail={
+            "status": "error",
+            "message": f"Failed to export: {str(e)}",
+            "export_hdf5_path": export_hdf5_path,
+            "errors": errors
+        })
+        
+        
+# File-serving endpoint
+@app.get("/exports/{file_path:path}")
+async def serve_exported_file(file_path: str):
+    """Serve an exported file from the exports directory."""
+    full_path = os.path.join("", file_path)
+    print(full_path)
+    if not os.path.exists(full_path):
+        logger.error(f"File not found: {full_path}")
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(full_path, filename=os.path.basename(full_path))
