@@ -2408,3 +2408,58 @@ LINE 3:                    tip_geometry, tip_radius, segment_type, deflection, z
 2025-06-12 20:42:58,976 - ERROR - Failed to export to HDF5: 400: {'status': 'error', 'message': 'Invalid metadata path', 'errors': ["Metadata path must start with '/'", '400: {\'status\': \'error\', \'message\': \'Invalid metadata path\', \'errors\': ["Metadata path must start with \'/\'"]}']}
 2025-06-12 20:43:45,260 - ERROR - Failed to export to HDF5: export_from_duckdb_to_hdf5() got an unexpected keyword argument 'level_names'
 2025-06-12 20:44:04,290 - INFO - Exported 10 curves from DuckDB to HDF5 file at exports/processed_data.hdf5
+2025-06-17 10:26:36,112 - INFO - Loaded file structure for uploads\processed_data (1).hdf5 (type: hdf5)
+2025-06-17 10:26:47,581 - INFO - Using relative paths: Force=approach/deflection, Z=approach/z_sensor
+2025-06-17 10:26:47,651 - INFO - Processed curve: 0
+2025-06-17 10:26:47,677 - INFO - Processed curve: 1
+2025-06-17 10:26:47,682 - INFO - Processed curve: 2
+2025-06-17 10:26:47,702 - INFO - Processed curve: 3
+2025-06-17 10:26:47,742 - INFO - Processed curve: 4
+2025-06-17 10:26:47,757 - INFO - Processed curve: 5
+2025-06-17 10:26:47,775 - INFO - Processed curve: 6
+2025-06-17 10:26:47,780 - INFO - Processed curve: 7
+2025-06-17 10:26:47,790 - INFO - Processed curve: 8
+2025-06-17 10:26:47,810 - INFO - Processed curve: 9
+2025-06-17 10:26:47,819 - INFO - Processed 10 curves: ['0', '1', '2', '3', '4']...
+2025-06-17 10:26:48,136 - INFO - Saved 10 curves to DuckDB at data/experiment.db
+2025-06-17 10:27:46,429 - INFO - Loaded file structure for uploads\processed_data (1).hdf5 (type: hdf5)
+2025-06-17 10:27:54,049 - INFO - Using relative paths: Force=approach/deflection, Z=approach/z_sensor
+2025-06-17 10:27:54,111 - INFO - Processed curve: 0
+2025-06-17 10:27:54,117 - INFO - Processed curve: 1
+2025-06-17 10:27:54,132 - INFO - Processed curve: 2
+2025-06-17 10:27:54,150 - INFO - Processed curve: 3
+2025-06-17 10:27:54,181 - INFO - Processed curve: 4
+2025-06-17 10:27:54,194 - INFO - Processed curve: 5
+2025-06-17 10:27:54,198 - INFO - Processed curve: 6
+2025-06-17 10:27:54,214 - INFO - Processed curve: 7
+2025-06-17 10:27:54,229 - INFO - Processed curve: 8
+2025-06-17 10:27:54,242 - INFO - Processed curve: 9
+2025-06-17 10:27:54,251 - INFO - Processed 10 curves: ['0', '1', '2', '3', '4']...
+2025-06-17 10:27:54,740 - INFO - Saved 10 curves to DuckDB at data/experiment.db
+2025-06-17 10:28:43,066 - INFO - Loaded file structure for uploads\processed_data (1).hdf5 (type: hdf5)
+2025-06-17 10:28:51,117 - INFO - Using relative paths: Force=approach/deflection, Z=approach/z_sensor
+2025-06-17 10:28:51,160 - INFO - Processed curve: 0
+2025-06-17 10:28:51,183 - INFO - Processed curve: 1
+2025-06-17 10:28:51,211 - INFO - Processed curve: 2
+2025-06-17 10:28:51,228 - INFO - Processed curve: 3
+2025-06-17 10:28:51,249 - INFO - Processed curve: 4
+2025-06-17 10:28:51,275 - INFO - Processed curve: 5
+2025-06-17 10:28:51,296 - INFO - Processed curve: 6
+2025-06-17 10:28:51,299 - INFO - Processed curve: 7
+2025-06-17 10:28:51,314 - INFO - Processed curve: 8
+2025-06-17 10:28:51,327 - INFO - Processed curve: 9
+2025-06-17 10:28:51,343 - INFO - Processed 10 curves: ['0', '1', '2', '3', '4']...
+2025-06-17 10:28:51,813 - INFO - Saved 10 curves to DuckDB at data/experiment.db
+2025-06-17 11:36:15,776 - ERROR - Failed to export to HDF5: export_from_duckdb_to_hdf5() got an unexpected keyword argument 'level_names'
+2025-06-17 11:38:01,089 - ERROR - Failed to export to HDF5: export_from_duckdb_to_hdf5() got an unexpected keyword argument 'level_names'
+2025-06-17 12:02:01,950 - ERROR - Failed to export to HDF5: name 'Path' is not defined
+2025-06-17 12:03:26,066 - INFO - Starting HDF5 export to C:\Projects\nanoidenter-ufm\back\exports\processed_data.hdf5 with 1 curves
+2025-06-17 12:03:26,082 - ERROR - Failed to export to HDF5: export_from_duckdb_to_hdf5() got an unexpected keyword argument 'export_hdf5_path'
+2025-06-17 12:07:08,390 - INFO - Starting HDF5 export to C:\Projects\nanoidenter-ufm\back\exports\processed_data.hdf5 with 1 curves
+2025-06-17 12:07:08,867 - INFO - Exported 1 curves from DuckDB to HDF5 file at C:\Projects\nanoidenter-ufm\back\exports\processed_data.hdf5
+2025-06-17 12:07:20,814 - INFO - Loaded file structure for uploads\processed_data (8).hdf5 (type: hdf5)
+2025-06-17 13:01:10,812 - INFO - Starting HDF5 export to C:\Projects\nanoidenter-ufm\back\exports\processed_data.hdf5 with 1 curves
+2025-06-17 13:01:11,098 - INFO - Exported 1 curves from DuckDB to HDF5 file at C:\Projects\nanoidenter-ufm\back\exports\processed_data.hdf5
+2025-06-17 13:01:19,639 - INFO - Loaded file structure for uploads\processed_data (13).hdf5 (type: hdf5)
+2025-06-19 16:02:47,895 - INFO - Starting HDF5 export to C:\Projects\nanoidenter-ufm\back\exports\processed_data.hdf5 with 1 curves
+2025-06-19 16:02:47,956 - INFO - Exported 1 curves from DuckDB to HDF5 file at C:\Projects\nanoidenter-ufm\back\exports\processed_data.hdf5

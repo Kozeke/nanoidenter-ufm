@@ -127,6 +127,8 @@ async def websocket_data_stream(websocket: WebSocket):
                 # Wait for a request from the client
                 request = await websocket.receive_text()
                 request_data = json.loads(request)
+                
+                
                 num_curves = min(request_data.get("num_curves", 100), 100)  # Cap for safety
                 filters = request_data.get("filters", {"regular": {}, "cp_filters": {}, "fmodels": {}})
                 curve_id = request_data.get("curve_id", None)  # Extract curve_id
@@ -150,7 +152,12 @@ async def websocket_data_stream(websocket: WebSocket):
                     print(f"Processing batch: {batch_ids}")
                     await process_and_stream_batch(conn, batch_ids, filters, websocket, curve_id, filters_changed)
                     await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
-
+                # Check for metadata request
+                action = request_data.get("action", None)
+                if action == "get_metadata":
+                    await get_metadata(conn, websocket)
+                    continue
+                print("send meta and now curves")
                 # Signal completion of this request
                 await websocket.send_text(json.dumps({"status": "complete"}))
                 print("Request completed")
@@ -176,6 +183,40 @@ async def websocket_data_stream(websocket: WebSocket):
         conn.close()
         print("WebSocket connection closed")
 
+
+async def get_metadata(conn, websocket):
+    try:
+        # Execute query to fetch one row from force_vs_z
+        cursor = conn.execute("SELECT * FROM force_vs_z LIMIT 1")
+        row = cursor.fetchone()
+        
+        # Get column names from cursor description
+        columns = [description[0] for description in cursor.description]
+        
+        # If a row exists, include its data; otherwise, send only column names
+        metadata = {
+            "status": "metadata",
+            "metadata": {
+                "columns": columns,
+                "sample_row": dict(zip(columns, row)) if row else None
+            }
+        }
+        
+        # Send metadata via WebSocket
+        await websocket.send_text(json.dumps(metadata))
+        # print("Sent metadata:", metadata)
+        
+        # return metadata
+    
+    except Exception as e:
+        error_response = {
+            "status": "error",
+            "message": f"Error fetching metadata: {e}"
+        }
+        await websocket.send_text(json.dumps(error_response))
+        print(f"Error in get_metadata: {e}")
+        return error_response
+    
 async def process_and_stream_batch(
     conn: duckdb.DuckDBPyConnection,
     batch_ids: List[str],
@@ -308,6 +349,7 @@ import os
 import logging
 import re
 from fastapi.responses import FileResponse
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
@@ -422,64 +464,113 @@ async def process_file_endpoint(data: Dict[str, Any]):
         })
 
 
+# Sanitize file system paths
+def sanitize_file_path(path: str) -> str:
+    path = Path(path).resolve()
+    if not path.is_relative_to(Path.cwd()):
+        raise ValueError("Path outside allowed directory")
+    return str(path)
+
+# Validate HDF5 paths (group/dataset names)
+def validate_hdf5_path(path: str) -> None:
+    if not path or not isinstance(path, str):
+        raise ValueError("HDF5 path must be a non-empty string")
+    if path.startswith("/") or path.endswith("/"):
+        raise ValueError("HDF5 path cannot start or end with '/'")
+    if "//" in path:
+        raise ValueError("HDF5 path cannot contain consecutive '/'")
+    # Optionally, add regex to restrict to valid HDF5 group/dataset names
+    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_/]*[a-zA-Z0-9]$', path):
+        raise ValueError("HDF5 path contains invalid characters")
+
 @app.post("/export-hdf5")
 async def export_hdf5_endpoint(data: Dict[str, Any]):
-    """Export curves from DuckDB to an HDF5 file."""
+    """Export curves from DuckDB to an HDF5 file with custom level names and metadata."""
     export_hdf5_path = data.get("export_hdf5_path")
     curve_ids = data.get("curve_ids", [])
-    num_curves = data.get("num_curves")  # Optional limit on number of curves
-    db_path = "data/experiment.db"  # Same DB path as used in process_file_endpoint
+    dataset_path = data.get("dataset_path")
+    num_curves = data.get("num_curves")
+    level_names = data.get("level_names", ["curve0", "segment0"])
+    metadata_path = data.get("metadata_path", "")
+    metadata = data.get("metadata", {})
+    db_path = "data/experiment.db"
     errors = []
 
+    # Validate export_hdf5_path
     if not export_hdf5_path:
         errors.append("Missing export_hdf5_path")
         logger.error("Missing export_hdf5_path")
-        raise HTTPException(status_code=400, detail={
-            "status": "error",
-            "message": "Missing export_hdf5_path",
-            "errors": errors
-        })
+        raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing export_hdf5_path", "errors": errors})
 
     try:
-        # Convert string curve_ids (e.g., "curve6") to integers (e.g., 6)
+        # Sanitize file system path
+        export_hdf5_path = sanitize_file_path(export_hdf5_path)
+
+        # Validate dataset_path (required for HDF5 data storage)
+        if not dataset_path:
+            errors.append("Missing dataset_path")
+            logger.error("Missing dataset_path")
+            raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing dataset_path", "errors": errors})
+        validate_hdf5_path(dataset_path)
+
+        # Validate metadata_path (optional, can be empty)
+        if metadata_path:
+            validate_hdf5_path(metadata_path)
+
+        # Convert curve_ids
+        converted_curve_ids = None
         if curve_ids:
             converted_curve_ids = []
             for curve_id in curve_ids:
-                try:
-                    # Extract numeric part from curve_id (e.g., "curve6" -> 6)
-                    match = re.match(r"curve(\d+)", curve_id)
-                    if not match:
-                        raise ValueError(f"Invalid curve_id format: {curve_id}")
-                    converted_curve_ids.append(int(match.group(1)))
-                except ValueError as e:
-                    errors.append(str(e))
-                    logger.error(f"Invalid curve_id: {curve_id}, error: {str(e)}")
-                    raise HTTPException(status_code=400, detail={
-                        "status": "error",
-                        "message": f"Invalid curve_id format: {curve_id}",
-                        "errors": errors
-                    })
-        else:
-            converted_curve_ids = None
+                match = re.match(r"curve(\d+)", curve_id)
+                if not match:
+                    errors.append(f"Invalid curve_id format: {curve_id}")
+                    logger.error(f"Invalid curve_id: {curve_id}")
+                    raise HTTPException(status_code=400, detail={"status": "error", "message": f"Invalid curve_id: {curve_id}", "errors": errors})
+                converted_curve_ids.append(int(match.group(1)))
 
-        # If no curve_ids provided and num_curves is specified, fetch curve_ids
-        if not converted_curve_ids and num_curves:
-            conn = duckdb.connect(db_path)
-            curve_ids_result = conn.execute(
-                "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
-            ).fetchall()
-            converted_curve_ids = [row[0] for row in curve_ids_result]
-            conn.close()
+        # Fetch curve_ids if num_curves is provided
+        if not converted_curve_ids and num_curves is not None:
+            if not isinstance(num_curves, int) or num_curves <= 0:
+                errors.append("num_curves must be a positive integer")
+                raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid num_curves", "errors": errors})
+            with duckdb.connect(db_path) as conn:
+                curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
+                converted_curve_ids = [row[0] for row in curve_ids_result]
 
+        # Validate level_names
+        if not all(isinstance(name, str) and name.strip() for name in level_names):
+            errors.append("All level names must be non-empty strings")
+            raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid level names", "errors": errors})
+
+        # Validate metadata
+        for key, value in metadata.items():
+            if value and isinstance(value, str) and not value.strip():
+                errors.append(f"Metadata field {key} cannot be empty")
+        if errors:
+            raise HTTPException(status_code=400, detail={
+                "status": "error",
+                "message": "Invalid metadata",
+                "errors": errors
+            })
+
+        logger.info(f"Starting HDF5 export to {export_hdf5_path} with {len(converted_curve_ids or [])} curves")
         os.makedirs(os.path.dirname(export_hdf5_path), exist_ok=True)
-        num_exported = export_from_duckdb_to_hdf5(db_path, export_hdf5_path, converted_curve_ids or None)
+        num_exported = export_from_duckdb_to_hdf5(
+            db_path=db_path,
+            output_path=export_hdf5_path,  # Fixed: Use output_path instead of export_hdf5_path
+            curve_ids=converted_curve_ids,
+            dataset_path=dataset_path,  # Pass dataset_path for HDF5 data storage
+            level_names=level_names,
+            metadata_path=metadata_path,
+            metadata=metadata
+        )
 
         return {
             "status": "success",
-            "message": f"Exported {num_exported} curves to HDF5",
+            "message": f"Successfully exported {num_exported} curves",
             "export_hdf5_path": export_hdf5_path,
-            "exported_curves": num_exported,
-            "errors": errors
+            "exported_curves": num_exported
         }
     except Exception as e:
         errors.append(str(e))

@@ -149,7 +149,7 @@ def transform_data_for_force_vs_z(hdf5_file: h5py.File, file_path: str) -> Dict[
 
 
 import h5py
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import numpy as np
 
 def get_hdf5_structure(file_path: str) -> Dict[str, Any]:
@@ -376,55 +376,109 @@ def validate_and_fill_metadata(metadata: Dict, curve_name: str) -> Dict:
 
 import duckdb
 
-def export_from_duckdb_to_hdf5(db_path: str, output_path: str, curve_ids: list = None) -> None:
-    """Export transformed curves from DuckDB to an HDF5 file."""
+def export_from_duckdb_to_hdf5(
+    db_path: str,
+    output_path: str,
+    curve_ids: Optional[List[int]] = None,
+    dataset_path: str = "dataset",
+    level_names: List[str] = ["curve0", "segment0"],
+    metadata_path: str = "tip",
+    metadata: Dict[str, Any] = {}
+) -> int:
+    """
+    Export transformed curves from DuckDB to an HDF5 file with specified dataset and metadata paths.
+    
+    Args:
+        db_path: Path to the DuckDB database.
+        output_path: Path to the output HDF5 file.
+        curve_ids: List of curve IDs to export (optional).
+        dataset_path: HDF5 path for storing datasets (e.g., "curve0/segment0/dataset").
+        level_names: List of group level names (e.g., ["curve0", "segment0"]).
+        metadata_path: HDF5 path for storing metadata (e.g., "curve0/segment0/tip").
+        metadata: Dictionary of metadata to store as attributes.
+    
+    Returns:
+        Number of curves exported.
+    """
     try:
-        conn = duckdb.connect(db_path)
-        query = """
-            SELECT curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
-                   tip_geometry, tip_radius, segment_type, force_values AS deflection, z_values AS z_sensor,
-                   sampling_rate, velocity, no_points
-            FROM force_vs_z
-        """
-        if curve_ids:
-            query += " WHERE curve_id IN ({})".format(",".join("?" for _ in curve_ids))
-        
-        results = conn.execute(query, curve_ids or []).fetchall()
-        if not results:
-            logger.error("No curves found in database")
-            raise ValueError("No curves found in database")
+        # Connect to DuckDB
+        with duckdb.connect(db_path) as conn:
+            query = """
+                SELECT curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
+                       tip_geometry, tip_radius, segment_type, force_values AS deflection,
+                       z_values AS z_sensor, sampling_rate, velocity, no_points
+                FROM force_vs_z
+            """
+            params = None
+            if curve_ids:
+                query += " WHERE curve_id IN ({})".format(",".join("?" for _ in curve_ids))
+                params = curve_ids
+            
+            results = conn.execute(query, params or []).fetchall()
+            if not results:
+                logger.error("No curves found in database")
+                raise ValueError("No curves found in database")
 
+        # Open HDF5 file
         with h5py.File(output_path, "w") as f:
+            num_exported = 0
             for row in results:
                 (curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
                  tip_geometry, tip_radius, segment_type, deflection, z_sensor,
                  sampling_rate, velocity, no_points) = row
 
                 # Convert curve_id and segment_type to strings
-                curve_id = str(curve_id) if curve_id is not None else f"curve_{id(row)}"
+                curve_id_str = f"curve{curve_id}" if curve_id is not None else f"curve_{id(row)}"
                 segment_type = str(segment_type) if segment_type is not None else "unknown"
 
-                # Create a group for each curve
-                curve_group = f.create_group(curve_id)
-                curve_group.attrs["file_id"] = file_id or ""
-                curve_group.attrs["date"] = date or ""
-                curve_group.attrs["instrument"] = instrument or ""
-                curve_group.attrs["sample"] = sample or ""
-                curve_group.attrs["spring_constant"] = float(spring_constant or 0.1)
-                curve_group.attrs["inv_ols"] = float(inv_ols or 1.0)
-                curve_group.attrs["tip_geometry"] = tip_geometry or "unknown"
-                curve_group.attrs["tip_radius"] = float(tip_radius or 1e-6)
+                # Create group hierarchy based on level_names
+                group_path = f"{level_names[0]}/{level_names[1]}"  # e.g., curve0/segment0
+                group = f.require_group(group_path)
 
-                # Create segment group
-                segment_group = curve_group.create_group(segment_type)
-                segment_group.create_dataset("deflection", data=np.array(deflection or []))
-                segment_group.create_dataset("z_sensor", data=np.array(z_sensor or []))
-                segment_group.attrs["sampling_rate"] = float(sampling_rate or 1e5)
-                segment_group.attrs["velocity"] = float(velocity or 1e-6)
-                segment_group.attrs["no_points"] = int(no_points or 0)
+                # Create datasets at dataset_path (e.g., curve0/segment0/dataset)
+                dataset_group_path = dataset_path  # Use full dataset_path as parent group
+                dataset_group = f.require_group(dataset_group_path)
+                
+                # Store deflection and z_sensor as separate datasets
+                dataset_group.create_dataset(
+                    "deflection",
+                    data=np.array(deflection or [], dtype=np.float64)
+                )
+                dataset_group.create_dataset(
+                    "z_sensor",
+                    data=np.array(z_sensor or [], dtype=np.float64)
+                )
 
-        logger.info(f"Exported {len(results)} curves from DuckDB to HDF5 file at {output_path}")
-        conn.close()
+                # Store metadata at metadata_path (e.g., curve0/segment0/tip)
+                if metadata_path:
+                    metadata_group_path = "/".join(metadata_path.split("/")[:-1])  # Extract parent group path
+                    metadata_name = metadata_path.split("/")[-1]  # Extract metadata group name
+                    if metadata_group_path:
+                        metadata_group = f.require_group(metadata_group_path)
+                    else:
+                        metadata_group = group
+                    metadata_subgroup = metadata_group.require_group(metadata_name)
+                    # Store provided metadata
+                    for key, value in metadata.items():
+                        metadata_subgroup.attrs[key] = value
+                    # Store additional row-specific metadata
+                    metadata_subgroup.attrs["file_id"] = file_id or ""
+                    metadata_subgroup.attrs["date"] = date or ""
+                    metadata_subgroup.attrs["instrument"] = instrument or ""
+                    metadata_subgroup.attrs["sample"] = sample or ""
+                    metadata_subgroup.attrs["spring_constant"] = float(spring_constant or 0.1)
+                    metadata_subgroup.attrs["inv_ols"] = float(inv_ols or 1.0)
+                    metadata_subgroup.attrs["tip_geometry"] = tip_geometry or "unknown"
+                    metadata_subgroup.attrs["tip_radius"] = float(tip_radius or 1e-6)
+                    metadata_subgroup.attrs["sampling_rate"] = float(sampling_rate or 1e5)
+                    metadata_subgroup.attrs["velocity"] = float(velocity or 1e-6)
+                    metadata_subgroup.attrs["no_points"] = int(no_points or 0)
+
+                num_exported += 1
+
+        logger.info(f"Exported {num_exported} curves from DuckDB to HDF5 file at {output_path}")
+        return num_exported
+
     except Exception as e:
         logger.error(f"Failed to export to HDF5 file {output_path}: {str(e)}")
         raise
