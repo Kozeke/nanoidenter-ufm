@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
 import ForceDisplacementDataSet from "./graphs/ForceDisplacementDataSet";
 import ForceIndentationDataSet from "./graphs/ForceIndentationDataSet";
 import ElasticitySpectra from "./graphs/SpectraElasticity";
@@ -10,7 +10,14 @@ import { debounce } from 'lodash';
 
 const WEBSOCKET_URL =
   process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8000/ws/data";
+// Create MetadataContext
+const MetadataContext = createContext({
+  metadataObject: { columns: [], sample_row: {} },
+  setMetadataObject: () => {},
+});
 
+// Hook to use MetadataContext
+export const useMetadata = () => useContext(MetadataContext);
 const Dashboard = () => {
   const [forceData, setForceData] = useState([]); // For DataSet graph
   const [indentationData, setIndentationData] = useState([]); // For DataSet indentation graph
@@ -46,7 +53,7 @@ const Dashboard = () => {
     yMax: -Infinity,
   });
 
-
+  const [metadataObject, setMetadataObject] = useState({ columns: [], sample_row: {} });
   const [numCurves, setNumCurves] = useState(1);
   const socketRef = useRef(null);
   const initialRequestSent = useRef(false);
@@ -64,6 +71,7 @@ const Dashboard = () => {
   const prevNumCurvesRef = useRef(1); // Initialize with default numCurves
   const [forceRequest, setForceRequest] = useState(false);
   const [selectedExportCurveIds, setSelectedForExportCurveIds] = useState([]);
+  const isMetadataReady = metadataObject.columns.length > 0 || Object.keys(metadataObject.sample_row).length > 0;
 
   // Helper to capitalize filter names for display
   const capitalizeFilterName = (name) => {
@@ -83,6 +91,10 @@ const Dashboard = () => {
     // const parsedCurveId = parseInt(curveData.curve_id.replace("curve", ""), 10);
     // setCurveId(isNaN(parsedCurveId) ? null : parsedCurveId);
   };
+      // Debug metadataObject changes
+  useEffect(() => {
+    console.log("metadataObject updated:", metadataObject);
+  }, [metadataObject]);
   const sendCurveRequest = useCallback(() => {
     console.log("sendcurve", forceRequest);
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
@@ -114,7 +126,7 @@ const Dashboard = () => {
         yMax: -Infinity,
       };
 
-      if (filtersChanged || numCurvesChanged || forceRequest) {
+      // if (filtersChanged || numCurvesChanged || forceRequest) {
         console.log("Request triggered: filtersChanged:", filtersChanged, "numCurvesChanged:", numCurvesChanged, "forceRequest:", forceRequest);
         setForceData([]);
         setIndentationData([]);
@@ -124,6 +136,7 @@ const Dashboard = () => {
         setElspectraDomain(resetState);
 
         const requestData = {
+          action: 'get_metadata',
           num_curves: numCurves,
           filters: {
             regular: regularFilters,
@@ -144,7 +157,7 @@ const Dashboard = () => {
         };
         prevNumCurvesRef.current = numCurves;
         setForceRequest(false); // Reset after sending
-      }
+      // }
     }
   }, [curveId, numCurves, regularFilters, cpFilters, fModels, eModels, forceRequest]);
   useEffect(() => {
@@ -188,8 +201,8 @@ const Dashboard = () => {
       socketRef.current.close();
     }
 
-    // socketRef.current = new WebSocket(WEBSOCKET_URL);
-    socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
+    socketRef.current = new WebSocket(WEBSOCKET_URL);
+    // socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
     socketRef.current.onopen = () => {
       console.log("WebSocket connected.");
       if (!initialRequestSent.current) {
@@ -271,6 +284,10 @@ const Dashboard = () => {
         console.log("Received filter defaults:", cleanedRegularFilters);
         console.log("Received CP filter defaults:", cleanedCpFilters);
       }
+            if (response.status === "metadata") {
+              console.log("metadata",response.metadata)
+              setMetadataObject(response.metadata);
+            }
     };
 
     socketRef.current.onclose = () => {
@@ -535,6 +552,8 @@ const Dashboard = () => {
   // };
 
   return (
+        <MetadataContext.Provider value={{ metadataObject, setMetadataObject }}>
+
     <div style={containerStyle}>
       <div style={mainContentStyle}>
         {/* Tab Navigation */}
@@ -562,8 +581,16 @@ const Dashboard = () => {
 
 
           <FileOpener onProcessSuccess={handleProcessSuccess} />
-          <ExportButton curveIds={selectedExportCurveIds} />
-          {/* <ExportButton  /> */}
+          {isMetadataReady ? (
+              <ExportButton
+                curveIds={selectedExportCurveIds}
+                isMetadataReady={isMetadataReady}
+              />
+            ) : (
+              <button disabled style={{ ...buttonStyle(false), opacity: 0.5, marginLeft: '10px' }}>
+                Export (Waiting for metadata)
+              </button>
+            )}
         </div>
 
 
@@ -656,6 +683,7 @@ const Dashboard = () => {
         />
       </div>
     </div>
+    </MetadataContext.Provider>
 
   );
 };
