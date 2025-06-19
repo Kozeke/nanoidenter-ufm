@@ -201,8 +201,8 @@ const Dashboard = () => {
       socketRef.current.close();
     }
 
-    socketRef.current = new WebSocket(WEBSOCKET_URL);
-    // socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
+    // socketRef.current = new WebSocket(WEBSOCKET_URL);
+    socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
     socketRef.current.onopen = () => {
       console.log("WebSocket connected.");
       if (!initialRequestSent.current) {
