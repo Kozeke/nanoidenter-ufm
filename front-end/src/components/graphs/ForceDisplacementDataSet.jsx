@@ -2,12 +2,12 @@ import React, { useState, useEffect } from "react";
 import ReactECharts from "echarts-for-react";
 
 const ForceDisplacementDataSet = ({
-  forceData,
-  domainRange,
-  onCurveSelect,
-  setSelectedCurveIds,
-  selectedCurveIds,
-  graphType,
+  forceData = [],
+  domainRange = { xMin: 0, xMax: 0, yMin: 0, yMax: 0 },
+  setSelectedCurveIds = () => {},
+  onCurveSelect = () => {},
+  selectedCurveIds = [],
+  graphType = "line",
 }) => {
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
   // Update window height on resize
@@ -38,16 +38,35 @@ const ForceDisplacementDataSet = ({
     return Math.pow(10, -magnitude);
   }
 
-  // console.log("forceData:", JSON.stringify(forceData, null, 2));
+  const validForceData = Array.isArray(forceData)
+    ? forceData.map((curve) => ({
+        ...curve,
+        curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
+        x: Array.isArray(curve?.x) ? curve.x : [],
+        y: Array.isArray(curve?.y) ? curve.y : [],
+      }))
+    : [];
+  console.log("forceData (Displacement):", JSON.stringify(validForceData, null, 2));
 
-  const xData = forceData.length > 0 ? forceData[0].x : [];
+  const xData = validForceData.length > 0 && validForceData[0]?.x.length > 0 ? validForceData[0].x : [];
   const xScaleFactor = getScaleFactor(domainRange.xMin, xData);
   const yScaleFactor = getScaleFactor(domainRange.yMin);
 
+  const xScaledRange = (domainRange.xMax - domainRange.xMin) * xScaleFactor;
+  const xDecimals = xScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10))) : 0;
+
+  const yScaledRange = (domainRange.yMax - domainRange.yMin) * yScaleFactor;
+  const yDecimals = yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0;
+
+  const xExponent = Math.log10(xScaleFactor);
+  const xUnit = xExponent === 0 ? 'm' : `×10^{-${Math.round(xExponent)}} m`;
+
+  const yExponent = Math.log10(yScaleFactor);
+  const yUnit = yExponent === 0 ? 'N' : `×10^{-${Math.round(yExponent)}} N`;
 
   const onChartEvents = {
     click: (params) => {
-      console.log("Chart click event:", {
+      console.log("Chart click event (Displacement):", {
         componentType: params.componentType,
         seriesType: params.seriesType,
         seriesIndex: params.seriesIndex,
@@ -55,23 +74,19 @@ const ForceDisplacementDataSet = ({
       });
       if (params.componentType === "series") {
         const curveIndex = params.seriesIndex;
-        const selectedCurve = forceData[curveIndex];
-        console.log("Selected curve:", {
+        const selectedCurve = validForceData[curveIndex];
+        console.log("Selected curve (Displacement):", {
           curve_id: selectedCurve?.curve_id,
           x: selectedCurve?.x?.slice(0, 5),
           y: selectedCurve?.y?.slice(0, 5),
         });
-        if (selectedCurve) {
+        if (selectedCurve && selectedCurve.curve_id) {
           setSelectedCurveIds([selectedCurve.curve_id]);
           if (onCurveSelect) {
-            const curveIdInt = parseInt(
-              selectedCurve.curve_id.replace("curve", ""),
-              10
-            );
             onCurveSelect({
-              curve_id: isNaN(curveIdInt) ? selectedCurve.curve_id : curveIdInt,
-              x: selectedCurve.x,
-              y: selectedCurve.y,
+              curve_id: selectedCurve.curve_id,
+              x: selectedCurve.x || [],
+              y: selectedCurve.y || [],
             });
           }
         }
@@ -80,24 +95,23 @@ const ForceDisplacementDataSet = ({
   };
 
   const chartOptions = {
-    // title: { text: "Force-displacement (data set)", left: "center" },
     tooltip: { trigger: "axis" },
     xAxis: {
       type: "value",
-      name: `Z (x10^-${Math.log10(xScaleFactor)} m)`,
+      name: `Z (${xUnit})`,
       nameLocation: "middle",
       nameGap: 25,
-      min: domainRange.xMin * xScaleFactor,
-      max: domainRange.xMax * xScaleFactor,
+      min: domainRange.xMin ? domainRange.xMin * xScaleFactor : undefined,
+      max: domainRange.xMax ? domainRange.xMax * xScaleFactor : undefined,
       axisLabel: {
         formatter: function (value) {
-          return value.toFixed(0);
+          return value.toFixed(xDecimals);
         },
       },
     },
     yAxis: {
       type: "value",
-      name: `Force (x10^-${Math.log10(yScaleFactor)} N)`,
+      name: `Force (${yUnit})`,
       nameLocation: "middle",
       nameGap: 40,
       scale: true,
@@ -105,11 +119,11 @@ const ForceDisplacementDataSet = ({
       max: domainRange.yMax * yScaleFactor,
       axisLabel: {
         formatter: function (value) {
-          return value.toFixed(0);
+          return value.toFixed(yDecimals);
         },
       },
     },
-    series: forceData.map((curve) => ({
+    series: validForceData.map((curve) => ({
       name: curve.curve_id,
       type: graphType, // Dynamic graph type
       smooth: graphType === "line" ? false : undefined,
@@ -118,10 +132,13 @@ const ForceDisplacementDataSet = ({
       large: true,
       triggerEvent: true,
       data:
-        selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)
+        (selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
+        Array.isArray(curve.x) &&
+        Array.isArray(curve.y) &&
+        curve.x.length === curve.y.length
           ? curve.x.map((x, i) => [
               x * xScaleFactor,
-              curve.y ? curve.y[i] * yScaleFactor : 0,
+              curve.y[i] !== undefined ? curve.y[i] * yScaleFactor : 0,
             ])
           : [],
     })),
@@ -170,6 +187,15 @@ const ForceDisplacementDataSet = ({
 
   return (
     <div style={{ flex: 1, height: "100%" }}>
+      {/* <h2
+        style={{
+          margin: "0 0 5px 0",
+          fontSize: isMobile ? "14px" : "16px",
+          color: "#333",
+        }}
+      >
+        Force vs Displacement
+      </h2> */}
       <ReactECharts
         option={chartOptions}
         style={{ height: chartHeight, width: "100%" }}

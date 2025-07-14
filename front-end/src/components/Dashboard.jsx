@@ -26,8 +26,8 @@ const Dashboard = () => {
   const [cpDefaults, setCpDefaults] = useState({
     autotresh: { range_to_set_zero: 500 },
   });
-  const [fModelDefaults, setFmodelDefaults] = useState([]);
-  const [eModelDefaults, setEmodelDefaults] = useState([]);
+  const [forceModelDefaults, setForceModelDefaults] = useState([]);
+  const [elasticityModelDefaults, setElasticityModelDefaults] = useState([]);
   const [selectedCurveIds, setSelectedCurveIds] = useState([]);
   const [graphType, setGraphType] = useState("line"); // Default to line
   const [filename, setFilename] = useState("");
@@ -57,12 +57,12 @@ const Dashboard = () => {
   const [numCurves, setNumCurves] = useState(1);
   const socketRef = useRef(null);
   const initialRequestSent = useRef(false);
-  const [regularFilters, setRegularFilters] = useState([]);
-  const [cpFilters, setCpFilters] = useState([]);
-  const [fModels, setfModels] = useState([]);
-  const [selectedFModels, setselectedFModels] = useState([]);
-  const [eModels, seteModels] = useState([]);
-  const [selectedEModels, setSelectedEModels] = useState([]);
+  const [regularFilters, setRegularFilters] = useState({});
+  const [cpFilters, setCpFilters] = useState({});
+  const [forceModels, setForceModels] = useState({});
+  const [selectedForceModels, setSelectedForceModels] = useState([]);
+  const [elasticityModels, setElasticityModels] = useState({});
+  const [selectedElasticityModels, setSelectedElasticityModels] = useState([]);
   const [selectedRegularFilters, setSelectedRegularFilters] = useState([]);
   const [selectedCpFilters, setSelectedCpFilters] = useState([]);
   const [activeTab, setActiveTab] = useState("forceDisplacement");
@@ -112,8 +112,8 @@ const Dashboard = () => {
         {
           regular: regularFilters,
           cp: cpFilters,
-          f_models: fModels,
-          e_models: eModels,
+          f_models: forceModels,
+          e_models: elasticityModels,
         }
       );
 
@@ -141,8 +141,8 @@ const Dashboard = () => {
           filters: {
             regular: regularFilters,
             cp_filters: cpFilters,
-            f_models: fModels,
-            e_models: eModels,
+            f_models: forceModels,
+            e_models: elasticityModels,
           },
           ...(curveId && { curve_id: curveId }),
           filters_changed: true,
@@ -152,29 +152,14 @@ const Dashboard = () => {
         prevFiltersRef.current = {
           regular: regularFilters,
           cp: cpFilters,
-          f_models: fModels,
-          e_models: eModels,
+          f_models: forceModels,
+          e_models: elasticityModels,
         };
         prevNumCurvesRef.current = numCurves;
         setForceRequest(false); // Reset after sending
       // }
     }
-  }, [curveId, numCurves, regularFilters, cpFilters, fModels, eModels, forceRequest]);
-  useEffect(() => {
-    console.log("useEffect: Initializing WebSocket with debounce");
-
-    setForceRequest(true);
-
-    const debouncedInit = debounce(() => {
-      initializeWebSocket();
-    }, 300);
-
-    debouncedInit();
-
-    return () => {
-      debouncedInit.cancel();
-    };
-  }, []);
+  }, [curveId, numCurves, regularFilters, cpFilters, forceModels, elasticityModels, forceRequest]);
   useEffect(() => {
     const allCurveIds = forceData.map((curve) => curve.curve_id);
     setSelectedForExportCurveIds((prev) => {
@@ -278,8 +263,8 @@ const Dashboard = () => {
         );
         setFilterDefaults(cleanedRegularFilters);
         setCpDefaults(cleanedCpFilters);
-        setFmodelDefaults(cleanedFmodels);
-        setEmodelDefaults(cleanedEmodels);
+        setForceModelDefaults(cleanedFmodels);
+        setElasticityModelDefaults(cleanedEmodels);
 
         console.log("Received filter defaults:", cleanedRegularFilters);
         console.log("Received CP filter defaults:", cleanedCpFilters);
@@ -305,89 +290,61 @@ const Dashboard = () => {
     }
   }, [curveId, sendCurveRequest]);
 
-  const handleAddFilter = (
-    filterName,
-    isCpFilter = false,
-    isFModel = false,
-    isEModel = false
-  ) => {
-    let currentFilters; // Renamed from targetFilters
-    let setFilters; // Renamed from setTargetFilters
-    let filterDefaultsSource; // Renamed from defaultsSource
+  const filterTypes = {
+    regular: {
+      filters: regularFilters,
+      setFilters: setRegularFilters,
+      selected: selectedRegularFilters,
+      setSelected: setSelectedRegularFilters,
+      defaults: filterDefaults,
+    },
+    cp: {
+      filters: cpFilters,
+      setFilters: setCpFilters,
+      selected: selectedCpFilters,
+      setSelected: setSelectedCpFilters,
+      defaults: cpDefaults,
+    },
+    force: {
+      filters: forceModels,
+      setFilters: setForceModels,
+      selected: selectedForceModels,
+      setSelected: setSelectedForceModels,
+      defaults: forceModelDefaults,
+    },
+    elasticity: {
+      filters: elasticityModels,
+      setFilters: setElasticityModels,
+      selected: selectedElasticityModels,
+      setSelected: setSelectedElasticityModels,
+      defaults: elasticityModelDefaults,
+    },
+  };
 
-    if (isEModel) {
-      currentFilters = eModels;
-      setFilters = seteModels;
-      filterDefaultsSource = eModelDefaults; // Assuming this exists
-    } else if (isFModel) {
-      currentFilters = fModels;
-      setFilters = setfModels;
-      filterDefaultsSource = fModelDefaults;
-    } else if (isCpFilter) {
-      currentFilters = cpFilters;
-      setFilters = setCpFilters;
-      filterDefaultsSource = cpDefaults;
-    } else {
-      currentFilters = regularFilters;
-      setFilters = setRegularFilters;
-      filterDefaultsSource = filterDefaults;
-    }
-
-    if (filterName && !currentFilters[filterName]) {
-      const defaultParams = filterDefaultsSource[filterName] || {}; // Fallback to empty object
-      setFilters((prev) => ({
-        ...prev, // Merge with existing filters
+  const handleAddFilter = (filterName, type) => {
+    const config = filterTypes[type];
+    if (filterName && !config.filters[filterName]) {
+      const defaultParams = config.defaults[filterName] || {};
+      config.setFilters((prev) => ({
+        ...prev,
         [filterName]: defaultParams,
       }));
     }
   };
 
-  const handleRemoveFilter = (
-    filterName,
-    isCpFilter = false,
-    isFModel = false,
-    isEModel = false
-  ) => {
-    let setTargetFilters;
-
-    if (isEModel) {
-      setTargetFilters = seteModels;
-    } else if (isFModel) {
-      setTargetFilters = setfModels;
-    } else if (isCpFilter) {
-      setTargetFilters = setCpFilters;
-    } else {
-      setTargetFilters = setRegularFilters;
-    }
-
-    setTargetFilters((prev) => {
+  const handleRemoveFilter = (filterName, type) => {
+    const config = filterTypes[type];
+    config.setFilters((prev) => {
       const newFilters = { ...prev };
       delete newFilters[filterName];
       return newFilters;
     });
+    config.setSelected((prev) => prev.filter((name) => name !== filterName));
   };
 
-  const handleFilterChange = (
-    filterName,
-    param,
-    value,
-    isCpFilter = false,
-    isFModel = false,
-    isEModel = false
-  ) => {
-    let setTargetFilters;
-
-    if (isEModel) {
-      setTargetFilters = seteModels;
-    } else if (isFModel) {
-      setTargetFilters = setfModels;
-    } else if (isCpFilter) {
-      setTargetFilters = setCpFilters;
-    } else {
-      setTargetFilters = setRegularFilters;
-    }
-
-    setTargetFilters((prev) => {
+  const handleFilterChange = (filterName, param, value, type) => {
+    const config = filterTypes[type];
+    config.setFilters((prev) => {
       if (prev[filterName]?.[param] === value) return prev;
       return {
         ...prev,
@@ -600,19 +557,18 @@ const Dashboard = () => {
             filterDefaults={filterDefaults}
             capitalizeFilterName={capitalizeFilterName}
             cpDefaults={cpDefaults}
-            fModelDefaults={fModelDefaults}
-            numCurves={numCurves}
+            forceModelDefaults={forceModelDefaults}
+            elasticityModelDefaults={elasticityModelDefaults}
             regularFilters={regularFilters}
             cpFilters={cpFilters}
-            fModels={fModels}
-            eModels={eModels}
-            eModelDefaults={eModelDefaults}
-            selectedEModels={selectedEModels}
-            setSelectedEModels={setSelectedEModels}
+            forceModels={forceModels}
+            elasticityModels={elasticityModels}
+            selectedElasticityModels={selectedElasticityModels}
+            setSelectedElasticityModels={setSelectedElasticityModels}
             selectedRegularFilters={selectedRegularFilters}
             selectedCpFilters={selectedCpFilters}
-            selectedFModels={selectedFModels}
-            setSelectedFModels={setselectedFModels}
+            selectedForceModels={selectedForceModels}
+            setSelectedForceModels={setSelectedForceModels}
             handleNumCurvesChange={handleNumCurvesChange}
             setSelectedRegularFilters={setSelectedRegularFilters}
             setSelectedCpFilters={setSelectedCpFilters}

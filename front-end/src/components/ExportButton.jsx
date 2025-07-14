@@ -18,6 +18,7 @@ import {
   Step,
   StepLabel,
   CircularProgress,
+  Tooltip,
 } from '@mui/material';
 import { saveAs } from 'file-saver';
 import { useMetadata } from './Dashboard'; // Adjust import path
@@ -25,7 +26,7 @@ import { useMetadata } from './Dashboard'; // Adjust import path
 const ExportButton = ({ curveIds = [], numCurves = 10, isMetadataReady}) => {
   
   const { metadataObject } = useMetadata();
-const initialMetadata = {
+  const initialMetadata = {
     file_id: String(metadataObject.sample_row?.file_id ?? ''),
     date: String(metadataObject.sample_row?.date ?? ''),
     instrument: String(metadataObject.sample_row?.instrument ?? ''),
@@ -43,7 +44,8 @@ const initialMetadata = {
   };
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(0);
-  const [exportPath, setExportPath] = useState('exports/processed_data.hdf5');
+  const [selectedFormat, setSelectedFormat] = useState('');
+  const [exportPath, setExportPath] = useState('');
   const [levelNames, setLevelNames] = useState(['curve0', 'segment0']); // Default level names
   const [metadataPath, setMetadataPath] = useState('curve0/segment0/tip');
   const [metadata, setMetadata] = useState(initialMetadata);
@@ -53,14 +55,42 @@ const initialMetadata = {
   const [anchorEl, setAnchorEl] = useState(null);
   const [datasetPath, setDatasetPath] = useState('curve0/segment0/dataset'); // New field
 
-  const steps = [
-    'Name Dataset Levels',
-    'Select Dataset Save Location',
-    'Select Metadata Save Location',
-    'Enter Metadata',
-    'Confirm Export',
-  ];
+  const getSteps = () => {
+    if (selectedFormat === 'hdf5') {
+      return [
+        'Name Dataset Levels',
+        'Select Dataset Save Location',
+        'Select Metadata Save Location',
+        'Enter Metadata',
+        'Confirm Export',
+      ];
+    } else {
+      return [
+        'Select Save Location',
+        'Enter Metadata',
+        'Confirm Export',
+      ];
+    }
+  };
 
+  const getStepDescription = () => {
+    const isHdf5 = selectedFormat === 'hdf5';
+    if (isHdf5) {
+      return [
+        'Define names for the dataset levels (e.g., groups like curve0, segment0).',
+        'Enter the file path and dataset path where the HDF5 datasets will be saved.',
+        'Specify the group or dataset path where metadata will be saved.',
+        'Enter or verify the metadata fields for the exported file.',
+        'Review the export details before saving the file.',
+      ][step];
+    } else {
+      return [
+        `Enter the file path where the ${selectedFormat.toUpperCase()} file will be saved.`,
+        'Enter or verify the metadata fields for the exported file.',
+        'Review the export details before saving the file.',
+      ][step];
+    }
+  };
 
   // Metadata validation rules (same as FileOpener)
   const metadataValidationRules = {
@@ -81,8 +111,8 @@ const initialMetadata = {
   };
 
   const validateExportPath = () => {
-    if (!exportPath || !exportPath.endsWith('.hdf5')) {
-      setErrors(['Export path must be a valid HDF5 file path (e.g., exports/processed_data.hdf5)']);
+    if (!exportPath || !exportPath.endsWith(`.${selectedFormat}`)) {
+      setErrors([`Export path must be a valid ${selectedFormat.toUpperCase()} file path (e.g., exports/processed_data.${selectedFormat})`]);
       return false;
     }
     setErrors([]);
@@ -147,24 +177,32 @@ const initialMetadata = {
 
   const handleExportStart = (format) => {
     handleMenuClose();
-    if (format !== 'hdf5') {
-      alert(`Export to ${format.toUpperCase()} is not yet implemented`);
-      return;
-    }
+    setSelectedFormat(format);
+    setExportPath(`exports/processed_data.${format}`);
     setOpen(true);
     setStep(0);
     setErrors([]);
   };
 
   const handleNext = () => {
-    if (step === 0 && !validateExportPath()) return;
-    if (step === 1 && (!validateExportPath() || !validateDatasetPath())) return;
-    if (step === 2 && !validateMetadataPath()) return;
-    if (step === 3 && !validateMetadata()) {
-      alert('Please fix the metadata errors before submitting.');
-      return;
+    const isHdf5 = selectedFormat === 'hdf5';
+    if (isHdf5) {
+      if (step === 0 && !validateLevelNames()) return;
+      if (step === 1 && (!validateExportPath() || !validateDatasetPath())) return;
+      if (step === 2 && !validateMetadataPath()) return;
+      if (step === 3 && !validateMetadata()) {
+        alert('Please fix the metadata errors before submitting.');
+        return;
+      }
+    } else {
+      if (step === 0 && !validateExportPath()) return;
+      if (step === 1 && !validateMetadata()) {
+        alert('Please fix the metadata errors before submitting.');
+        return;
+      }
     }
-    if (step < steps.length - 1) {
+    const currentSteps = getSteps();
+    if (step < currentSteps.length - 1) {
       setStep(step + 1);
     } else {
       handleSubmit();
@@ -183,13 +221,14 @@ const initialMetadata = {
     try {
       // Prepare payload with level names and metadata
       const payload = {
-        export_hdf5_path: exportPath,
+        [`export_path`]: exportPath,
         curve_ids: curveIds.length > 0 ? curveIds : undefined,
         num_curves: curveIds.length > 0 ? undefined : numCurves,
-        level_names: levelNames, // Include user-defined level names
-        metadata_path: metadataPath,
-        dataset_path: datasetPath, // Added
-
+        ...(selectedFormat === 'hdf5' && {
+          level_names: levelNames,
+          metadata_path: metadataPath,
+          dataset_path: datasetPath,
+        }),
         metadata: Object.fromEntries(
           Object.entries(metadata).map(([key, value]) => [
             key,
@@ -199,7 +238,7 @@ const initialMetadata = {
       };
 
       // Call backend export endpoint
-      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/export-hdf5`, {
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/export/${selectedFormat}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -226,7 +265,7 @@ const initialMetadata = {
       const blob = await fileResponse.blob();
       saveAs(blob, exportPath.split('/').pop()); // Use file name from path
       setErrors([]);
-      alert(`Successfully exported ${result.exported_curves} curves to HDF5`);
+      alert(`Successfully exported ${result.exported_curves} curves to ${selectedFormat.toUpperCase()}`);
       setOpen(false);
       setStep(0);
     } catch (err) {
@@ -249,6 +288,16 @@ const initialMetadata = {
   const handleMetadataChange = (e) => {
     setMetadata({ ...metadata, [e.target.name]: e.target.value });
     setErrors(errors.filter((error) => !error.includes(metadataValidationRules[e.target.name]?.label || e.target.name)));
+  };
+
+  // Function to generate a simple textual preview of HDF5 structure
+  const generateHdf5Preview = () => {
+    const levels = levelNames.join(' / ');
+    return `Root
+  - Group: ${levelNames[0]} (and similar for other curves)
+    ${levelNames.slice(1).map((name, index) => `    ${'  '.repeat(index + 1)}- Group: ${name}`).join('\n')}
+    ${'  '.repeat(levelNames.length)}- Dataset: ${datasetPath.split('/').pop()} (at ${datasetPath})
+    ${'  '.repeat(levelNames.length)}- Metadata at: ${metadataPath}`;
   };
 
   return (
@@ -280,13 +329,27 @@ const initialMetadata = {
       >
         <MenuItem onClick={() => handleExportStart('hdf5')}>HDF5</MenuItem>
         <MenuItem onClick={() => handleExportStart('json')}>JSON</MenuItem>
+        <MenuItem onClick={() => handleExportStart('csv')}>CSV</MenuItem>
+        <MenuItem onClick={() => handleExportStart('txt')}>TXT</MenuItem>
+        <MenuItem onClick={() => handleExportStart('jpk')}>JPK</MenuItem>
+        <MenuItem onClick={() => handleExportStart('ibw')}>IBW</MenuItem>
+        <MenuItem onClick={() => handleExportStart('gwy')}>GWY</MenuItem>
       </Menu>
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{steps[step]}</DialogTitle>
+        <DialogTitle>
+          {getSteps()[step]}
+          {selectedFormat === 'hdf5' && (
+            <Tooltip title="HDF5 supports hierarchical data, so extra setup is needed for levels, paths, and structure.">
+              <Typography component="span" variant="body2" sx={{ ml: 1, color: 'info.main' }}>
+                (Why more steps?)
+              </Typography>
+            </Tooltip>
+          )}
+        </DialogTitle>
         <DialogContent>
           <Box mb={2}>
             <Stepper activeStep={step} alternativeLabel>
-              {steps.map((label, index) => (
+              {getSteps().map((label, index) => (
                 <Step
                   key={label}
                   onClick={() => handleStepClick(index)}
@@ -310,11 +373,7 @@ const initialMetadata = {
                 fontWeight: 'bold',
               }}
             >
-              {step === 0 && 'Define names for the dataset levels (e.g., groups like curve0, segment0).'}
-              {step === 1 && 'Enter the file path and dataset path where the HDF5 datasets will be saved.'}
-              {step === 2 && 'Specify the group or dataset path where metadata will be saved.'}
-              {step === 3 && 'Enter or verify the metadata fields for the exported file.'}
-              {step === 4 && 'Review the export details before saving the file.'}
+              {getStepDescription()}
             </Typography>
           </Box>
           {errors.length > 0 && (
@@ -329,138 +388,224 @@ const initialMetadata = {
               </Alert>
             </Box>
           )}
-          {step === 0 && (
-            <Box>
-              {levelNames.map((name, index) => (
+          {selectedFormat === 'hdf5' ? (
+            <>
+              {step === 0 && (
+                <Box>
+                  {levelNames.map((name, index) => (
+                    <TextField
+                      key={index}
+                      label={`Level ${index + 1} Name`}
+                      value={name}
+                      onChange={(e) => {
+                        const newLevelNames = [...levelNames];
+                        newLevelNames[index] = e.target.value;
+                        setLevelNames(newLevelNames);
+                        setErrors([]);
+                      }}
+                      fullWidth
+                      margin="normal"
+                      helperText={`Enter a name for level ${index + 1} (e.g., curve${index})`}
+                      error={errors.some((error) => error.includes('level names'))}
+                    />
+                  ))}
+                  <Button onClick={() => setLevelNames([...levelNames, `level${levelNames.length}`])} variant="outlined" sx={{ mt: 1 }}>
+                    Add Level
+                  </Button>
+                  {levelNames.length > 1 && (
+                    <Button onClick={() => setLevelNames(levelNames.slice(0, -1))} variant="outlined" sx={{ mt: 1, ml: 1 }}>
+                      Remove Level
+                    </Button>
+                  )}
+                </Box>
+              )}
+              {step === 1 && (
+                <Box>
+                  <TextField
+                    label="Export File Path"
+                    value={exportPath}
+                    onChange={(e) => {
+                      setExportPath(e.target.value);
+                      setErrors([]);
+                    }}
+                    fullWidth
+                    margin="normal"
+                    helperText="Enter a valid HDF5 file path (e.g., exports/processed_data.hdf5)"
+                    error={errors.some((error) => error.includes('Export path'))}
+                  />
+                  <TextField
+                    label="Dataset Path"
+                    value={datasetPath}
+                    onChange={(e) => {
+                      setDatasetPath(e.target.value);
+                      setErrors([]);
+                    }}
+                    fullWidth
+                    margin="normal"
+                    helperText="Enter the dataset path (e.g., curve0/segment0/dataset)"
+                    error={errors.some((error) => error.includes('Dataset path'))}
+                  />
+                </Box>
+              )}
+              {step === 2 && (
                 <TextField
-                  key={index}
-                  label={`Level ${index + 1} Name`}
-                  value={name}
+                  label="Metadata Path"
+                  value={metadataPath}
                   onChange={(e) => {
-                    const newLevelNames = [...levelNames];
-                    newLevelNames[index] = e.target.value;
-                    setLevelNames(newLevelNames);
+                    setMetadataPath(e.target.value);
                     setErrors([]);
                   }}
                   fullWidth
                   margin="normal"
-                  helperText={`Enter a name for level ${index + 1} (e.g., curve${index})`}
-                  error={errors.some((error) => error.includes('level names'))}
+                  helperText="Enter the group or dataset path for metadata (e.g., curve0/segment0)"
+                  error={errors.some((error) => error.includes('Metadata path'))}
                 />
-              ))}
-              <Button onClick={() => setLevelNames([...levelNames, `level${levelNames.length}`])} variant="outlined" sx={{ mt: 1 }}>
-                Add Level
-              </Button>
-              {levelNames.length > 1 && (
-                <Button onClick={() => setLevelNames(levelNames.slice(0, -1))} variant="outlined" sx={{ mt: 1, ml: 1 }}>
-                  Remove Level
-                </Button>
               )}
-            </Box>
-          )}
-          {step === 1 && (
-            <Box>
-              <TextField
-                label="Export File Path"
-                value={exportPath}
-                onChange={(e) => {
-                  setExportPath(e.target.value);
-                  setErrors([]);
-                }}
-                fullWidth
-                margin="normal"
-                helperText="Enter a valid HDF5 file path (e.g., exports/processed_data.hdf5)"
-                error={errors.some((error) => error.includes('Export path'))}
-              />
-              <TextField
-                label="Dataset Path"
-                value={datasetPath}
-                onChange={(e) => {
-                  setDatasetPath(e.target.value);
-                  setErrors([]);
-                }}
-                fullWidth
-                margin="normal"
-                helperText="Enter the dataset path (e.g., curve0/segment0/dataset)"
-                error={errors.some((error) => error.includes('Dataset path'))}
-              />
-            </Box>
-          )}
-          {step === 2 && (
-            <TextField
-              label="Metadata Path"
-              value={metadataPath}
-              onChange={(e) => {
-                setMetadataPath(e.target.value);
-                setErrors([]);
-              }}
-              fullWidth
-              margin="normal"
-              helperText="Enter the group or dataset path for metadata (e.g., curve0/segment0)"
-              error={errors.some((error) => error.includes('Metadata path'))}
-            />
-          )}
-          {step === 3 && (
-            <Box>
-              {loading && (
-                <Box display="flex" justifyContent="center" my={2}>
-                  <CircularProgress />
+              {step === 3 && (
+                <Box>
+                  {loading && (
+                    <Box display="flex" justifyContent="center" my={2}>
+                      <CircularProgress />
+                    </Box>
+                  )}
+                  <Typography variant="h6" gutterBottom>
+                    Tip Properties
+                  </Typography>
+                  {['geometry', 'parameter', 'unit', 'value'].map((key) => (
+                    <TextField
+                      key={key}
+                      name={key}
+                      label={metadataValidationRules[key].label}
+                      value={metadata[key] || ''}
+                      onChange={handleMetadataChange}
+                      fullWidth
+                      margin="normal"
+                      type={metadataValidationRules[key].type === 'number' ? 'number' : 'text'}
+                      error={errors.some((error) => error.includes(metadataValidationRules[key].label))}
+                      helperText={errors.find((error) => error.includes(metadataValidationRules[key].label))}
+                      disabled={loading}
+                    />
+                  ))}
+                  <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+                    Additional Metadata
+                  </Typography>
+                  {Object.keys(metadataValidationRules)
+                    .filter((key) => !['geometry', 'parameter', 'unit', 'value'].includes(key))
+                    .map((key) => (
+                      <TextField
+                        key={key}
+                        name={key}
+                        label={metadataValidationRules[key].label}
+                        value={metadata[key] || ''}
+                        onChange={handleMetadataChange}
+                        fullWidth
+                        margin="normal"
+                        type={metadataValidationRules[key].type === 'number' ? 'number' : 'text'}
+                        error={errors.some((error) => error.includes(metadataValidationRules[key].label))}
+                        helperText={errors.find((error) => error.includes(metadataValidationRules[key].label))}
+                        disabled={loading}
+                      />
+                    ))}
                 </Box>
               )}
-              <Typography variant="h6" gutterBottom>
-                Tip Properties
-              </Typography>
-              {['geometry', 'parameter', 'unit', 'value'].map((key) => (
-                <TextField
-                  key={key}
-                  name={key}
-                  label={metadataValidationRules[key].label}
-                  value={metadata[key] || ''}
-                  onChange={handleMetadataChange}
-                  fullWidth
-                  margin="normal"
-                  type={metadataValidationRules[key].type === 'number' ? 'number' : 'text'}
-                  error={errors.some((error) => error.includes(metadataValidationRules[key].label))}
-                  helperText={errors.find((error) => error.includes(metadataValidationRules[key].label))}
-                  disabled={loading}
-                />
-              ))}
-              <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
-                Additional Metadata
-              </Typography>
-              {Object.keys(metadataValidationRules)
-                .filter((key) => !['geometry', 'parameter', 'unit', 'value'].includes(key))
-                .map((key) => (
+              {step === 4 && (
+                <Box>
+                  <Typography variant="h6" gutterBottom>Review Export Details</Typography>
+                  <Typography><strong>File Path:</strong> {exportPath}</Typography>
+                  <Typography><strong>Level Names:</strong> {levelNames.join(', ')}</Typography>
+                  <Typography><strong>Dataset Path:</strong> {datasetPath || 'Not specified'}</Typography>
+                  <Typography><strong>Metadata Path:</strong> {metadataPath}</Typography>
+                  <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>Preview of HDF5 Structure</Typography>
+                  <Box sx={{ backgroundColor: '#f5f5f5', p: 2, borderRadius: 1, whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+                    {generateHdf5Preview()}
+                  </Box>
+                  <Typography variant="h6" gutterBottom sx={{ mt: 2 }}><strong>Metadata:</strong></Typography>
+                  <ul>
+                    {Object.entries(metadata).map(([key, value]) => (
+                      <li key={key}>{metadataValidationRules[key]?.label || key}: {value || 'Not provided'}</li>
+                    ))}
+                  </ul>
+                </Box>
+              )}
+            </>
+          ) : (
+            <>
+              {step === 0 && (
+                <Box>
                   <TextField
-                    key={key}
-                    name={key}
-                    label={metadataValidationRules[key].label}
-                    value={metadata[key] || ''}
-                    onChange={handleMetadataChange}
+                    label="Export File Path"
+                    value={exportPath}
+                    onChange={(e) => {
+                      setExportPath(e.target.value);
+                      setErrors([]);
+                    }}
                     fullWidth
                     margin="normal"
-                    type={metadataValidationRules[key].type === 'number' ? 'number' : 'text'}
-                    error={errors.some((error) => error.includes(metadataValidationRules[key].label))}
-                    helperText={errors.find((error) => error.includes(metadataValidationRules[key].label))}
-                    disabled={loading}
+                    helperText={`Enter a valid ${selectedFormat.toUpperCase()} file path (e.g., exports/processed_data.${selectedFormat})`}
+                    error={errors.some((error) => error.includes('Export path'))}
                   />
-                ))}
-            </Box>
-          )}
-          {step === 4 && (
-            <Box>
-              <Typography variant="h6" gutterBottom>Review Export Details</Typography>
-              <Typography><strong>File Path:</strong> {exportPath}</Typography>
-              <Typography><strong>Level Names:</strong> {levelNames.join(', ')}</Typography>
-              <Typography><strong>Dataset Path:</strong> {datasetPath || 'Not Cheung specified'}</Typography>
-              <Typography><strong>Metadata Path:</strong> {metadataPath}</Typography>
-              <Typography><strong>Metadata:</strong></Typography>
-              <ul>
-                {Object.entries(metadata).map(([key, value]) => (
-                  <li key={key}>{metadataValidationRules[key]?.label || key}: {value || 'Not provided'}</li>
-                ))}
-              </ul>
-            </Box>
+                </Box>
+              )}
+              {step === 1 && (
+                <Box>
+                  {loading && (
+                    <Box display="flex" justifyContent="center" my={2}>
+                      <CircularProgress />
+                    </Box>
+                  )}
+                  <Typography variant="h6" gutterBottom>
+                    Tip Properties
+                  </Typography>
+                  {['geometry', 'parameter', 'unit', 'value'].map((key) => (
+                    <TextField
+                      key={key}
+                      name={key}
+                      label={metadataValidationRules[key].label}
+                      value={metadata[key] || ''}
+                      onChange={handleMetadataChange}
+                      fullWidth
+                      margin="normal"
+                      type={metadataValidationRules[key].type === 'number' ? 'number' : 'text'}
+                      error={errors.some((error) => error.includes(metadataValidationRules[key].label))}
+                      helperText={errors.find((error) => error.includes(metadataValidationRules[key].label))}
+                      disabled={loading}
+                    />
+                  ))}
+                  <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+                    Additional Metadata
+                  </Typography>
+                  {Object.keys(metadataValidationRules)
+                    .filter((key) => !['geometry', 'parameter', 'unit', 'value'].includes(key))
+                    .map((key) => (
+                      <TextField
+                        key={key}
+                        name={key}
+                        label={metadataValidationRules[key].label}
+                        value={metadata[key] || ''}
+                        onChange={handleMetadataChange}
+                        fullWidth
+                        margin="normal"
+                        type={metadataValidationRules[key].type === 'number' ? 'number' : 'text'}
+                        error={errors.some((error) => error.includes(metadataValidationRules[key].label))}
+                        helperText={errors.find((error) => error.includes(metadataValidationRules[key].label))}
+                        disabled={loading}
+                      />
+                    ))}
+                </Box>
+              )}
+              {step === 2 && (
+                <Box>
+                  <Typography variant="h6" gutterBottom>Review Export Details</Typography>
+                  <Typography><strong>File Path:</strong> {exportPath}</Typography>
+                  <Typography><strong>Metadata:</strong></Typography>
+                  <ul>
+                    {Object.entries(metadata).map(([key, value]) => (
+                      <li key={key}>{metadataValidationRules[key]?.label || key}: {value || 'Not provided'}</li>
+                    ))}
+                  </ul>
+                </Box>
+              )}
+            </>
           )}
         </DialogContent>
         <DialogActions>
@@ -473,7 +618,7 @@ const initialMetadata = {
             </Button>
           )}
           <Button onClick={handleNext} disabled={loading || errors.length > 0}>
-            {step === steps.length - 1 ? 'Export' : 'Next'}
+            {step === getSteps().length - 1 ? 'Export' : 'Next'}
           </Button>
         </DialogActions>
       </Dialog>

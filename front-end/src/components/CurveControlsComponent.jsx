@@ -151,69 +151,131 @@ const CurveControlsComponent = ({
       <div style={{ ...labelStyle, marginRight: isMobile ? "0" : "10px" }}>
         File: {filename || "No file selected"}
       </div>
-      <FormControl style={formControlStyle}>
-        <InputLabel id="curve-select-label" style={inputLabelStyle}>
-          Select Curves
-        </InputLabel>
-        <Select
-          labelId="curve-select-label"
-          multiple
-          value={selectedCurveIds}
-          onChange={handleSelectChange}
-          renderValue={(selected) =>
-            selected.length === 0 ? "All Curves" : selected.join(", ")
-          }
-          style={selectStyle}
-        >
-          <MenuItem style={headerStyle} disabled>
-            <Box display="flex" alignItems="center" width="100%">
-              <Box width="50px" textAlign="center">
-                Display
-              </Box>
-              <Box flexGrow={1} textAlign="left">
-                Curve
-              </Box>
-              <Box width="50px" textAlign="center">
-                Export
-              </Box>
-            </Box>
-          </MenuItem>
-          {forceData.map((curve) => (
-            <MenuItem
-              key={curve.curve_id}
-              value={curve.curve_id}
-              style={menuItemStyle}
-            >
-              <Box display="flex" alignItems="center" width="100%">
-                <Box width="50px" textAlign="center">
-                  <Checkbox
-                    checked={selectedCurveIds.includes(curve.curve_id)}
-                    size="small"
-                    style={checkboxStyle}
-                  />
-                </Box>
-                <Box flexGrow={1}>
-                  <ListItemText
-                    primary={curve.curve_id}
-                    primaryTypographyProps={{
-                      fontSize: isMobile ? "14px" : "12px",
-                    }}
-                  />
-                </Box>
-                <Box width="50px" textAlign="center">
-                  <Checkbox
-                    checked={selectedExportCurveIds.includes(curve.curve_id)}
-                    onChange={handleExportChange(curve.curve_id)}
-                    size="small"
-                    style={{ ...checkboxStyle, marginLeft: "10px" }}
-                    title="Export"
-                  />
-                </Box>
-              </Box>
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
+    <FormControl style={formControlStyle}>
+  <InputLabel id="curve-select-label" style={inputLabelStyle}>
+    Select Curves
+  </InputLabel>
+  <Select
+    labelId="curve-select-label"
+    multiple
+    value={selectedCurveIds}
+    onChange={handleSelectChange}
+    renderValue={(selected) =>
+      selected.length === 0 ? "All Curves" : selected.join(", ")
+    }
+    style={selectStyle}
+  >
+    <MenuItem style={headerStyle} disabled>
+      <Box display="flex" alignItems="center" width="100%">
+        <Box width="50px" textAlign="center">
+          Display
+        </Box>
+        <Box flexGrow={1} textAlign="left">
+          Curve
+        </Box>
+        <Box width="50px" textAlign="center">
+          Export
+        </Box>
+      </Box>
+    </MenuItem>
+    <MenuItem style={menuItemStyle}>
+      <Box display="flex" alignItems="center" width="100%">
+        <Box width="50px" textAlign="center">
+          <Checkbox
+            checked={
+              forceData.length > 0 &&
+              forceData.every((curve) =>
+                selectedCurveIds.includes(curve.curve_id)
+              )
+            }
+            onChange={(event) => {
+              event.stopPropagation();
+              const allCurveIds = forceData.map((curve) => curve.curve_id);
+              if (event.target.checked) {
+                setSelectedCurveIds(allCurveIds);
+                onExportCurveIdsChange(allCurveIds); // Select all for export too
+                console.log("Selected all curves for display and export:", allCurveIds);
+              } else {
+                setSelectedCurveIds([]);
+                onExportCurveIdsChange([]); // Deselect all for export
+                console.log("Deselected all curves for display and export");
+              }
+            }}
+            size="small"
+            style={checkboxStyle}
+          />
+        </Box>
+        <Box flexGrow={1}>
+          <ListItemText
+            primary="Select All"
+            primaryTypographyProps={{
+              fontSize: isMobile ? "14px" : "12px",
+            }}
+          />
+        </Box>
+        <Box width="50px" textAlign="center">
+          <Checkbox
+            checked={
+              forceData.length > 0 &&
+              forceData.every((curve) =>
+                selectedExportCurveIds.includes(curve.curve_id)
+              )
+            }
+            onChange={(event) => {
+              event.stopPropagation();
+              const allCurveIds = forceData.map((curve) => curve.curve_id);
+              if (event.target.checked) {
+                onExportCurveIdsChange(allCurveIds);
+                setSelectedCurveIds(allCurveIds); // Ensure all are displayed when exported
+                console.log("Selected all curves for export:", allCurveIds);
+              } else {
+                onExportCurveIdsChange([]);
+                console.log("Deselected all curves for export");
+              }
+            }}
+            size="small"
+            style={{ ...checkboxStyle, marginLeft: "10px" }}
+            title="Export All"
+          />
+        </Box>
+      </Box>
+    </MenuItem>
+    {forceData.map((curve) => (
+      <MenuItem
+        key={curve.curve_id}
+        value={curve.curve_id}
+        style={menuItemStyle}
+      >
+        <Box display="flex" alignItems="center" width="100%">
+          <Box width="50px" textAlign="center">
+            <Checkbox
+              checked={selectedCurveIds.includes(curve.curve_id)}
+              size="small"
+              style={checkboxStyle}
+            />
+          </Box>
+          <Box flexGrow={1}>
+            <ListItemText
+              primary={curve.curve_id}
+              primaryTypographyProps={{
+                fontSize: isMobile ? "14px" : "12px",
+              }}
+            />
+          </Box>
+          <Box width="50px" textAlign="center">
+            <Checkbox
+              checked={selectedExportCurveIds.includes(curve.curve_id)}
+              onChange={handleExportChange(curve.curve_id)}
+              size="small"
+              style={{ ...checkboxStyle, marginLeft: "10px" }}
+              title="Export"
+            />
+          </Box>
+        </Box>
+      </MenuItem>
+    ))}
+  </Select>
+</FormControl>
       <FormControl style={formControlStyle}>
         <InputLabel id="graph-type-label" style={inputLabelStyle}>
           Graph Type

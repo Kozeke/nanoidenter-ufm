@@ -52,24 +52,36 @@ const ElasticitySpectra = ({
   const xScaleFactor = getScaleFactor(domainRange.xMin, xData);
   const yScaleFactor = getScaleFactor(domainRange.yMin);
 
+  const xScaledRange = (domainRange.xMax - domainRange.xMin) * xScaleFactor;
+  const xDecimals = xScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10))) : 0;
+
+  const yScaledRange = (domainRange.yMax - domainRange.yMin) * yScaleFactor;
+  const yDecimals = yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0;
+
+  const xExponent = Math.log10(xScaleFactor);
+  const xUnit = xExponent === 0 ? 'm' : `×10^{-${Math.round(xExponent)}} m`;
+
+  const yExponent = Math.log10(yScaleFactor);
+  const yUnit = yExponent === 0 ? 'Pa' : `×10^{-${Math.round(yExponent)}} Pa`;
+
   const chartOptions = {
     tooltip: { trigger: "axis" },
     xAxis: {
       type: "value",
-      name: `Z (x10^-${Math.log10(xScaleFactor)} m)`,
+      name: `Z (${xUnit})`,
       nameLocation: "middle",
       nameGap: 25,
       min: domainRange.xMin ? domainRange.xMin * xScaleFactor : undefined,
       max: domainRange.xMax ? domainRange.xMax * xScaleFactor : undefined,
       axisLabel: {
         formatter: function (value) {
-          return value.toFixed(0);
+          return value.toFixed(xDecimals);
         },
       },
     },
     yAxis: {
       type: "value",
-      name: "E (Pa)",
+      name: `E (${yUnit})`,
       nameLocation: "middle",
       nameGap: 40,
       scale: true,
@@ -77,7 +89,7 @@ const ElasticitySpectra = ({
       max: domainRange.yMax * yScaleFactor,
       axisLabel: {
         formatter: function (value) {
-          return value.toFixed(0);
+          return value.toFixed(yDecimals);
         },
       },
     },
@@ -168,7 +180,7 @@ const ElasticitySpectra = ({
 
   return (
     <div style={{ flex: 1, height: "100%" }}>
-      <h2
+      {/* <h2
         style={{
           margin: "0 0 5px 0",
           fontSize: isMobile ? "14px" : "16px",
@@ -176,7 +188,7 @@ const ElasticitySpectra = ({
         }}
       >
         Elasticity Spectra
-      </h2>
+      </h2> */}
       <ReactECharts
         option={chartOptions}
         style={{ height: chartHeight, width: "100%" }}

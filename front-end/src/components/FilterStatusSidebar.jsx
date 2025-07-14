@@ -13,12 +13,73 @@ import {
 } from "@mui/material";
 import { Delete, Close } from "@mui/icons-material";
 
+const FilterCard = ({
+  filterName,
+  filterData,
+  capitalizeFilterName,
+  handleRemoveFilter,
+  handleFilterChange,
+  type,
+  color = "#3DA58A"
+}) => (
+  <Card
+    sx={{
+      bgcolor: "background.default",
+      boxShadow: 2,
+      transition: "transform 0.2s, box-shadow 0.2s",
+      "&:hover": {
+        transform: "scale(1.02)",
+        boxShadow: 4,
+      },
+    }}
+  >
+    <CardContent sx={{ p: 1 }}>
+      <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
+        <Typography variant="subtitle2" sx={{ fontSize: 14, color }}>
+          {capitalizeFilterName(filterName)}
+        </Typography>
+        <Tooltip title="Remove Filter">
+          <IconButton
+            size="small"
+            color="error"
+            onClick={() => handleRemoveFilter(filterName, type)}
+            aria-label={`Remove ${capitalizeFilterName(filterName)} filter`}
+          >
+            <Delete fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </Box>
+      {Object.keys(filterData || {}).map((param) => (
+        <Box key={param} sx={{ mt: 0.5 }}>
+          <Typography variant="caption" sx={{ display: "block", fontSize: 12 }}>
+            {param.replace("_", " ")}
+          </Typography>
+          <TextField
+            type="number"
+            size="small"
+            value={filterData[param] ?? ""}
+            onChange={(e) =>
+              handleFilterChange(
+                filterName,
+                param,
+                parseFloat(e.target.value),
+                type
+              )
+            }
+            fullWidth
+            sx={{ "& .MuiInputBase-input": { fontSize: 13, p: 0.5 } }}
+          />
+        </Box>
+      ))}
+    </CardContent>
+  </Card>
+);
+
 const FilterStatusSidebar = ({
   regularFilters,
   cpFilters,
-  fModels,
-  eModels,
-  fModelDefaults,
+  forceModels,
+  elasticityModels,
   capitalizeFilterName,
   handleRemoveFilter,
   handleFilterChange,
@@ -29,8 +90,8 @@ const FilterStatusSidebar = ({
   const hasFilters =
     Object.keys(regularFilters || {}).length > 0 ||
     Object.keys(cpFilters || {}).length > 0 ||
-    Object.keys(fModels || {}).length > 0 ||
-    Object.keys(eModels || {}).length > 0;
+    Object.keys(forceModels || {}).length > 0 ||
+    Object.keys(elasticityModels || {}).length > 0;
 
   return (
     <Fade in={isOpen}>
@@ -61,241 +122,65 @@ const FilterStatusSidebar = ({
           Applied Filters
         </Typography>
         <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <Typography variant="h6" sx={{ fontSize: 14, fontWeight: "medium" }}>
-                      Filters
-                    </Typography>
-                    <IconButton onClick={toggleFilters} size="small" color="error">
-                      <Close fontSize="small" />
-                    </IconButton>
-                  </Box>
+          <Typography variant="h6" sx={{ fontSize: 14, fontWeight: "medium" }}>
+            Filters
+          </Typography>
+          <IconButton onClick={toggleFilters} size="small" color="error">
+            <Close fontSize="small" />
+          </IconButton>
+        </Box>
         <Stack direction="column" spacing={1}>
           {/* Regular Filters */}
           {Object.keys(regularFilters || {}).map((filterName) => (
-            <Card
+            <FilterCard
               key={filterName}
-              sx={{
-                bgcolor: "background.default",
-                boxShadow: 2,
-                transition: "transform 0.2s, box-shadow 0.2s",
-                "&:hover": {
-                  transform: "scale(1.02)",
-                  boxShadow: 4,
-                },
-              }}
-            >
-              <CardContent sx={{ p: 1 }}>
-                <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
-                  <Typography variant="subtitle2" sx={{ fontSize: 14, color: "#3DA58A", }}>
-                    {capitalizeFilterName(filterName)}
-                  </Typography>
-                  <Tooltip title="Remove Filter">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={() => handleRemoveFilter(filterName, false)}
-                      aria-label={`Remove ${capitalizeFilterName(filterName)} filter`}
-                    >
-                      <Delete fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-                {Object.keys(regularFilters[filterName] || {}).map((param) => (
-                  <Box key={param} sx={{ mt: 0.5 }}>
-                    <Typography variant="caption" sx={{ display: "block", fontSize: 12,  }}>
-                      {param.replace("_", " ")}
-                    </Typography>
-                    <TextField
-                      type="number"
-                      size="small"
-                      value={regularFilters[filterName][param] ?? ""}
-                      onChange={(e) =>
-                        handleFilterChange(
-                          filterName,
-                          param,
-                          parseFloat(e.target.value),
-                          false
-                        )
-                      }
-                      fullWidth
-                      sx={{ "& .MuiInputBase-input": { fontSize: 13, p: 0.5 } }}
-                    />
-                  </Box>
-                ))}
-              </CardContent>
-            </Card>
+              filterName={filterName}
+              filterData={regularFilters[filterName]}
+              capitalizeFilterName={capitalizeFilterName}
+              handleRemoveFilter={handleRemoveFilter}
+              handleFilterChange={handleFilterChange}
+              type="regular"
+            />
           ))}
 
           {/* CP Filters */}
           {Object.keys(cpFilters || {}).map((filterName) => (
-            <Card
+            <FilterCard
               key={filterName}
-              sx={{
-                bgcolor: "background.default",
-                boxShadow: 2,
-                transition: "transform 0.2s, box-shadow 0.2s",
-                "&:hover": {
-                  transform: "scale(1.02)",
-                  boxShadow: 4,
-                },
-              }}
-            >
-              <CardContent sx={{ p: 1 }}>
-                <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
-                  <Typography variant="subtitle2" sx={{ fontSize: 14 }}>
-                    {capitalizeFilterName(filterName)}
-                  </Typography>
-                  <Tooltip title="Remove Filter">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={() => handleRemoveFilter(filterName, true)}
-                      aria-label={`Remove ${capitalizeFilterName(filterName)} CP filter`}
-                    >
-                      <Delete fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-                {Object.keys(cpFilters[filterName] || {}).map((param) => (
-                  <Box key={param} sx={{ mt: 0.5 }}>
-                    <Typography variant="caption" sx={{ display: "block", fontSize: 12 }}>
-                      {param.replace("_", " ")}
-                    </Typography>
-                    <TextField
-                      type="number"
-                      size="small"
-                      value={cpFilters[filterName][param] ?? ""}
-                      onChange={(e) =>
-                        handleFilterChange(
-                          filterName,
-                          param,
-                          parseFloat(e.target.value),
-                          true
-                        )
-                      }
-                      fullWidth
-                      sx={{ "& .MuiInputBase-input": { fontSize: 13, p: 0.5 } }}
-                    />
-                  </Box>
-                ))}
-              </CardContent>
-            </Card>
+              filterName={filterName}
+              filterData={cpFilters[filterName]}
+              capitalizeFilterName={capitalizeFilterName}
+              handleRemoveFilter={handleRemoveFilter}
+              handleFilterChange={handleFilterChange}
+              type="cp"
+              color="#000000" // Example differentiation
+            />
           ))}
 
           {/* Force Models */}
-          {Object.keys(fModels || {}).map((fmodelName) => (
-            <Card
-              key={fmodelName}
-              sx={{
-                bgcolor: "background.default",
-                boxShadow: 2,
-                transition: "transform 0.2s, box-shadow 0.2s",
-                "&:hover": {
-                  transform: "scale(1.02)",
-                  boxShadow: 4,
-                },
-              }}
-            >
-              <CardContent sx={{ p: 1 }}>
-                <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
-                  <Typography variant="subtitle2" sx={{ fontSize: 14 }}>
-                    {capitalizeFilterName(fmodelName)}
-                  </Typography>
-                  <Tooltip title="Remove Model">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={() => handleRemoveFilter(fmodelName, false, true)}
-                      aria-label={`Remove ${capitalizeFilterName(fmodelName)} force model`}
-                    >
-                      <Delete fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-                {Object.keys(fModels[fmodelName] || fModelDefaults[fmodelName] || {}).map((param) => (
-                  <Box key={param} sx={{ mt: 0.5 }}>
-                    <Typography variant="caption" sx={{ display: "block", fontSize: 12 }}>
-                      {param.replace("_", " ")}
-                    </Typography>
-                    <TextField
-                      type="number"
-                      size="small"
-                      value={
-                        fModels[fmodelName]?.[param] ?? fModelDefaults[fmodelName]?.[param] ?? ""
-                      }
-                      onChange={(e) =>
-                        handleFilterChange(
-                          fmodelName,
-                          param,
-                          parseFloat(e.target.value),
-                          false,
-                          true
-                        )
-                      }
-                      fullWidth
-                      sx={{ "& .MuiInputBase-input": { fontSize: 13, p: 0.5 } }}
-                    />
-                  </Box>
-                ))}
-              </CardContent>
-            </Card>
+          {Object.keys(forceModels || {}).map((filterName) => (
+            <FilterCard
+              key={filterName}
+              filterName={filterName}
+              filterData={forceModels[filterName]}
+              capitalizeFilterName={capitalizeFilterName}
+              handleRemoveFilter={handleRemoveFilter}
+              handleFilterChange={handleFilterChange}
+              type="force"
+            />
           ))}
 
           {/* Elasticity Models */}
-          {Object.keys(eModels || {}).map((filterName) => (
-            <Card
+          {Object.keys(elasticityModels || {}).map((filterName) => (
+            <FilterCard
               key={filterName}
-              sx={{
-                bgcolor: "background.default",
-                boxShadow: 2,
-                transition: "transform 0.2s, box-shadow 0.2s",
-                "&:hover": {
-                  transform: "scale(1.02)",
-                  boxShadow: 4,
-                },
-              }}
-            >
-              <CardContent sx={{ p: 1 }}>
-                <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
-                  <Typography variant="subtitle2" sx={{ fontSize: 14 }}>
-                    {capitalizeFilterName(filterName)}
-                  </Typography>
-                  <Tooltip title="Remove Model">
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={() => handleRemoveFilter(filterName, false, false, true)}
-                      aria-label={`Remove ${capitalizeFilterName(filterName)} elasticity model`}
-                    >
-                      <Delete fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </Box>
-                {Object.keys(eModels[filterName] || {}).map((param) => (
-                  <Box key={param} sx={{ mt: 0.5 }}>
-                    <Typography variant="caption" sx={{ display: "block", fontSize: 12 }}>
-                      {param.replace("_", " ")}
-                    </Typography>
-                    <TextField
-                      type="number"
-                      size="small"
-                      value={eModels[filterName][param] ?? ""}
-                      onChange={(e) =>
-                        handleFilterChange(
-                          filterName,
-                          param,
-                          parseFloat(e.target.value),
-                          false,
-                          false,
-                          true
-                        )
-                      }
-                      fullWidth
-                      sx={{ "& .MuiInputBase-input": { fontSize: 13, p: 0.5 } }}
-                    />
-                  </Box>
-                ))}
-              </CardContent>
-            </Card>
+              filterName={filterName}
+              filterData={elasticityModels[filterName]}
+              capitalizeFilterName={capitalizeFilterName}
+              handleRemoveFilter={handleRemoveFilter}
+              handleFilterChange={handleFilterChange}
+              type="elasticity"
+            />
           ))}
         </Stack>
       </Drawer>

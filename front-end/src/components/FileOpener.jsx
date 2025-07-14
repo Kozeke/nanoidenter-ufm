@@ -35,6 +35,7 @@ const FileOpener = ({ onProcessSuccess }) => {
   const [errors, setErrors] = useState([]);
   const [warnings, setWarnings] = useState([]);
   const [loading, setLoading] = useState(false); // Add loading state
+  const [isDialogReady, setIsDialogReady] = useState(false);
 
   const metadataValidationRules = {
     file_id: { required: 'boolean', label: 'File ID', type: 'text' },
@@ -94,7 +95,32 @@ const FileOpener = ({ onProcessSuccess }) => {
     return { group: null, path: [] };
   };
 
+  const getFakeGroupForFlatFile = (struct) => {
+    const headers = struct.headers || struct.sample_rows[0] || [];
+    let datasetNames = headers.slice(1);
+    if (datasetNames.includes('Z (m)') && datasetNames.includes('Force (N)')) {
+      datasetNames = ['Z (m)', 'Force (N)'].concat(datasetNames.filter(col => !['Z (m)', 'Force (N)'].includes(col)));
+    }
+    const fakeDatasets = datasetNames.map(name => ({
+      path: name,
+      name: name,
+      shape: [struct.sample_rows.length - 1],
+      dtype: 'float64',
+      attributes: {}
+    }));
+    const normalizedMetadata = {};
+    for (const [key, value] of Object.entries(struct.metadata || {})) {
+      const normKey = key.toLowerCase().replace(/\s+/g, '_');
+      normalizedMetadata[normKey] = value;
+    }
+    return { groups: { datasets: fakeDatasets }, datasets: [], attributes: normalizedMetadata };
+  };
+
   const navigateToFirstSegment = (initialGroup, initialPath = []) => {
+    if (!initialGroup.groups) {
+      console.warn('No hierarchical groups found (e.g., CSV file)');
+      return { group: initialGroup, path: initialPath };
+    }
     let group = initialGroup;
     let path = [...initialPath];
 
@@ -126,17 +152,20 @@ const FileOpener = ({ onProcessSuccess }) => {
   const handleOpenFile = async () => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = '.json,.hdf5';
+    input.accept = '.json,.hdf5,.csv,.txt';
 
     input.onchange = async (event) => {
       const file = event.target.files[0];
       if (!file) return;
 
+      setLoading(true);
+      setIsDialogReady(false); // Reset dialog readiness
+
       const formData = new FormData();
       formData.append('file', file);
 
       try {
-        const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/load-experiment`, {
+        const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/experiment/load-experiment`, {
           method: 'POST',
           body: formData,
         });
@@ -152,23 +181,33 @@ const FileOpener = ({ onProcessSuccess }) => {
           setFilePath(result.filename);
           setFileType(result.file_type);
           setStructure(result.structure);
-
-          const { group, path } = navigateToFirstSegment(result.structure);
-          setCurrentGroup({ ...group });
-          setNavigationPath(path);
-
           setErrors([]);
           setWarnings([]);
-          setStep(0); // Changed from setStep(1) to start at Select Z Dataset
+          setStep(0);
           setOpen(true);
+          setIsDialogReady(true);
+          setLoading(false);
           console.log('Initial Structure:', JSON.stringify(result.structure, null, 2));
-          console.log('Starting Group:', group, 'Path:', path);
-          console.log('Segment0 groups:', result.structure.groups?.curve0?.groups?.segment0?.groups);
+
+          let initialGroup, initialPath = [];
+          if (result.file_type === 'csv' || result.file_type === 'txt') {
+            initialGroup = getFakeGroupForFlatFile(result.structure);
+            initialPath = [];
+          } else {
+            const { group, path } = navigateToFirstSegment(result.structure);
+            initialGroup = { ...group };
+            initialPath = path;
+            console.log('Starting Group:', initialGroup, 'Path:', initialPath);
+            console.log('Segment0 groups:', result.structure.groups?.curve0?.groups?.segment0?.groups);
+          }
+          setCurrentGroup(initialGroup);
+          setNavigationPath(initialPath);
         }
       } catch (err) {
         const errorMessage = err.message.includes('HTTP error') ? 'Failed to communicate with server' : err.message;
         setErrors([errorMessage]);
         alert(`Failed to open file: ${errorMessage}`);
+        setLoading(false); // Set loading false for error case
       }
     };
 
@@ -176,6 +215,10 @@ const FileOpener = ({ onProcessSuccess }) => {
   };
 
   const navigateToGroup = (groupName) => {
+    if (fileType === 'csv' || fileType === 'txt') {
+      console.warn('Navigation not supported for flat files');
+      return;
+    }
     let group = structure;
     const newPath = [...navigationPath, groupName];
 
@@ -201,6 +244,10 @@ const FileOpener = ({ onProcessSuccess }) => {
   };
 
   const goBack = () => {
+    if (fileType === 'csv' || fileType === 'txt') {
+      console.warn('Navigation not supported for flat files');
+      return;
+    }
     if (navigationPath.length === 0) return;
     const newPath = navigationPath.slice(0, -1);
     let group = structure;
@@ -228,9 +275,17 @@ const FileOpener = ({ onProcessSuccess }) => {
 
   const handleSelectForce = (path) => {
     setForcePath(path);
-    const { group, path: newPath } = navigateToFirstSegment(structure);
-    if (group) {
-      setCurrentGroup({ ...group });
+    let newGroup, newPath;
+    if (fileType === 'csv' || fileType === 'txt') {
+      newGroup = getFakeGroupForFlatFile(structure);
+      newPath = [];
+    } else {
+      const { group, path: np } = navigateToFirstSegment(structure);
+      newGroup = { ...group };
+      newPath = np;
+    }
+    if (newGroup) {
+      setCurrentGroup(newGroup);
       setNavigationPath(newPath);
     } else {
       setCurrentGroup(structure);
@@ -239,69 +294,121 @@ const FileOpener = ({ onProcessSuccess }) => {
     setStep(1);
     console.log('Selected Force:', path, 'New Path:', newPath);
   };
+
   const handleStepClick = (stepIndex) => {
-    if (stepIndex >= step) return; // Prevent navigating to future steps
+    if (stepIndex >= step) return;
     setStep(stepIndex);
-    // Restore navigation path for the selected step
     if (stepIndex === 0 || stepIndex === 1 || stepIndex === 2) {
-      const { group, path } = navigateToFirstSegment(structure);
-      setCurrentGroup({ ...group });
-      setNavigationPath(path);
+      let newGroup, newPath;
+      if (fileType === 'csv' || fileType === 'txt') {
+        newGroup = getFakeGroupForFlatFile(structure);
+        newPath = [];
+      } else {
+        const { group, path } = navigateToFirstSegment(structure);
+        newGroup = { ...group };
+        newPath = path;
+      }
+      setCurrentGroup(newGroup);
+      setNavigationPath(newPath);
     }
     console.log(`Navigated to step ${stepIndex}: ${steps[stepIndex]}`);
   };
 
   const handleSelectZ = (path) => {
     setZPath(path);
+    let newGroup, newPath = [];
+    if (fileType === 'csv' || fileType === 'txt') {
+      newGroup = getFakeGroupForFlatFile(structure);
+      newPath = [];
+      setCurrentGroup(newGroup);
+      setNavigationPath(newPath);
+      setStep(2);
+      console.log('Selected Z:', path, 'New Path:', newPath, 'Current Group:', newGroup);
+      return;
+    }
     let group = structure;
-    let newPath = [];
     try {
       if (group.groups?.curve0?.groups?.segment0) {
-        group = group.groups.curve0.groups.segment0;
+        newGroup = group.groups.curve0.groups.segment0;
         newPath = ['curve0', 'segment0'];
       } else {
         console.warn('curve0/segment0 not found, falling back to first segment');
         const { group: fallbackGroup, path: fallbackPath } = navigateToFirstSegment(structure);
-        group = fallbackGroup;
+        newGroup = fallbackGroup;
         newPath = fallbackPath;
       }
-      setCurrentGroup({ ...group });
+      setCurrentGroup({ ...newGroup });
       setNavigationPath(newPath);
       setStep(2);
-      console.log('Selected Z:', path, 'New Path:', newPath, 'Current Group:', group);
+      console.log('Selected Z:', path, 'New Path:', newPath, 'Current Group:', newGroup);
     } catch (error) {
       console.error('Error navigating to segment0:', error);
       setErrors(['Failed to navigate to segment0 for metadata selection']);
       setCurrentGroup(structure);
       setNavigationPath([]);
-      setStep(3);
+      setStep(2); // Changed to 2 instead of 3 to stay on metadata selection
     }
   };
 
   const handleSelectMetadata = (path) => {
+    if (fileType === 'csv' || fileType === 'txt') {
+      let attributes = {};
+      if (path === 'root') {
+        attributes = currentGroup.attributes || {};
+      } else {
+        const possibleDatasets = currentGroup.groups?.datasets || [];
+        const dataset = possibleDatasets.find(ds => ds.path === path || ds.name === path);
+        if (!dataset) {
+          setErrors(['Dataset not found for metadata: ' + path]);
+          return;
+        }
+        attributes = dataset.attributes || {};
+      }
+      const initializedMetadata = Object.keys(metadataValidationRules).reduce((acc, key) => {
+        acc[key] = '';
+        return acc;
+      }, {});
+      const mergedMetadata = { ...initializedMetadata, ...attributes };
+      if (Object.keys(attributes).length === 0) {
+        console.warn(`No attributes found at ${path}`);
+        setWarnings((prev) => [...prev, `No attributes found at ${path}. Enter metadata manually.`]);
+      } else {
+        console.log('Found attributes:', attributes);
+      }
+      setMetadata(mergedMetadata);
+      setMetadataPath(path);
+      setStep(4);
+      console.log('Selected Metadata Location:', path, 'Merged Metadata:', mergedMetadata);
+      return;
+    }
     console.log('Attempting to select metadata at path:', path);
     let target = structure;
     const pathParts = path.split('/');
 
     try {
-      for (let i = 0; i < pathParts.length; i++) {
-        const part = pathParts[i];
-        console.log(`Traversing part ${i}: ${part}, Current target keys:`, Object.keys(target));
-        if (target.groups && target.groups[part]) {
-          target = target.groups[part];
-        } else {
-          const dataset = (target.datasets || []).find(
-            (ds) => ds.name === part || ds.path === path || ds.path.endsWith(`/${part}`)
-          );
-          if (dataset) {
-            target = dataset;
-            break;
+      if (path === 'root') {
+        target = structure;
+      } else {
+        for (let i = 0; i < pathParts.length; i++) {
+          const part = pathParts[i];
+          console.log(`Traversing part ${i}: ${part}, Current target keys:`, Object.keys(target));
+          if (target.groups && target.groups[part]) {
+            target = target.groups[part];
+          } else {
+            const possibleDatasets = [...(target.datasets || []), ...(target.groups?.datasets || [])];
+            const dataset = possibleDatasets.find(
+              (ds) => ds.name === part || ds.path === path || ds.path.endsWith(`/${part}`)
+            );
+            if (dataset) {
+              target = dataset;
+              break;
+            }
+            throw new Error(`Path part ${part} not found at ${pathParts.slice(0, i + 1).join('/')}`);
           }
-          throw new Error(`Path part ${part} not found at ${pathParts.slice(0, i + 1).join('/')}`);
         }
       }
 
-      const attributes = target.groups.attributes || {};
+      const attributes = target.attributes || {};
       // Initialize metadata with all validation rule fields
       const initializedMetadata = Object.keys(metadataValidationRules).reduce((acc, key) => {
         acc[key] = '';
@@ -347,7 +454,7 @@ const FileOpener = ({ onProcessSuccess }) => {
         }
       });
 
-      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/process-file`, {
+      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/experiment/process-file`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -411,10 +518,11 @@ const FileOpener = ({ onProcessSuccess }) => {
 
   return (
     <div>
-      <Button variant="contained" onClick={handleOpenFile}>
+      <Button variant="contained" onClick={handleOpenFile} disabled={loading}>
         Open File
       </Button>
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth disableEscapeKeyDown={loading}
+      disableBackdropClick={loading}>
         <DialogTitle>{steps[step]}</DialogTitle>
         <DialogContent>
           <Box mb={2}>
@@ -473,65 +581,80 @@ const FileOpener = ({ onProcessSuccess }) => {
               </Alert>
             </Box>
           )}
-          {step <= 3 && (
-            <div>
-              <Typography variant="body1" gutterBottom>
-                Current Path: {navigationPath.length ? navigationPath.join('/') : 'Root'}
-              </Typography>
-              <FormControl fullWidth>
-                <InputLabel>Select Item</InputLabel>
-                <Select
-                  value=""
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    console.log('Selected value:', value, 'Current Path:', navigationPath, 'Step:', step);
-                    if (value.includes('(Dataset')) {
-                      const cleanPath = value.split(' (Dataset')[0];
-                      if (step === 0) handleSelectForce(cleanPath);
-                      else if (step === 1) handleSelectZ(cleanPath);
-                      else if (step === 2) handleSelectMetadata(cleanPath);
-                    } else if (value.includes('(Group')) {
-                      const cleanPath = value.split(' (Group')[0];
-                      if (step === 2) {
-                        const fullPath = [...navigationPath, cleanPath].join('/');
-                        console.log('Constructed metadata path:', fullPath);
-                        handleSelectMetadata(fullPath);
-                      } else {
-                        navigateToGroup(cleanPath);
+          {loading && step <= 3 && (
+            <Box display="flex" justifyContent="center" my={2}>
+              <CircularProgress />
+            </Box>
+          )}
+          {open && step <= 3 && !loading && isDialogReady && ( // Add isDialogReady to condition
+              <div>
+                <Typography variant="body1" gutterBottom>
+                  Current Path: {navigationPath.length ? navigationPath.join('/') : 'Root'}
+                </Typography>
+                <FormControl fullWidth>
+                  <InputLabel>Select Item</InputLabel>
+                  <Select
+                    value=""
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      console.log('Selected value:', value, 'Current Path:', navigationPath, 'Step:', step);
+                      if (value.includes('(Dataset')) {
+                        const cleanPath = value.split(' (Dataset')[0];
+                        if (step === 0) handleSelectForce(cleanPath);
+                        else if (step === 1) handleSelectZ(cleanPath);
+                        else if (step === 2) handleSelectMetadata(cleanPath);
+                      } else if (value.includes('(Group')) {
+                        const cleanPath = value.split(' (Group')[0];
+                        if (step === 2) {
+                          let fullPath;
+                          if (cleanPath === 'current') {
+                            fullPath = navigationPath.join('/') || 'root';
+                          } else {
+                            fullPath = [...navigationPath, cleanPath].join('/');
+                          }
+                          console.log('Constructed metadata path:', fullPath);
+                          handleSelectMetadata(fullPath);
+                        } else {
+                          navigateToGroup(cleanPath);
+                        }
                       }
-                    }
-                  }}
-                >
-                  {Object.keys(currentGroup.groups || {})
-                    .filter((key) => key !== 'datasets' && key !== 'attributes')
-                    .map((name) => (
-                      <MenuItem key={name} value={`${name} (Group)`}>
-                        {name} (Group)
-                        {Object.keys(currentGroup.groups[name].attributes || {}).length > 0 && ' (Has Attributes)'}
+                    }}
+                  >
+                    {step === 2 && Object.keys(currentGroup.attributes || {}).length > 0 && (
+                      <MenuItem value="current (Group)">
+                        Current Location (Group, Has Attributes)
+                      </MenuItem>
+                    )}
+                    {Object.keys(currentGroup.groups || {})
+                      .filter((key) => key !== 'datasets' && key !== 'attributes')
+                      .map((name) => (
+                        <MenuItem key={name} value={`${name} (Group)`}>
+                          {name} (Group)
+                          {Object.keys(currentGroup.groups[name].attributes || {}).length > 0 && ' (Has Attributes)'}
+                        </MenuItem>
+                      ))}
+                    {(currentGroup.groups?.datasets || []).map((ds) => (
+                      <MenuItem
+                        key={ds.path}
+                        value={`${ds.path} (Dataset, Shape: ${ds.shape}, Dtype: ${ds.dtype})`}
+                        disabled={
+                          (step >= 1 && ds.path === forcePath) || // Disable forcePath in Steps 1, 2
+                          (step >= 2 && ds.path === zPath)       // Disable zPath in Step 2
+                        }
+                      >
+                        {ds.name} (Dataset, Shape: {ds.shape}, Dtype: {ds.dtype})
+                        {Object.keys(ds.attributes || {}).length > 0 && ' (Has Attributes)'}
                       </MenuItem>
                     ))}
-                  {(currentGroup.groups.datasets || []).map((ds) => (
-                    <MenuItem
-                      key={ds.path}
-                      value={`${ds.path} (Dataset, Shape: ${ds.shape}, Dtype: ${ds.dtype})`}
-                      disabled={
-                        (step >= 1 && ds.path === forcePath) || // Disable forcePath in Steps 1, 2
-                        (step >= 2 && ds.path === zPath)       // Disable zPath in Step 2
-                      }
-                    >
-                      {ds.name} (Dataset, Shape: {ds.shape}, Dtype: {ds.dtype})
-                      {Object.keys(ds.attributes || {}).length > 0 && ' (Has Attributes)'}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-              {navigationPath.length > 0 && (
-                <Button onClick={goBack} variant="outlined" style={{ marginTop: '10px' }}>
-                  Go Back
-                </Button>
-              )}
-            </div>
-          )}
+                  </Select>
+                </FormControl>
+                {navigationPath.length > 0 && (
+                  <Button onClick={goBack} variant="outlined" style={{ marginTop: '10px' }}>
+                    Go Up
+                  </Button>
+                )}
+              </div>
+            )}
           {step === 4 && (
             <div>
               {loading && (
@@ -580,14 +703,13 @@ const FileOpener = ({ onProcessSuccess }) => {
                     error={errors.some((error) => error.includes(metadataValidationRules[key]?.label || key))}
                     helperText={errors.find((error) => error.includes(metadataValidationRules[key]?.label || key))}
                     disabled={loading} // Disable inputs during loading
-
                   />
                 ))}
             </div>
           )}
         </DialogContent>
-       <DialogActions>
-          <Button onClick={() => setOpen(false)} disabled={loading}>
+        <DialogActions>
+          <Button onClick={ () => setOpen(false) } disabled={loading}>
             Cancel
           </Button>
           {step === 4 && (
