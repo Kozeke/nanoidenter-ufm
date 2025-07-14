@@ -1,5 +1,5 @@
-from typing import Dict
-from file_types.hdf5 import read_hdf5
+from typing import Dict, Any
+from file_types.hdf5 import  get_hdf5_structure, process_hdf5
 from models.force_curve import ForceCurve
 from .base import Opener
 import logging
@@ -16,8 +16,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class HDF5Opener(Opener):
-    def open(self, file_path: str) -> Dict[str, ForceCurve]:
-        return read_hdf5(file_path)
 
     def validate_metadata(self, metadata: Dict) -> bool:
         mandatory_fields = ["file_id", "date", "instrument", "sample", "spring_constant", "inv_ols", "tip_geometry", "tip_radius"]
@@ -36,3 +34,9 @@ class HDF5Opener(Opener):
         except Exception as e:
             logger.error(f"Metadata validation error: {str(e)}")
             return False
+
+    def get_structure(self, file_path: str) -> Dict[str, Any]:
+        return get_hdf5_structure(file_path)
+    
+    def process(self, file_path: str, force_path: str, z_path: str, metadata: Dict[str, Any]) -> Dict[str, ForceCurve]:
+        return process_hdf5(file_path, force_path, z_path, metadata)

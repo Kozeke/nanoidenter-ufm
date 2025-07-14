@@ -2463,3 +2463,619 @@ LINE 3:                    tip_geometry, tip_radius, segment_type, deflection, z
 2025-06-17 13:01:19,639 - INFO - Loaded file structure for uploads\processed_data (13).hdf5 (type: hdf5)
 2025-06-19 16:02:47,895 - INFO - Starting HDF5 export to C:\Projects\nanoidenter-ufm\back\exports\processed_data.hdf5 with 1 curves
 2025-06-19 16:02:47,956 - INFO - Exported 1 curves from DuckDB to HDF5 file at C:\Projects\nanoidenter-ufm\back\exports\processed_data.hdf5
+2025-07-10 10:02:31,005 - INFO - Starting HDF5 export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5 with 1 curves
+2025-07-10 10:02:31,062 - INFO - Exported 1 curves from DuckDB to HDF5 file at C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5
+2025-07-10 10:02:54,255 - INFO - Starting HDF5 export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5 with 10 curves
+2025-07-10 10:02:54,272 - ERROR - Failed to export to HDF5 file C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5: Unable to synchronously create dataset (name already exists)
+2025-07-10 10:02:54,272 - ERROR - Failed to export to HDF5: Unable to synchronously create dataset (name already exists)
+2025-07-10 10:03:22,458 - INFO - Starting HDF5 export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5 with 10 curves
+2025-07-10 10:03:22,470 - ERROR - Failed to export to HDF5 file C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5: Unable to synchronously create dataset (name already exists)
+2025-07-10 10:03:22,471 - ERROR - Failed to export to HDF5: Unable to synchronously create dataset (name already exists)
+2025-07-10 10:06:50,896 - INFO - Starting HDF5 export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5 with 10 curves
+2025-07-10 10:06:50,919 - ERROR - Failed to export to HDF5 file C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5: Unable to synchronously create dataset (name already exists)
+2025-07-10 10:06:50,919 - ERROR - Failed to export to HDF5: Unable to synchronously create dataset (name already exists)
+2025-07-10 10:07:41,069 - INFO - Loaded file structure for uploads\processed_data1.hdf5 (type: hdf5)
+2025-07-10 10:07:57,770 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-10 10:07:57,774 - INFO - Processed curve: curve0
+2025-07-10 10:07:57,775 - INFO - Processed 1 curves: ['curve0']
+2025-07-10 10:07:57,838 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-10 10:22:54,652 - INFO - Loaded file structure for uploads\processed_data1.hdf5 (type: hdf5)
+2025-07-10 10:24:09,121 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-10 10:33:27,953 - INFO - Loaded file structure for uploads\processed_data1.hdf5 (type: hdf5)
+2025-07-10 10:33:33,083 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-10 10:40:16,485 - INFO - Loaded file structure for uploads\processed_data1.hdf5 (type: hdf5)
+2025-07-10 10:41:25,882 - INFO - Loaded file structure for uploads\processed_data1.hdf5 (type: hdf5)
+2025-07-10 10:46:36,709 - INFO - Loaded file structure for uploads\processed_data1.hdf5 (type: hdf5)
+2025-07-10 10:46:47,757 - INFO - Using relative paths: Force=segment0/dataset/z_sensor, Z=segment0/dataset/deflection
+2025-07-10 10:46:47,768 - INFO - Processed curve: curve0
+2025-07-10 10:46:47,769 - INFO - Processed 1 curves: ['curve0']
+2025-07-10 10:46:47,829 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-12 22:29:47,359 - INFO - Loaded file structure for uploads\all.hdf5 (type: hdf5)
+2025-07-12 22:30:59,648 - INFO - Using relative paths: Force=segment0/Force, Z=segment0/Z
+2025-07-12 22:30:59,652 - INFO - Processed curve: curve0
+2025-07-12 22:30:59,654 - INFO - Processed curve: curve1
+2025-07-12 22:30:59,655 - INFO - Processed curve: curve10
+2025-07-12 22:30:59,655 - INFO - Processed curve: curve11
+2025-07-12 22:30:59,657 - INFO - Processed curve: curve12
+2025-07-12 22:30:59,658 - INFO - Processed curve: curve13
+2025-07-12 22:30:59,659 - INFO - Processed curve: curve14
+2025-07-12 22:30:59,661 - INFO - Processed curve: curve15
+2025-07-12 22:30:59,662 - INFO - Processed curve: curve16
+2025-07-12 22:30:59,663 - INFO - Processed curve: curve17
+2025-07-12 22:30:59,664 - INFO - Processed curve: curve18
+2025-07-12 22:30:59,665 - INFO - Processed curve: curve19
+2025-07-12 22:30:59,666 - INFO - Processed curve: curve2
+2025-07-12 22:30:59,667 - INFO - Processed curve: curve20
+2025-07-12 22:30:59,668 - INFO - Processed curve: curve21
+2025-07-12 22:30:59,669 - INFO - Processed curve: curve22
+2025-07-12 22:30:59,671 - INFO - Processed curve: curve23
+2025-07-12 22:30:59,672 - INFO - Processed curve: curve24
+2025-07-12 22:30:59,673 - INFO - Processed curve: curve25
+2025-07-12 22:30:59,674 - INFO - Processed curve: curve26
+2025-07-12 22:30:59,675 - INFO - Processed curve: curve27
+2025-07-12 22:30:59,676 - INFO - Processed curve: curve28
+2025-07-12 22:30:59,678 - INFO - Processed curve: curve29
+2025-07-12 22:30:59,679 - INFO - Processed curve: curve3
+2025-07-12 22:30:59,680 - INFO - Processed curve: curve30
+2025-07-12 22:30:59,681 - INFO - Processed curve: curve31
+2025-07-12 22:30:59,682 - INFO - Processed curve: curve32
+2025-07-12 22:30:59,683 - INFO - Processed curve: curve33
+2025-07-12 22:30:59,685 - INFO - Processed curve: curve34
+2025-07-12 22:30:59,685 - INFO - Processed curve: curve35
+2025-07-12 22:30:59,686 - INFO - Processed curve: curve36
+2025-07-12 22:30:59,687 - INFO - Processed curve: curve37
+2025-07-12 22:30:59,689 - INFO - Processed curve: curve38
+2025-07-12 22:30:59,690 - INFO - Processed curve: curve39
+2025-07-12 22:30:59,691 - INFO - Processed curve: curve4
+2025-07-12 22:30:59,692 - INFO - Processed curve: curve40
+2025-07-12 22:30:59,697 - INFO - Processed curve: curve41
+2025-07-12 22:30:59,699 - INFO - Processed curve: curve42
+2025-07-12 22:30:59,700 - INFO - Processed curve: curve43
+2025-07-12 22:30:59,701 - INFO - Processed curve: curve44
+2025-07-12 22:30:59,702 - INFO - Processed curve: curve45
+2025-07-12 22:30:59,704 - INFO - Processed curve: curve46
+2025-07-12 22:30:59,706 - INFO - Processed curve: curve47
+2025-07-12 22:30:59,708 - INFO - Processed curve: curve48
+2025-07-12 22:30:59,709 - INFO - Processed curve: curve49
+2025-07-12 22:30:59,710 - INFO - Processed curve: curve5
+2025-07-12 22:30:59,711 - INFO - Processed curve: curve50
+2025-07-12 22:30:59,712 - INFO - Processed curve: curve51
+2025-07-12 22:30:59,713 - INFO - Processed curve: curve52
+2025-07-12 22:30:59,714 - INFO - Processed curve: curve53
+2025-07-12 22:30:59,715 - INFO - Processed curve: curve54
+2025-07-12 22:30:59,716 - INFO - Processed curve: curve55
+2025-07-12 22:30:59,718 - INFO - Processed curve: curve56
+2025-07-12 22:30:59,718 - INFO - Processed curve: curve57
+2025-07-12 22:30:59,719 - INFO - Processed curve: curve58
+2025-07-12 22:30:59,720 - INFO - Processed curve: curve59
+2025-07-12 22:30:59,721 - INFO - Processed curve: curve6
+2025-07-12 22:30:59,722 - INFO - Processed curve: curve60
+2025-07-12 22:30:59,723 - INFO - Processed curve: curve61
+2025-07-12 22:30:59,724 - INFO - Processed curve: curve62
+2025-07-12 22:30:59,726 - INFO - Processed curve: curve63
+2025-07-12 22:30:59,727 - INFO - Processed curve: curve64
+2025-07-12 22:30:59,728 - INFO - Processed curve: curve65
+2025-07-12 22:30:59,728 - INFO - Processed curve: curve66
+2025-07-12 22:30:59,730 - INFO - Processed curve: curve67
+2025-07-12 22:30:59,731 - INFO - Processed curve: curve68
+2025-07-12 22:30:59,732 - INFO - Processed curve: curve69
+2025-07-12 22:30:59,733 - INFO - Processed curve: curve7
+2025-07-12 22:30:59,734 - INFO - Processed curve: curve70
+2025-07-12 22:30:59,734 - INFO - Processed curve: curve71
+2025-07-12 22:30:59,735 - INFO - Processed curve: curve72
+2025-07-12 22:30:59,737 - INFO - Processed curve: curve73
+2025-07-12 22:30:59,738 - INFO - Processed curve: curve74
+2025-07-12 22:30:59,740 - INFO - Processed curve: curve75
+2025-07-12 22:30:59,743 - INFO - Processed curve: curve76
+2025-07-12 22:30:59,745 - INFO - Processed curve: curve77
+2025-07-12 22:30:59,746 - INFO - Processed curve: curve78
+2025-07-12 22:30:59,747 - INFO - Processed curve: curve79
+2025-07-12 22:30:59,748 - INFO - Processed curve: curve8
+2025-07-12 22:30:59,749 - INFO - Processed curve: curve80
+2025-07-12 22:30:59,752 - INFO - Processed curve: curve81
+2025-07-12 22:30:59,752 - INFO - Processed curve: curve82
+2025-07-12 22:30:59,753 - INFO - Processed curve: curve83
+2025-07-12 22:30:59,754 - INFO - Processed curve: curve84
+2025-07-12 22:30:59,755 - INFO - Processed curve: curve85
+2025-07-12 22:30:59,757 - INFO - Processed curve: curve86
+2025-07-12 22:30:59,757 - INFO - Processed curve: curve87
+2025-07-12 22:30:59,758 - INFO - Processed curve: curve88
+2025-07-12 22:30:59,760 - INFO - Processed curve: curve89
+2025-07-12 22:30:59,761 - INFO - Processed curve: curve9
+2025-07-12 22:30:59,762 - INFO - Processed curve: curve90
+2025-07-12 22:30:59,763 - INFO - Processed curve: curve91
+2025-07-12 22:30:59,764 - INFO - Processed curve: curve92
+2025-07-12 22:30:59,765 - INFO - Processed curve: curve93
+2025-07-12 22:30:59,766 - INFO - Processed curve: curve94
+2025-07-12 22:30:59,766 - INFO - Processed curve: curve95
+2025-07-12 22:30:59,767 - INFO - Processed curve: curve96
+2025-07-12 22:30:59,768 - INFO - Processed curve: curve97
+2025-07-12 22:30:59,769 - INFO - Processed curve: curve98
+2025-07-12 22:30:59,770 - INFO - Processed curve: curve99
+2025-07-12 22:30:59,771 - INFO - Processed 100 curves: ['curve0', 'curve1', 'curve10', 'curve11', 'curve12']...
+2025-07-12 22:31:00,988 - INFO - Saved 100 curves to DuckDB at data/experiment.db
+2025-07-12 22:47:24,564 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-12 22:47:34,823 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-12 22:47:34,824 - INFO - Processed curve: curve0
+2025-07-12 22:47:34,825 - INFO - Processed 1 curves: ['curve0']
+2025-07-12 22:47:34,927 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-12 22:56:48,279 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-12 22:57:03,778 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-12 22:57:03,781 - INFO - Processed curve: curve0
+2025-07-12 22:57:03,782 - INFO - Processed 1 curves: ['curve0']
+2025-07-12 22:57:05,520 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-12 22:57:51,709 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-12 22:57:59,947 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-12 22:57:59,948 - INFO - Processed curve: curve0
+2025-07-12 22:57:59,949 - INFO - Processed 1 curves: ['curve0']
+2025-07-12 22:58:00,080 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-12 23:04:51,293 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-12 23:05:00,677 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-12 23:05:00,678 - INFO - Processed curve: curve0
+2025-07-12 23:05:00,679 - INFO - Processed 1 curves: ['curve0']
+2025-07-12 23:05:01,227 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-12 23:34:21,300 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-12 23:34:29,513 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-12 23:34:29,517 - INFO - Processed curve: curve0
+2025-07-12 23:34:29,518 - INFO - Processed 1 curves: ['curve0']
+2025-07-12 23:34:29,645 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 00:50:39,232 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-13 00:50:58,221 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-13 00:51:10,759 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 00:51:10,761 - INFO - Processed curve: curve0
+2025-07-13 00:51:10,761 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 00:51:10,871 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 01:04:44,616 - INFO - Loaded file structure for uploads\sample (1).json (type: json)
+2025-07-13 01:05:11,612 - INFO - Saved 100 curves to DuckDB at data/experiment.db
+2025-07-13 01:39:21,236 - ERROR - Failed to process file processed_data.hdf5: Can't instantiate abstract class HDF5Opener with abstract method open
+2025-07-13 01:39:21,240 - ERROR - Failed to process file processed_data.hdf5: Can't instantiate abstract class HDF5Opener with abstract method open
+2025-07-13 01:39:42,923 - ERROR - Failed to process file all.hdf5: Can't instantiate abstract class HDF5Opener with abstract method open
+2025-07-13 01:41:51,771 - ERROR - Failed to process file processed_data.hdf5: Can't instantiate abstract class HDF5Opener with abstract method open
+2025-07-13 01:42:51,974 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-13 01:43:01,527 - ERROR - Failed to process file uploads\processed_data.hdf5: Can't instantiate abstract class HDF5Opener with abstract method open
+2025-07-13 01:43:56,609 - INFO - Loaded file structure for uploads\all.hdf5 (type: hdf5)
+2025-07-13 01:44:27,200 - INFO - Using relative paths: Force=segment0/Force, Z=segment0/Z
+2025-07-13 01:44:27,202 - INFO - Processed curve: curve0
+2025-07-13 01:44:27,204 - INFO - Processed curve: curve1
+2025-07-13 01:44:27,205 - INFO - Processed curve: curve10
+2025-07-13 01:44:27,206 - INFO - Processed curve: curve11
+2025-07-13 01:44:27,207 - INFO - Processed curve: curve12
+2025-07-13 01:44:27,209 - INFO - Processed curve: curve13
+2025-07-13 01:44:27,210 - INFO - Processed curve: curve14
+2025-07-13 01:44:27,211 - INFO - Processed curve: curve15
+2025-07-13 01:44:27,213 - INFO - Processed curve: curve16
+2025-07-13 01:44:27,215 - INFO - Processed curve: curve17
+2025-07-13 01:44:27,217 - INFO - Processed curve: curve18
+2025-07-13 01:44:27,218 - INFO - Processed curve: curve19
+2025-07-13 01:44:27,219 - INFO - Processed curve: curve2
+2025-07-13 01:44:27,220 - INFO - Processed curve: curve20
+2025-07-13 01:44:27,221 - INFO - Processed curve: curve21
+2025-07-13 01:44:27,222 - INFO - Processed curve: curve22
+2025-07-13 01:44:27,223 - INFO - Processed curve: curve23
+2025-07-13 01:44:27,224 - INFO - Processed curve: curve24
+2025-07-13 01:44:27,225 - INFO - Processed curve: curve25
+2025-07-13 01:44:27,226 - INFO - Processed curve: curve26
+2025-07-13 01:44:27,227 - INFO - Processed curve: curve27
+2025-07-13 01:44:27,228 - INFO - Processed curve: curve28
+2025-07-13 01:44:27,229 - INFO - Processed curve: curve29
+2025-07-13 01:44:27,231 - INFO - Processed curve: curve3
+2025-07-13 01:44:27,234 - INFO - Processed curve: curve30
+2025-07-13 01:44:27,236 - INFO - Processed curve: curve31
+2025-07-13 01:44:27,237 - INFO - Processed curve: curve32
+2025-07-13 01:44:27,246 - INFO - Processed curve: curve33
+2025-07-13 01:44:27,252 - INFO - Processed curve: curve34
+2025-07-13 01:44:27,254 - INFO - Processed curve: curve35
+2025-07-13 01:44:27,256 - INFO - Processed curve: curve36
+2025-07-13 01:44:27,257 - INFO - Processed curve: curve37
+2025-07-13 01:44:27,258 - INFO - Processed curve: curve38
+2025-07-13 01:44:27,259 - INFO - Processed curve: curve39
+2025-07-13 01:44:27,261 - INFO - Processed curve: curve4
+2025-07-13 01:44:27,264 - INFO - Processed curve: curve40
+2025-07-13 01:44:27,269 - INFO - Processed curve: curve41
+2025-07-13 01:44:27,273 - INFO - Processed curve: curve42
+2025-07-13 01:44:27,274 - INFO - Processed curve: curve43
+2025-07-13 01:44:27,277 - INFO - Processed curve: curve44
+2025-07-13 01:44:27,279 - INFO - Processed curve: curve45
+2025-07-13 01:44:27,286 - INFO - Processed curve: curve46
+2025-07-13 01:44:27,289 - INFO - Processed curve: curve47
+2025-07-13 01:44:27,290 - INFO - Processed curve: curve48
+2025-07-13 01:44:27,291 - INFO - Processed curve: curve49
+2025-07-13 01:44:27,292 - INFO - Processed curve: curve5
+2025-07-13 01:44:27,293 - INFO - Processed curve: curve50
+2025-07-13 01:44:27,294 - INFO - Processed curve: curve51
+2025-07-13 01:44:27,295 - INFO - Processed curve: curve52
+2025-07-13 01:44:27,296 - INFO - Processed curve: curve53
+2025-07-13 01:44:27,296 - INFO - Processed curve: curve54
+2025-07-13 01:44:27,297 - INFO - Processed curve: curve55
+2025-07-13 01:44:27,300 - INFO - Processed curve: curve56
+2025-07-13 01:44:27,303 - INFO - Processed curve: curve57
+2025-07-13 01:44:27,305 - INFO - Processed curve: curve58
+2025-07-13 01:44:27,306 - INFO - Processed curve: curve59
+2025-07-13 01:44:27,306 - INFO - Processed curve: curve6
+2025-07-13 01:44:27,307 - INFO - Processed curve: curve60
+2025-07-13 01:44:27,308 - INFO - Processed curve: curve61
+2025-07-13 01:44:27,309 - INFO - Processed curve: curve62
+2025-07-13 01:44:27,310 - INFO - Processed curve: curve63
+2025-07-13 01:44:27,310 - INFO - Processed curve: curve64
+2025-07-13 01:44:27,311 - INFO - Processed curve: curve65
+2025-07-13 01:44:27,312 - INFO - Processed curve: curve66
+2025-07-13 01:44:27,312 - INFO - Processed curve: curve67
+2025-07-13 01:44:27,313 - INFO - Processed curve: curve68
+2025-07-13 01:44:27,316 - INFO - Processed curve: curve69
+2025-07-13 01:44:27,318 - INFO - Processed curve: curve7
+2025-07-13 01:44:27,321 - INFO - Processed curve: curve70
+2025-07-13 01:44:27,323 - INFO - Processed curve: curve71
+2025-07-13 01:44:27,323 - INFO - Processed curve: curve72
+2025-07-13 01:44:27,324 - INFO - Processed curve: curve73
+2025-07-13 01:44:27,325 - INFO - Processed curve: curve74
+2025-07-13 01:44:27,326 - INFO - Processed curve: curve75
+2025-07-13 01:44:27,326 - INFO - Processed curve: curve76
+2025-07-13 01:44:27,327 - INFO - Processed curve: curve77
+2025-07-13 01:44:27,328 - INFO - Processed curve: curve78
+2025-07-13 01:44:27,329 - INFO - Processed curve: curve79
+2025-07-13 01:44:27,329 - INFO - Processed curve: curve8
+2025-07-13 01:44:27,330 - INFO - Processed curve: curve80
+2025-07-13 01:44:27,331 - INFO - Processed curve: curve81
+2025-07-13 01:44:27,335 - INFO - Processed curve: curve82
+2025-07-13 01:44:27,337 - INFO - Processed curve: curve83
+2025-07-13 01:44:27,339 - INFO - Processed curve: curve84
+2025-07-13 01:44:27,339 - INFO - Processed curve: curve85
+2025-07-13 01:44:27,340 - INFO - Processed curve: curve86
+2025-07-13 01:44:27,341 - INFO - Processed curve: curve87
+2025-07-13 01:44:27,342 - INFO - Processed curve: curve88
+2025-07-13 01:44:27,343 - INFO - Processed curve: curve89
+2025-07-13 01:44:27,343 - INFO - Processed curve: curve9
+2025-07-13 01:44:27,344 - INFO - Processed curve: curve90
+2025-07-13 01:44:27,345 - INFO - Processed curve: curve91
+2025-07-13 01:44:27,346 - INFO - Processed curve: curve92
+2025-07-13 01:44:27,346 - INFO - Processed curve: curve93
+2025-07-13 01:44:27,348 - INFO - Processed curve: curve94
+2025-07-13 01:44:27,351 - INFO - Processed curve: curve95
+2025-07-13 01:44:27,354 - INFO - Processed curve: curve96
+2025-07-13 01:44:27,355 - INFO - Processed curve: curve97
+2025-07-13 01:44:27,356 - INFO - Processed curve: curve98
+2025-07-13 01:44:27,357 - INFO - Processed curve: curve99
+2025-07-13 01:44:27,358 - INFO - Processed 100 curves: ['curve0', 'curve1', 'curve10', 'curve11', 'curve12']...
+2025-07-13 01:44:40,012 - INFO - Saved 100 curves to DuckDB at data/experiment.db
+2025-07-13 15:15:25,133 - INFO - Loaded file structure for uploads\all.hdf5 (type: hdf5)
+2025-07-13 15:15:44,007 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-13 15:15:53,225 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 15:15:53,230 - INFO - Processed curve: curve0
+2025-07-13 15:15:53,231 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 15:15:53,647 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 15:17:18,866 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-13 15:17:27,157 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 15:17:27,160 - INFO - Processed curve: curve0
+2025-07-13 15:17:27,161 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 15:17:27,230 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 15:17:58,666 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-13 15:18:04,941 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 15:18:04,942 - INFO - Processed curve: curve0
+2025-07-13 15:18:04,942 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 15:18:05,019 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 15:21:57,376 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-13 15:22:05,992 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 15:22:05,995 - INFO - Processed curve: curve0
+2025-07-13 15:22:05,996 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 15:22:06,077 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 15:35:42,966 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-13 15:35:54,036 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 15:35:54,043 - INFO - Processed curve: curve0
+2025-07-13 15:35:54,045 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 15:35:54,130 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 15:47:07,747 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-13 15:47:16,753 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 15:47:16,760 - INFO - Processed curve: curve0
+2025-07-13 15:47:16,761 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 15:47:17,223 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 16:10:24,805 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-13 16:10:45,795 - INFO - Loaded file structure for uploads\sample (1).json (type: json)
+2025-07-13 16:11:17,870 - ERROR - Failed to process file uploads\sample (1).json: name 'logger' is not defined
+2025-07-13 16:14:18,100 - INFO - Loaded file structure for uploads\sample (1).json (type: json)
+2025-07-13 16:14:55,816 - INFO - Curve names: {'curve32', 'curve99', 'curve31', 'curve59', 'curve65', 'curve54', 'curve16', 'curve42', 'curve48', 'curve14', 'curve38', 'curve78', 'curve55', 'curve84', 'curve23', 'curve87', 'curve51', 'curve28', 'curve66', 'curve58', 'curve35', 'curve8', 'curve72', 'curve20', 'curve11', 'curve30', 'curve60', 'curve44', 'curve21', 'curve36', 'curve63', 'curve19', 'curve97', 'curve7', 'curve69', 'curve9', 'curve77', 'curve91', 'curve79', 'curve52', 'curve29', 'curve88', 'curve39', 'curve70', 'curve96', 'curve76', 'curve4', 'curve12', 'curve13', 'curve37', 'curve46', 'curve64', 'curve90', 'curve18', 'curve56', 'curve95', 'curve53', 'curve92', 'curve10', 'curve25', 'curve17', 'curve27', 'curve68', 'curve43', 'curve5', 'curve94', 'curve2', 'curve93', 'curve40', 'curve41', 'curve50', 'curve75', 'curve71', 'curve82', 'curve34', 'curve80', 'curve26', 'curve57', 'curve61', 'curve86', 'curve73', 'curve33', 'curve74', 'curve22', 'curve62', 'curve24', 'curve67', 'curve85', 'curve81', 'curve0', 'curve15', 'curve3', 'curve47', 'curve49', 'curve1', 'curve6', 'curve45', 'curve89', 'curve83', 'curve98'}
+2025-07-13 16:14:55,816 - INFO - Sample curve name: curve0
+2025-07-13 16:14:55,817 - INFO - Force path: curve0/segment0/Force, Z path: curve0/segment0/Z
+2025-07-13 16:14:55,817 - INFO - Force relative path: segment0/Force, Z relative path: segment0/Z
+2025-07-13 16:14:55,818 - INFO - Processed curve: curve32
+2025-07-13 16:14:55,819 - INFO - Processed curve: curve99
+2025-07-13 16:14:55,822 - INFO - Processed curve: curve31
+2025-07-13 16:14:55,823 - INFO - Processed curve: curve59
+2025-07-13 16:14:55,824 - INFO - Processed curve: curve65
+2025-07-13 16:14:55,827 - INFO - Processed curve: curve54
+2025-07-13 16:14:55,829 - INFO - Processed curve: curve16
+2025-07-13 16:14:55,833 - INFO - Processed curve: curve42
+2025-07-13 16:14:55,833 - INFO - Processed curve: curve48
+2025-07-13 16:14:55,835 - INFO - Processed curve: curve14
+2025-07-13 16:14:55,836 - INFO - Processed curve: curve38
+2025-07-13 16:14:55,837 - INFO - Processed curve: curve78
+2025-07-13 16:14:55,840 - INFO - Processed curve: curve55
+2025-07-13 16:14:55,844 - INFO - Processed curve: curve84
+2025-07-13 16:14:55,847 - INFO - Processed curve: curve23
+2025-07-13 16:14:55,848 - INFO - Processed curve: curve87
+2025-07-13 16:14:55,849 - INFO - Processed curve: curve51
+2025-07-13 16:14:55,850 - INFO - Processed curve: curve28
+2025-07-13 16:14:55,851 - INFO - Processed curve: curve66
+2025-07-13 16:14:55,852 - INFO - Processed curve: curve58
+2025-07-13 16:14:55,853 - INFO - Processed curve: curve35
+2025-07-13 16:14:55,858 - INFO - Processed curve: curve8
+2025-07-13 16:14:55,862 - INFO - Processed curve: curve72
+2025-07-13 16:14:55,865 - INFO - Processed curve: curve20
+2025-07-13 16:14:55,869 - INFO - Processed curve: curve11
+2025-07-13 16:14:55,871 - INFO - Processed curve: curve30
+2025-07-13 16:14:55,875 - INFO - Processed curve: curve60
+2025-07-13 16:14:55,878 - INFO - Processed curve: curve44
+2025-07-13 16:14:55,881 - INFO - Processed curve: curve21
+2025-07-13 16:14:55,885 - INFO - Processed curve: curve36
+2025-07-13 16:14:55,892 - INFO - Processed curve: curve63
+2025-07-13 16:14:55,896 - INFO - Processed curve: curve19
+2025-07-13 16:14:55,899 - INFO - Processed curve: curve97
+2025-07-13 16:14:55,901 - INFO - Processed curve: curve7
+2025-07-13 16:14:55,912 - INFO - Processed curve: curve69
+2025-07-13 16:14:55,920 - INFO - Processed curve: curve9
+2025-07-13 16:14:55,927 - INFO - Processed curve: curve77
+2025-07-13 16:14:55,934 - INFO - Processed curve: curve91
+2025-07-13 16:14:55,979 - INFO - Processed curve: curve79
+2025-07-13 16:14:55,988 - INFO - Processed curve: curve52
+2025-07-13 16:14:55,993 - INFO - Processed curve: curve29
+2025-07-13 16:14:55,995 - INFO - Processed curve: curve88
+2025-07-13 16:14:56,018 - INFO - Processed curve: curve39
+2025-07-13 16:14:56,020 - INFO - Processed curve: curve70
+2025-07-13 16:14:56,023 - INFO - Processed curve: curve96
+2025-07-13 16:14:56,025 - INFO - Processed curve: curve76
+2025-07-13 16:14:56,027 - INFO - Processed curve: curve4
+2025-07-13 16:14:56,029 - INFO - Processed curve: curve12
+2025-07-13 16:14:56,031 - INFO - Processed curve: curve13
+2025-07-13 16:14:56,052 - INFO - Processed curve: curve37
+2025-07-13 16:14:56,056 - INFO - Processed curve: curve46
+2025-07-13 16:14:56,059 - INFO - Processed curve: curve64
+2025-07-13 16:14:56,060 - INFO - Processed curve: curve90
+2025-07-13 16:14:56,062 - INFO - Processed curve: curve18
+2025-07-13 16:14:56,063 - INFO - Processed curve: curve56
+2025-07-13 16:14:56,064 - INFO - Processed curve: curve95
+2025-07-13 16:14:56,065 - INFO - Processed curve: curve53
+2025-07-13 16:14:56,067 - INFO - Processed curve: curve92
+2025-07-13 16:14:56,068 - INFO - Processed curve: curve10
+2025-07-13 16:14:56,069 - INFO - Processed curve: curve25
+2025-07-13 16:14:56,071 - INFO - Processed curve: curve17
+2025-07-13 16:14:56,074 - INFO - Processed curve: curve27
+2025-07-13 16:14:56,076 - INFO - Processed curve: curve68
+2025-07-13 16:14:56,077 - INFO - Processed curve: curve43
+2025-07-13 16:14:56,078 - INFO - Processed curve: curve5
+2025-07-13 16:14:56,079 - INFO - Processed curve: curve94
+2025-07-13 16:14:56,080 - INFO - Processed curve: curve2
+2025-07-13 16:14:56,081 - INFO - Processed curve: curve93
+2025-07-13 16:14:56,082 - INFO - Processed curve: curve40
+2025-07-13 16:14:56,083 - INFO - Processed curve: curve41
+2025-07-13 16:14:56,084 - INFO - Processed curve: curve50
+2025-07-13 16:14:56,085 - INFO - Processed curve: curve75
+2025-07-13 16:14:56,086 - INFO - Processed curve: curve71
+2025-07-13 16:14:56,087 - INFO - Processed curve: curve82
+2025-07-13 16:14:56,090 - INFO - Processed curve: curve34
+2025-07-13 16:14:56,092 - INFO - Processed curve: curve80
+2025-07-13 16:14:56,093 - INFO - Processed curve: curve26
+2025-07-13 16:14:56,093 - INFO - Processed curve: curve57
+2025-07-13 16:14:56,096 - INFO - Processed curve: curve61
+2025-07-13 16:14:56,098 - INFO - Processed curve: curve86
+2025-07-13 16:14:56,099 - INFO - Processed curve: curve73
+2025-07-13 16:14:56,100 - INFO - Processed curve: curve33
+2025-07-13 16:14:56,101 - INFO - Processed curve: curve74
+2025-07-13 16:14:56,102 - INFO - Processed curve: curve22
+2025-07-13 16:14:56,103 - INFO - Processed curve: curve62
+2025-07-13 16:14:56,104 - INFO - Processed curve: curve24
+2025-07-13 16:14:56,107 - INFO - Processed curve: curve67
+2025-07-13 16:14:56,109 - INFO - Processed curve: curve85
+2025-07-13 16:14:56,110 - INFO - Processed curve: curve81
+2025-07-13 16:14:56,111 - INFO - Processed curve: curve0
+2025-07-13 16:14:56,112 - INFO - Processed curve: curve15
+2025-07-13 16:14:56,113 - INFO - Processed curve: curve3
+2025-07-13 16:14:56,114 - INFO - Processed curve: curve47
+2025-07-13 16:14:56,115 - INFO - Processed curve: curve49
+2025-07-13 16:14:56,115 - INFO - Processed curve: curve1
+2025-07-13 16:14:56,116 - INFO - Processed curve: curve6
+2025-07-13 16:14:56,117 - INFO - Processed curve: curve45
+2025-07-13 16:14:56,118 - INFO - Processed curve: curve89
+2025-07-13 16:14:56,119 - INFO - Processed curve: curve83
+2025-07-13 16:14:56,120 - INFO - Processed curve: curve98
+2025-07-13 16:14:56,120 - INFO - Processed 100 curves: ['curve32', 'curve99', 'curve31', 'curve59', 'curve65']...
+2025-07-13 16:14:57,744 - INFO - Saved 100 curves to DuckDB at data/experiment.db
+2025-07-13 16:33:25,426 - INFO - Loaded file structure for uploads\processed_data.hdf5 (type: hdf5)
+2025-07-13 16:33:33,251 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 16:33:33,257 - INFO - Processed curve: curve0
+2025-07-13 16:33:33,258 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 16:33:33,678 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 17:47:02,826 - INFO - Starting HDF5 export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5 with 1 curves
+2025-07-13 17:47:03,217 - INFO - Exported 1 curves from DuckDB to HDF5 file at C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5
+2025-07-13 19:03:38,367 - INFO - Starting HDF5 export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5 with 1 curves
+2025-07-13 19:03:38,786 - INFO - Exported 1 curves from DuckDB to HDF5 file at C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5
+2025-07-13 19:13:39,952 - INFO - Starting HDF5 export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5 with 1 curves
+2025-07-13 19:13:39,992 - INFO - Exported 1 curves from DuckDB to HDF5 file at C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5
+2025-07-13 19:30:38,816 - INFO - Loaded file structure for uploads\processed_data (3).hdf5 (type: hdf5)
+2025-07-13 19:30:54,835 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 19:30:54,839 - INFO - Processed curve: curve0
+2025-07-13 19:30:54,840 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 19:30:55,180 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 19:31:37,401 - INFO - Loaded file structure for uploads\processed_data (1).hdf5 (type: hdf5)
+2025-07-13 19:31:46,228 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 19:31:46,230 - INFO - Processed curve: curve0
+2025-07-13 19:31:46,231 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 19:31:46,672 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 19:34:29,580 - INFO - Loaded file structure for uploads\processed_data (3).hdf5 (type: hdf5)
+2025-07-13 19:34:38,221 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 19:34:38,222 - INFO - Processed curve: curve0
+2025-07-13 19:34:38,223 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 19:34:38,306 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 19:34:58,054 - ERROR - Missing export_path
+2025-07-13 19:36:16,413 - INFO - Loaded file structure for uploads\processed_data (1).hdf5 (type: hdf5)
+2025-07-13 19:36:26,476 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 19:36:26,478 - INFO - Processed curve: curve0
+2025-07-13 19:36:26,478 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 19:36:26,611 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 19:36:46,437 - INFO - Starting HDF5 export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5 with 1 curves
+2025-07-13 19:36:46,463 - INFO - Exported 1 curves from DuckDB to HDF5 file at C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.hdf5
+2025-07-13 19:36:55,085 - INFO - Loaded file structure for uploads\processed_data (4).hdf5 (type: hdf5)
+2025-07-13 19:37:07,320 - INFO - Using relative paths: Force=segment0/dataset/deflection, Z=segment0/dataset/z_sensor
+2025-07-13 19:37:07,321 - INFO - Processed curve: curve0
+2025-07-13 19:37:07,322 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 19:37:08,382 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 19:37:22,189 - ERROR - Failed to export to JSON: Missing dataset_path for HDF5
+2025-07-13 19:55:54,134 - ERROR - Failed to export to JSON: Missing dataset_path for HDF5
+2025-07-13 20:00:28,065 - ERROR - Failed to export to JSON: Missing dataset_path for HDF5
+2025-07-13 20:00:45,393 - ERROR - Failed to export to JSON: Missing dataset_path for HDF5
+2025-07-13 20:07:55,599 - INFO - Starting JSON export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json with 1 curves
+2025-07-13 20:07:55,642 - ERROR - Failed to export to HDF5 file C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json: Argument 'path' must not be None
+2025-07-13 20:07:55,642 - ERROR - Failed to export to JSON: Argument 'path' must not be None
+2025-07-13 20:33:13,004 - INFO - Starting JSON export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json with 1 curves
+2025-07-13 20:33:13,052 - ERROR - Failed to export to HDF5 file C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json: Argument 'path' must not be None
+2025-07-13 20:33:13,053 - ERROR - Failed to export to JSON: Argument 'path' must not be None
+2025-07-13 21:44:30,238 - INFO - Starting JSON export to exports/processed_data.json with 1 curves
+2025-07-13 21:44:30,280 - ERROR - Failed to export to HDF5 file exports/processed_data.json: Argument 'path' must not be None
+2025-07-13 21:44:30,280 - ERROR - Failed to export to JSON: Argument 'path' must not be None
+2025-07-13 21:47:48,317 - INFO - exporter
+2025-07-13 21:47:48,317 - INFO - Starting JSON export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json with 1 curves
+2025-07-13 21:47:48,354 - ERROR - Failed to export to HDF5 file C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json: Argument 'path' must not be None
+2025-07-13 21:47:48,355 - ERROR - Failed to export to JSON: Argument 'path' must not be None
+2025-07-13 21:48:31,081 - INFO - exporter
+2025-07-13 21:48:31,081 - INFO - exporter2
+2025-07-13 21:48:31,081 - INFO - exporter3
+2025-07-13 21:48:31,082 - INFO - exporter4
+2025-07-13 21:48:31,082 - INFO - Starting JSON export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json with 1 curves
+2025-07-13 21:48:31,112 - ERROR - Failed to export to HDF5 file C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json: Argument 'path' must not be None
+2025-07-13 21:48:31,113 - ERROR - Failed to export to JSON: Argument 'path' must not be None
+2025-07-13 21:49:27,322 - INFO - exporter
+2025-07-13 21:49:27,323 - INFO - exporter2
+2025-07-13 21:49:27,324 - INFO - exporter3
+2025-07-13 21:49:27,324 - INFO - exporter4
+2025-07-13 21:49:27,324 - INFO - Starting JSON export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json with 1 curves
+2025-07-13 21:49:27,324 - INFO - exporter44
+2025-07-13 21:49:27,364 - ERROR - Failed to export to HDF5 file C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json: Argument 'path' must not be None
+2025-07-13 21:49:27,364 - ERROR - Failed to export to JSON: Argument 'path' must not be None
+2025-07-13 22:02:30,622 - INFO - exporter
+2025-07-13 22:02:30,622 - INFO - exporter2
+2025-07-13 22:02:30,622 - INFO - exporter3
+2025-07-13 22:02:30,623 - INFO - exporter4
+2025-07-13 22:02:30,623 - INFO - Starting JSON export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json with 1 curves
+2025-07-13 22:02:30,624 - INFO - exporter44
+2025-07-13 22:02:30,675 - INFO - Exported 1 curves from DuckDB to JSON file at C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.json
+2025-07-13 22:02:30,675 - INFO - exporter4
+2025-07-13 22:02:49,466 - INFO - Loaded file structure for uploads\processed_data.json (type: json)
+2025-07-13 22:16:04,793 - INFO - Loaded file structure for uploads\processed_data.json (type: json)
+2025-07-13 22:16:15,652 - INFO - Curve names: {'curve0'}
+2025-07-13 22:16:15,653 - INFO - Sample curve name: curve0
+2025-07-13 22:16:15,653 - INFO - Force path: curve0/approach/Force, Z path: curve0/approach/Z
+2025-07-13 22:16:15,653 - INFO - Force relative path: approach/Force, Z relative path: approach/Z
+2025-07-13 22:16:15,655 - INFO - Processed curve: curve0
+2025-07-13 22:16:15,655 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 22:16:16,397 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 22:25:57,669 - INFO - Loaded file structure for uploads\output.csv (type: csv)
+2025-07-13 22:26:18,200 - INFO - Loaded file structure for uploads\output.csv (type: csv)
+2025-07-13 22:47:16,833 - INFO - Loaded file structure for uploads\output.csv (type: csv)
+2025-07-13 22:47:35,526 - INFO - Loaded file structure for uploads\processed_data.json (type: json)
+2025-07-13 22:47:43,895 - INFO - Curve names: {'curve0'}
+2025-07-13 22:47:43,895 - INFO - Sample curve name: curve0
+2025-07-13 22:47:43,895 - INFO - Force path: curve0/approach/Force, Z path: curve0/approach/Z
+2025-07-13 22:47:43,896 - INFO - Force relative path: approach/Force, Z relative path: approach/Z
+2025-07-13 22:47:43,908 - INFO - Processed curve: curve0
+2025-07-13 22:47:43,909 - INFO - Processed 1 curves: ['curve0']
+2025-07-13 22:47:44,339 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-13 22:48:05,343 - INFO - Loaded file structure for uploads\output.csv (type: csv)
+2025-07-13 22:48:29,177 - INFO - Loaded file structure for uploads\processed_data.json (type: json)
+2025-07-13 22:58:17,223 - INFO - Loaded file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:01:28,264 - INFO - Loaded file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:07:16,578 - INFO - Loaded file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:12:02,151 - INFO - Loaded file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:12:17,622 - ERROR - Failed to process file uploads\combined_output.csv: Column not found: 'Z (m)' is not in list
+2025-07-13 23:20:43,109 - INFO - Loaded file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:20:51,017 - ERROR - Failed to process file uploads\combined_output.csv: Column not found: 'Force' is not in list
+2025-07-13 23:24:46,252 - INFO - Loaded file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:24:54,457 - ERROR - Failed to process file uploads\combined_output.csv: Column not found: 'Force (N)' is not in list
+2025-07-13 23:26:17,945 - INFO - Loaded file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:26:23,416 - ERROR - Failed to process file uploads\combined_output.csv: Column not found: 'Z (m)' is not in list
+2025-07-13 23:28:50,023 - INFO - Loaded file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:28:57,257 - INFO - processing file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:28:57,258 - INFO - info22
+2025-07-13 23:28:57,259 - ERROR - Failed to process file uploads\combined_output.csv: Column not found: 'Force (N)' is not in list
+2025-07-13 23:30:42,659 - INFO - Loaded file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:30:49,394 - INFO - processing file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:30:49,394 - INFO - info22
+2025-07-13 23:30:49,395 - INFO - info2222
+2025-07-13 23:30:49,395 - ERROR - Failed to process file uploads\combined_output.csv: Column not found: 'Z (m)' is not in list
+2025-07-13 23:36:05,994 - INFO - Loaded file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:36:12,330 - INFO - processing file structure for uploads\combined_output.csv (type: csv)
+2025-07-13 23:36:12,330 - INFO - info22
+2025-07-13 23:36:12,330 - INFO - info2222
+2025-07-13 23:36:12,331 - ERROR - Failed to process file uploads\combined_output.csv: Column not found: 'Force (N)' is not in list
+2025-07-14 00:03:52,289 - INFO - Loaded file structure for uploads\output.txt (type: txt)
+2025-07-14 00:06:13,206 - INFO - Loaded file structure for uploads\output.txt (type: txt)
+2025-07-14 00:08:48,894 - INFO - Loaded file structure for uploads\output.txt (type: txt)
+2025-07-14 00:11:39,639 - INFO - Loaded file structure for uploads\output.txt (type: txt)
+2025-07-14 00:14:38,203 - INFO - Loaded file structure for uploads\output.txt (type: txt)
+2025-07-14 00:18:21,941 - INFO - Loaded file structure for uploads\output.txt (type: txt)
+2025-07-14 00:18:37,618 - INFO - Loaded file structure for uploads\output.txt (type: txt)
+2025-07-14 00:18:56,986 - INFO - Loaded file structure for uploads\output.txt (type: txt)
+2025-07-14 00:21:21,535 - INFO - Loaded file structure for uploads\combined_output.csv (type: csv)
+2025-07-14 00:25:43,581 - INFO - Loaded file structure for uploads\output.txt (type: txt)
+2025-07-14 00:29:22,546 - INFO - Loaded file structure for uploads\output.txt (type: txt)
+2025-07-14 00:29:31,444 - INFO - processing file structure for uploads\output.txt (type: txt)
+2025-07-14 00:29:31,445 - INFO - info22
+2025-07-14 00:29:31,447 - INFO - info2222
+2025-07-14 00:29:31,477 - INFO - info2
+2025-07-14 00:29:31,900 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-14 00:29:31,900 - INFO - info3
+2025-07-14 00:41:58,196 - INFO - exporter
+2025-07-14 00:41:58,198 - INFO - exporter2
+2025-07-14 00:41:58,199 - INFO - exporter3
+2025-07-14 00:41:58,200 - INFO - exporter4
+2025-07-14 00:41:58,201 - INFO - Starting CSV export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.csv with 1 curves
+2025-07-14 00:41:58,579 - INFO - Exported 1 curves from DuckDB to CSV file at C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.csv
+2025-07-14 00:41:58,579 - INFO - exporter4
+2025-07-14 00:42:07,006 - INFO - Loaded file structure for uploads\processed_data.csv (type: csv)
+2025-07-14 00:42:13,420 - INFO - processing file structure for uploads\processed_data.csv (type: csv)
+2025-07-14 00:42:13,420 - INFO - info22
+2025-07-14 00:42:13,421 - INFO - info2222
+2025-07-14 00:42:13,432 - INFO - info2
+2025-07-14 00:42:15,264 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-14 00:42:15,264 - INFO - info3
+2025-07-14 00:42:29,718 - INFO - exporter
+2025-07-14 00:42:29,719 - INFO - exporter2
+2025-07-14 00:42:29,719 - INFO - exporter3
+2025-07-14 00:42:29,720 - INFO - exporter4
+2025-07-14 00:42:29,720 - INFO - Starting TXT export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.txt with 1 curves
+2025-07-14 00:42:29,735 - INFO - Exported 1 curves from DuckDB to TXT file at C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.txt
+2025-07-14 00:42:29,737 - INFO - exporter4
+2025-07-14 00:42:36,822 - INFO - Loaded file structure for uploads\processed_data.txt (type: txt)
+2025-07-14 00:42:42,643 - INFO - processing file structure for uploads\processed_data.txt (type: txt)
+2025-07-14 00:42:42,643 - INFO - info22
+2025-07-14 00:42:42,644 - INFO - info2222
+2025-07-14 00:42:42,654 - INFO - info2
+2025-07-14 00:42:42,670 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-14 00:42:42,670 - INFO - info3
+2025-07-14 00:53:28,120 - ERROR - Failed to process file processed_data.txt: get_txt_structure() missing 1 required positional argument: 'file_path'
+2025-07-14 00:53:51,159 - ERROR - Failed to process file processed_data.txt: get_txt_structure() missing 1 required positional argument: 'file_path'
+2025-07-14 00:55:00,861 - INFO - Loaded file structure for uploads\processed_data.csv (type: csv)
+2025-07-14 00:55:07,887 - INFO - processing file structure for uploads\processed_data.csv (type: csv)
+2025-07-14 00:55:07,887 - INFO - info22
+2025-07-14 00:55:07,888 - INFO - info2222
+2025-07-14 00:55:07,898 - INFO - info2
+2025-07-14 00:55:08,066 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-14 00:55:08,067 - INFO - info3
+2025-07-14 00:55:15,686 - INFO - exporter
+2025-07-14 00:55:15,686 - INFO - exporter2
+2025-07-14 00:55:15,687 - INFO - exporter3
+2025-07-14 00:55:15,687 - INFO - exporter4
+2025-07-14 00:55:15,687 - INFO - Starting CSV export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.csv with 1 curves
+2025-07-14 00:55:15,708 - INFO - Exported 1 curves from DuckDB to CSV file at C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.csv
+2025-07-14 00:55:15,709 - INFO - exporter4
+2025-07-14 00:55:45,478 - INFO - Loaded file structure for uploads\processed_data.txt (type: txt)
+2025-07-14 00:55:52,548 - INFO - processing file structure for uploads\processed_data.txt (type: txt)
+2025-07-14 00:55:52,548 - INFO - info22
+2025-07-14 00:55:52,549 - INFO - info2222
+2025-07-14 00:55:52,556 - INFO - info2
+2025-07-14 00:55:52,749 - INFO - Saved 1 curves to DuckDB at data/experiment.db
+2025-07-14 00:55:52,750 - INFO - info3
+2025-07-14 00:56:01,232 - INFO - exporter
+2025-07-14 00:56:01,233 - INFO - exporter2
+2025-07-14 00:56:01,235 - INFO - exporter3
+2025-07-14 00:56:01,236 - INFO - exporter4
+2025-07-14 00:56:01,237 - INFO - Starting TXT export to C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.txt with 1 curves
+2025-07-14 00:56:01,267 - INFO - Exported 1 curves from DuckDB to TXT file at C:\xampp1\htdocs\project-shaefer-open-data\back\exports\processed_data.txt
+2025-07-14 00:56:01,267 - INFO - exporter4

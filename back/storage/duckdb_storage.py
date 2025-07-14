@@ -72,7 +72,7 @@ def save_to_duckdb(curves: Dict[str, ForceCurve], db_path: str) -> None:
             FROM force_vs_z
             WHERE curve_id = 0
         """).fetchall()
-        print("Query result:", result)
+        # print("Query result:", result)
 
     except duckdb.Error as e:
         print(f"❌ DuckDB error: {e}")
