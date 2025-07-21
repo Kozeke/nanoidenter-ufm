@@ -7,6 +7,7 @@ import CurveControlsComponent from "./CurveControlsComponent";
 import FileOpener from "./FileOpener";
 import ExportButton from "./ExportButton";
 import { debounce } from 'lodash';
+import { Box, CircularProgress } from '@mui/material';
 
 const WEBSOCKET_URL =
   process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8000/ws/data";
@@ -72,6 +73,7 @@ const Dashboard = () => {
   const [forceRequest, setForceRequest] = useState(false);
   const [selectedExportCurveIds, setSelectedForExportCurveIds] = useState([]);
   const isMetadataReady = metadataObject.columns.length > 0 || Object.keys(metadataObject.sample_row).length > 0;
+  const [isLoading, setIsLoading] = useState(false);
 
   // Helper to capitalize filter names for display
   const capitalizeFilterName = (name) => {
@@ -409,6 +411,7 @@ const Dashboard = () => {
     backgroundColor: "#f4f6f8",
     fontFamily: "'Roboto', sans-serif",
     overflow: "hidden",
+    position: "relative",
   };
 
   const mainContentStyle = {
@@ -512,6 +515,24 @@ const Dashboard = () => {
         <MetadataContext.Provider value={{ metadataObject, setMetadataObject }}>
 
     <div style={containerStyle}>
+      {isLoading && (
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            backgroundColor: 'rgba(255, 255, 255, 0.7)',
+            zIndex: 1000,
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
+          <CircularProgress />
+        </Box>
+      )}
       <div style={mainContentStyle}>
         {/* Tab Navigation */}
         <div style={{ ...tabNavStyle, display: 'flex', alignItems: 'center' }}>
@@ -537,7 +558,7 @@ const Dashboard = () => {
           </div>
 
 
-          <FileOpener onProcessSuccess={handleProcessSuccess} />
+          <FileOpener onProcessSuccess={handleProcessSuccess} setIsLoading={setIsLoading} />
           {isMetadataReady ? (
               <ExportButton
                 curveIds={selectedExportCurveIds}

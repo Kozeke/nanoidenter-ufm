@@ -20,7 +20,7 @@ import {
   CircularProgress
 } from '@mui/material';
 
-const FileOpener = ({ onProcessSuccess }) => {
+const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(0);
   const [filePath, setFilePath] = useState('');
@@ -159,6 +159,7 @@ const FileOpener = ({ onProcessSuccess }) => {
       if (!file) return;
 
       setLoading(true);
+      setIsLoading(true);
       setIsDialogReady(false); // Reset dialog readiness
 
       const formData = new FormData();
@@ -186,7 +187,6 @@ const FileOpener = ({ onProcessSuccess }) => {
           setStep(0);
           setOpen(true);
           setIsDialogReady(true);
-          setLoading(false);
           console.log('Initial Structure:', JSON.stringify(result.structure, null, 2));
 
           let initialGroup, initialPath = [];
@@ -207,7 +207,9 @@ const FileOpener = ({ onProcessSuccess }) => {
         const errorMessage = err.message.includes('HTTP error') ? 'Failed to communicate with server' : err.message;
         setErrors([errorMessage]);
         alert(`Failed to open file: ${errorMessage}`);
+      } finally {
         setLoading(false); // Set loading false for error case
+        setIsLoading(false);
       }
     };
 
@@ -445,6 +447,7 @@ const FileOpener = ({ onProcessSuccess }) => {
       return;
     }
     setLoading(true); // Start loading
+    setIsLoading(true);
 
     try {
       const processedMetadata = { ...metadata };
@@ -507,6 +510,7 @@ const FileOpener = ({ onProcessSuccess }) => {
       alert(`Failed to process file: ${errorMessage}`);
     } finally {
       setLoading(false); // Stop loading
+      setIsLoading(false);
     }
   };
 
