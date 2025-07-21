@@ -654,7 +654,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
                 </FormControl>
                 {navigationPath.length > 0 && (
                   <Button onClick={goBack} variant="outlined" style={{ marginTop: '10px' }}>
-                    Go Up
+                    UP ONE LEVEL
                   </Button>
                 )}
               </div>
