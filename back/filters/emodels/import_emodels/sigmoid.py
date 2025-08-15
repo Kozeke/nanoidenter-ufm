@@ -30,25 +30,24 @@ class SigmoidModel(EmodelBase):
         :param x: Input array (e.g., indentation depth, DOUBLE[])
         :param y: Input array (e.g., force values, DOUBLE[])
         :return: Fitted parameters [EH, EL, T, k] or None if fitting fails
-        # """
-        # print("calc sigmoid", len(x), len(y))
-        # print("x",x)
-        # print("y",y)
+        """
+        print("Sigmoid calculate called with x length:", len(x), "y length:", len(y))
         x = np.asarray(x, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
         if len(x) < 2 or len(y) < 2:
-            # print("len(x)<2", len(x),len(y))
+            print("Sigmoid: len(x)<2", len(x), len(y))
             return None
 
         try:
             p0 = [1000, 200000, 1e-6, 1e-6]  # Initial guesses: EH, EL, T, k
             popt, _ = curve_fit(self.theory, x, y, p0=p0, maxfev=10000)
-            # if any(p < 0 for p in popt):  # Check for negative parameters
-            #     return None
-            # print("popt",popt)
+            print("Sigmoid popt:", popt)
             params = list(map(float, popt))  # [EH, EL, T, k]
-            # print("params", params)
-            y_fit = self.theory(x, params)
-            return [x.tolist(), y_fit.tolist()]
-        except (RuntimeError, ValueError):
+            print("Sigmoid params:", params)
+            y_fit = self.theory(x, *params)  # Unpack params when calling theory
+            result = [x.tolist(), y_fit.tolist(), params]
+            print("Sigmoid returning:", len(result), "items")
+            return result  # Return with parameters
+        except (RuntimeError, ValueError) as e:
+            print("Sigmoid fitting failed:", e)
             return None

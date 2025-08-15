@@ -79,7 +79,7 @@ class DriftedHertzModel(FmodelBase):
             # print(popt)
             y_fit = self.theory(x, popt)
             # print("i am ")
-            return [x.tolist(), y_fit.tolist()]  #
+            return [x.tolist(), y_fit.tolist(), [E, m]]  # Return with parameters
         except (RuntimeError, ValueError) as e:
             print(f"Fitting failed: {str(e)}")
             return None

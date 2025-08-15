@@ -84,7 +84,9 @@ def register_filters(conn):
         create_fmodel_udf(fmodel_class.NAME, conn)
     
     # Register and create UDFs for emodels
+    print("Loading emodel classes:", emodel_classes)
     for emodel_class in emodel_classes:
+        print(f"Registering emodel: {emodel_class.NAME} -> {emodel_class.NAME.lower()}")
         register_emodel(emodel_class)
         save_emodel_to_db(emodel_class, conn)
         create_emodel_udf(emodel_class.NAME, conn)
@@ -98,37 +100,49 @@ def register_filters(conn):
         for row in result.fetchall():
             print(row)
         
-    conn.create_function(
-        "calc_indentation",
-        calc_indentation,
-        [
-            duckdb.list_type('DOUBLE'),                # z_values: DOUBLE[]
-            duckdb.list_type('DOUBLE'),                # force_values: DOUBLE[]
-            duckdb.list_type(duckdb.list_type('DOUBLE')),  # cp: DOUBLE[][]
-            'DOUBLE',                                  # spring_constant: DOUBLE
-            'BOOLEAN'                                  # set_zero_force: BOOLEAN
-        ],
-        duckdb.list_type(duckdb.list_type('DOUBLE')),  # Return: DOUBLE[][]
-        null_handling='SPECIAL'
-    )
+    try:
+        conn.create_function(
+            "calc_indentation",
+            calc_indentation,
+            [
+                duckdb.list_type('DOUBLE'),                # z_values: DOUBLE[]
+                duckdb.list_type('DOUBLE'),                # force_values: DOUBLE[]
+                duckdb.list_type(duckdb.list_type('DOUBLE')),  # cp: DOUBLE[][]
+                'DOUBLE',                                  # spring_constant: DOUBLE
+                'BOOLEAN'                                  # set_zero_force: BOOLEAN
+            ],
+            duckdb.list_type(duckdb.list_type('DOUBLE')),  # Return: DOUBLE[][]
+            null_handling='SPECIAL'
+        )
+    except duckdb.CatalogException as e:
+        if "already exists" in str(e):
+            print(f"Function 'calc_indentation' already exists. Skipping creation.")
+        else:
+            raise
     
     # Registration with DuckDB
-    conn.create_function(
-        "calc_elspectra",
-        calc_elspectra,
-        [
-            duckdb.list_type('DOUBLE'),    # z_values: DOUBLE[]
-            duckdb.list_type('DOUBLE'),    # force_values: DOUBLE[]
-            'INTEGER',                     # win: INTEGER
-            'INTEGER',                     # order: INTEGER
-            'VARCHAR',                     # tip_geometry: VARCHAR
-            'DOUBLE',                      # tip_radius: DOUBLE
-            'DOUBLE',                      # tip_angle: DOUBLE
-            'BOOLEAN'                      # interp: BOOLEAN
-        ],
-        duckdb.list_type(duckdb.list_type('DOUBLE')),  # Return: DOUBLE[][]
-        null_handling='SPECIAL'
-    )
+    try:
+        conn.create_function(
+            "calc_elspectra",
+            calc_elspectra,
+            [
+                duckdb.list_type('DOUBLE'),    # z_values: DOUBLE[]
+                duckdb.list_type('DOUBLE'),    # force_values: DOUBLE[]
+                'INTEGER',                     # win: INTEGER
+                'INTEGER',                     # order: INTEGER
+                'VARCHAR',                     # tip_geometry: VARCHAR
+                'DOUBLE',                      # tip_radius: DOUBLE
+                'DOUBLE',                      # tip_angle: DOUBLE
+                'BOOLEAN'                      # interp: BOOLEAN
+            ],
+            duckdb.list_type(duckdb.list_type('DOUBLE')),  # Return: DOUBLE[][]
+            null_handling='SPECIAL'
+        )
+    except duckdb.CatalogException as e:
+        if "already exists" in str(e):
+            print(f"Function 'calc_elspectra' already exists. Skipping creation.")
+        else:
+            raise
 
     # conn.create_function(
     #     "calc_fmodels",

@@ -4,8 +4,8 @@ import ReactECharts from "echarts-for-react";
 const ForceIndentationDataSet = ({
   forceData = [],
   domainRange = { xMin: 0, xMax: 0, yMin: 0, yMax: 0 },
-  setSelectedCurveIds = () => {},
-  onCurveSelect = () => {},
+  setSelectedCurveIds = () => { },
+  onCurveSelect = () => { },
   selectedCurveIds = [],
   graphType = "line",
 }) => {
@@ -37,18 +37,24 @@ const ForceIndentationDataSet = ({
     const magnitude = Math.floor(Math.log10(absMin));
     return Math.pow(10, -magnitude);
   }
+  console.log("forceData", forceData)
+  
+  // Handle the structure where forceData is the curves object containing curves_cp and curves_fparam
+  const validForceData = forceData || {};
+  const curvesData = forceData || {};
+  
+  // Extract curves_cp and curves_fparam from the curves object
+  const curvesCpData = curvesData.curves_cp || [];
+  const curvesFparamData = curvesData.curves_fparam || [];
+  
+  // Combine both types of curves for processing
+  const allCurves = [...curvesCpData, ...curvesFparamData];
+  
+  console.log("forceData (Indentation):", validForceData);
+  console.log("curves_cp:", curvesCpData);
+  console.log("curves_fparam:", curvesFparamData);
 
-  const validForceData = Array.isArray(forceData)
-    ? forceData.map((curve) => ({
-        ...curve,
-        curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
-        x: Array.isArray(curve?.x) ? curve.x : [],
-        y: Array.isArray(curve?.y) ? curve.y : [],
-      }))
-    : [];
-  console.log("forceData (Indentation):", JSON.stringify(validForceData, null, 2));
-
-  const xData = validForceData.length > 0 && validForceData[0]?.x.length > 0 ? validForceData[0].x : [];
+  const xData = allCurves.length > 0 && allCurves[0]?.x.length > 0 ? allCurves[0].x : [];
   const xScaleFactor = getScaleFactor(domainRange.xMin, xData);
   const yScaleFactor = getScaleFactor(domainRange.yMin);
 
@@ -93,25 +99,79 @@ const ForceIndentationDataSet = ({
         },
       },
     },
-    series: validForceData.map((curve) => ({
-      name: curve.curve_id,
-      type: graphType,
-      smooth: graphType === "line" ? false : undefined,
-      showSymbol: graphType === "scatter" ? true : false,
-      symbolSize: graphType === "scatter" ? 4 : undefined,
-      large: true,
-      triggerEvent: true,
-      data:
-        (selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
-        Array.isArray(curve.x) &&
-        Array.isArray(curve.y) &&
-        curve.x.length === curve.y.length
-          ? curve.x.map((x, i) => [
+    series: [
+      // curves_cp as line series
+      ...curvesCpData.map((curve) => ({
+        name: curve.curve_id,
+        type: "line",
+        smooth: false,
+        showSymbol: false,
+        large: true,
+        triggerEvent: true,
+        itemStyle: {
+          color: curve.curve_id.includes('_hertz') ? 'yellow' : undefined,
+        },
+        lineStyle: {
+          width: curve.curve_id.includes('_hertz') ? 5 : 1.5,
+        },
+        data: (() => {
+          let showCurve =
+            (selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
+            Array.isArray(curve.x) &&
+            Array.isArray(curve.y) &&
+            curve.x.length === curve.y.length;
+
+          if (!showCurve && curve.curve_id.includes('_hertz')) {
+            const base = curve.curve_id.replace('_hertz', '');
+            const mainId = `curve${base}`;
+            showCurve =
+              selectedCurveIds.includes(mainId) &&
+              Array.isArray(curve.x) &&
+              Array.isArray(curve.y) &&
+              curve.x.length === curve.y.length;
+          }
+
+          return showCurve
+            ? curve.x.map((x, i) => [
               x * xScaleFactor,
               curve.y[i] !== undefined ? curve.y[i] * yScaleFactor : 0,
             ])
-          : [],
-    })),
+            : [];
+        })(),
+      })),
+             // curves_fparam as scatter series
+       ...curvesFparamData.map((fparamObj) => {
+         // Find the corresponding curve in curves_cp to get the x-coordinate
+         const curveIndex = fparamObj.curve_index;
+         const correspondingCurve = curvesCpData[curveIndex];
+         
+         if (!correspondingCurve) return null;
+         
+         // Use the middle point of the curve for x-coordinate, or a specific point
+         const xIndex = Math.floor(correspondingCurve.x.length / 2);
+         const xValue = correspondingCurve.x[xIndex] || 0;
+         const yValue = fparamObj.fparam;
+         
+         return {
+           name: `fparam_${curveIndex}`,
+           type: "scatter",
+           showSymbol: true,
+           symbolSize: 8,
+           large: true,
+           triggerEvent: true,
+           itemStyle: {
+             color: '#ff6b6b', // Red color for fparam points
+           },
+           data: (() => {
+             let showPoint = selectedCurveIds.length === 0 || 
+                           selectedCurveIds.includes(correspondingCurve.curve_id);
+             
+             return showPoint ? [[xValue * xScaleFactor, yValue * yScaleFactor]] : [];
+           })(),
+         };
+       }).filter(Boolean), // Remove null entries
+    ],
+
     legend: { show: false },
     grid: { left: "12%", right: "10%", bottom: "15%", top: "8%" },
     dataZoom: [
@@ -157,21 +217,47 @@ const ForceIndentationDataSet = ({
         name: params.name,
       });
       if (params.componentType === "series") {
-        const curveIndex = params.seriesIndex;
-        const selectedCurve = validForceData[curveIndex];
-        console.log("Selected curve (Indentation):", {
-          curve_id: selectedCurve?.curve_id,
-          x: selectedCurve?.x?.slice(0, 5),
-          y: selectedCurve?.y?.slice(0, 5),
-        });
-        if (selectedCurve && selectedCurve.curve_id) {
-          setSelectedCurveIds([selectedCurve.curve_id]);
-          if (onCurveSelect) {
-            onCurveSelect({
-              curve_id: selectedCurve.curve_id, // Use raw curve_id (e.g., "0")
-              x: selectedCurve.x || [],
-              y: selectedCurve.y || [],
+        const seriesIndex = params.seriesIndex;
+        
+        // Check if it's a fparam series (scatter points)
+        if (seriesIndex >= curvesCpData.length) {
+          // It's a fparam point
+          const fparamIndex = seriesIndex - curvesCpData.length;
+          const fparamObj = curvesFparamData[fparamIndex];
+          const correspondingCurve = curvesCpData[fparamObj.curve_index];
+          
+          if (correspondingCurve) {
+            console.log("Selected fparam point:", {
+              curve_id: correspondingCurve.curve_id,
+              fparam: fparamObj.fparam,
+              curve_index: fparamObj.curve_index,
             });
+            setSelectedCurveIds([correspondingCurve.curve_id]);
+            if (onCurveSelect) {
+              onCurveSelect({
+                curve_id: correspondingCurve.curve_id,
+                x: correspondingCurve.x || [],
+                y: correspondingCurve.y || [],
+              });
+            }
+          }
+        } else {
+          // It's a regular curve
+          const selectedCurve = curvesCpData[seriesIndex];
+          console.log("Selected curve (Indentation):", {
+            curve_id: selectedCurve?.curve_id,
+            x: selectedCurve?.x?.slice(0, 5),
+            y: selectedCurve?.y?.slice(0, 5),
+          });
+          if (selectedCurve && selectedCurve.curve_id) {
+            setSelectedCurveIds([selectedCurve.curve_id]);
+            if (onCurveSelect) {
+              onCurveSelect({
+                curve_id: selectedCurve.curve_id,
+                x: selectedCurve.x || [],
+                y: selectedCurve.y || [],
+              });
+            }
           }
         }
       }

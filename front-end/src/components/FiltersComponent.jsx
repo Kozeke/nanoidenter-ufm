@@ -51,6 +51,74 @@ const MultiSelectFilter = ({
   </Grid>
 );
 
+const SingleSelectFilter = ({
+  label,
+  options,
+  value,
+  onChange,
+  capitalizeFilterName,
+  size = "small",
+  sx = { fontSize: 14 }
+}) => (
+  <Grid item xs={3}>
+    <FormControl fullWidth size={size}>
+      <InputLabel id={`${label.toLowerCase()}-label`} sx={sx}>
+        {label}
+      </InputLabel>
+      <Select
+        labelId={`${label.toLowerCase()}-label`}
+        label={label}
+        value={value.length > 0 ? value[0] : ""}
+        onChange={(event) => {
+          console.log("SingleSelectFilter onChange event:", event);
+          console.log("event.target:", event.target);
+          console.log("event.target.value:", event.target?.value);
+          
+          if (event && event.target && event.target.value !== undefined) {
+            const selectedValue = event.target.value;
+            console.log("Selected value:", selectedValue);
+            if (selectedValue) {
+              // Create a synthetic event object that matches what createChangeHandler expects
+              const syntheticEvent = {
+                target: {
+                  value: [selectedValue]
+                }
+              };
+              onChange(syntheticEvent);
+            } else {
+              const syntheticEvent = {
+                target: {
+                  value: []
+                }
+              };
+              onChange(syntheticEvent);
+            }
+          } else {
+            console.log("Invalid event or missing value, calling onChange with empty array");
+            const syntheticEvent = {
+              target: {
+                value: []
+              }
+            };
+            onChange(syntheticEvent);
+          }
+        }}
+        renderValue={(selected) => selected ? capitalizeFilterName(selected) : "Select..."}
+        sx={sx}
+      >
+        {options.map((name) => (
+          <MenuItem key={name} value={name}>
+            <ListItemText
+              primary={capitalizeFilterName(name)}
+              primaryTypographyProps={sx}
+            />
+          </MenuItem>
+        ))}
+      </Select>
+    </FormControl>
+  </Grid>
+);
+
 const FiltersComponent = ({
   filterDefaults,
   capitalizeFilterName,
@@ -74,6 +142,18 @@ const FiltersComponent = ({
   handleFilterChange,
   sendCurveRequest,
   activeTab,
+  onForceModelChange,
+  selectedForceModel,
+  selectedParameters,
+  onParameterChange,
+  showParameters,
+  setShowParameters,
+  selectedElasticityModel,
+  selectedElasticityParameters,
+  onElasticityParameterChange,
+  showElasticityParameters,
+  setShowElasticityParameters,
+  onElasticityModelChange
 }) => {
   const [isOpen, setIsOpen] = React.useState(true);
 
@@ -85,14 +165,61 @@ const FiltersComponent = ({
   const safeRegularFilters = Array.isArray(selectedRegularFilters) ? selectedRegularFilters : [];
   const safeCpFilters = Array.isArray(selectedCpFilters) ? selectedCpFilters : [];
   const safeForceModels = Array.isArray(selectedForceModels) ? selectedForceModels : [];
-  const safeElasticityModels = Array.isArray(selectedElasticityModels) ? selectedElasticityModels : [];
+  const safeElasticityModels = selectedElasticityModels || [];
+  
+  // Debug logging
+  console.log("elasticityModelDefaults:", elasticityModelDefaults);
+  console.log("safeElasticityModels:", safeElasticityModels);
 
   // Handle multi-select changes
   const createChangeHandler = (setSelected, type, prevSelected) => (event) => {
+    console.log("createChangeHandler called with type:", type);
+    console.log("event:", event);
+    console.log("event.target:", event.target);
+    console.log("event.target.value:", event.target?.value);
+    
+    if (!event || !event.target) {
+      console.error("Invalid event in createChangeHandler");
+      return;
+    }
+    
     const value = event.target.value;
+    console.log("Value from event:", value);
+    console.log("Previous selected:", prevSelected);
+    
     setSelected(value);
-    value.filter((name) => !prevSelected.includes(name)).forEach((name) => handleAddFilter(name, type));
-    prevSelected.filter((name) => !value.includes(name)).forEach((name) => handleRemoveFilter(name, type));
+    
+    // Handle single selection for force models, elasticity models, and CP filters
+    if (type === 'force' || type === 'elasticity' || type === 'cp') {
+      console.log(`Handling ${type} single selection`);
+      // Remove all previous models/filters of this type
+      prevSelected.forEach((name) => {
+        console.log("Removing filter:", name);
+        handleRemoveFilter(name, type);
+      });
+      // Add the new model/filter
+      if (value && value.length > 0) {
+        console.log("Adding filter:", value[0]);
+        handleAddFilter(value[0], type);
+        // Notify parent about model change
+        if (type === 'force' && onForceModelChange) {
+          onForceModelChange(value[0], true);
+        } else if (type === 'elasticity' && onElasticityModelChange) {
+          onElasticityModelChange(value[0], true);
+        }
+      } else {
+        // Notify parent about model deselection
+        if (type === 'force' && onForceModelChange) {
+          onForceModelChange("", false);
+        } else if (type === 'elasticity' && onElasticityModelChange) {
+          onElasticityModelChange("", false);
+        }
+      }
+    } else {
+      // Handle multi-selection for other filters (regular filters)
+      value.filter((name) => !prevSelected.includes(name)).forEach((name) => handleAddFilter(name, type));
+      prevSelected.filter((name) => !value.includes(name)).forEach((name) => handleRemoveFilter(name, type));
+    }
   };
 
   const handleRegularChange = createChangeHandler(setSelectedRegularFilters, 'regular', safeRegularFilters);
@@ -144,6 +271,7 @@ const FiltersComponent = ({
             <Typography variant="h6" sx={{ fontSize: 14, fontWeight: "medium" }}>
               Filters
             </Typography>
+
           </Box>
 
           {/* Four-Column Multi-Select Row */}
@@ -156,7 +284,7 @@ const FiltersComponent = ({
               capitalizeFilterName={capitalizeFilterName}
             />
 
-            <MultiSelectFilter
+            <SingleSelectFilter
               label="CP"
               options={Object.keys(cpDefaults || {})}
               value={safeCpFilters}
@@ -165,7 +293,7 @@ const FiltersComponent = ({
             />
 
             {activeTab === "forceIndentation" && (
-              <MultiSelectFilter
+              <SingleSelectFilter
                 label="Force"
                 options={Object.keys(forceModelDefaults || {})}
                 value={safeForceModels}
@@ -175,7 +303,7 @@ const FiltersComponent = ({
             )}
 
             {activeTab === "elasticitySpectra" && (
-              <MultiSelectFilter
+              <SingleSelectFilter
                 label="Elasticity"
                 options={Object.keys(elasticityModelDefaults || {})}
                 value={safeElasticityModels}
@@ -218,6 +346,16 @@ const FiltersComponent = ({
         sx={{ zIndex: 1002 }}
         toggleFilters={toggleFilters}
         isOpen={isOpen}
+        selectedForceModel={selectedForceModel}
+        selectedParameters={selectedParameters}
+        onParameterChange={onParameterChange}
+        showParameters={showParameters}
+        setShowParameters={setShowParameters}
+        selectedElasticityModel={selectedElasticityModel}
+        selectedElasticityParameters={selectedElasticityParameters}
+        onElasticityParameterChange={onElasticityParameterChange}
+        showElasticityParameters={showElasticityParameters}
+        setShowElasticityParameters={setShowElasticityParameters}
       />
     </Box>
   );

@@ -57,4 +57,4 @@ class LineMaxModel(EmodelBase):
 
         # Use the average (stats[0]) to compute y_fit with theory
         y_fit = self.theory(x, stats[0])  # Only pass the average modulus
-        return [x.tolist(), y_fit.tolist()]
+        return [x.tolist(), y_fit.tolist(), stats]  # Return with parameters

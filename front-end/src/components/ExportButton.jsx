@@ -245,14 +245,35 @@ const ExportButton = ({ curveIds = [], numCurves = 10, isMetadataReady}) => {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `HTTP error! Status: ${response.status}`);
+        try {
+          const errorData = await response.json();
+          // Check if the backend returned a detailed error response
+          if (errorData.detail && typeof errorData.detail === 'object') {
+            // Backend returns error details in the 'detail' field
+            const errorMessages = errorData.detail.errors || [errorData.detail.message];
+            setErrors(errorMessages);
+            console.error('Backend export error:', errorMessages);
+            return;
+          } else if (errorData.message) {
+            // Direct error message
+            setErrors([errorData.message]);
+            console.error('Backend export error:', errorData.message);
+            return;
+          } else {
+            throw new Error(`HTTP error! Status: ${response.status}`);
+          }
+        } catch (parseError) {
+          // If we can't parse the error response, throw a generic error
+          throw new Error(`HTTP error! Status: ${response.status}`);
+        }
       }
 
       const result = await response.json();
       if (result.status === 'error') {
-        setErrors(result.errors || [result.message]);
-        alert(`Failed to export: ${result.message}`);
+        const errorMessages = result.errors || [result.message];
+        setErrors(errorMessages);
+        console.error('Export error:', errorMessages);
+        // Don't show alert here, let the error display in the UI
         return;
       }
 
@@ -273,7 +294,8 @@ const ExportButton = ({ curveIds = [], numCurves = 10, isMetadataReady}) => {
         ? 'Failed to communicate with server'
         : err.message;
       setErrors([errorMessage]);
-      alert(`Failed to export: ${errorMessage}`);
+      console.error('Export error:', errorMessage);
+      // Don't show alert here, let the error display in the UI
     } finally {
       setLoading(false);
     }
@@ -379,12 +401,19 @@ const ExportButton = ({ curveIds = [], numCurves = 10, isMetadataReady}) => {
           {errors.length > 0 && (
             <Box mb={2}>
               <Alert severity="error">
-                <Typography variant="body2">Please fix the following errors:</Typography>
+                <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>
+                  Export Failed - Please fix the following errors:
+                </Typography>
                 <ul>
                   {errors.map((error, index) => (
-                    <li key={index}>{error}</li>
+                    <li key={index} style={{ marginBottom: '4px' }}>
+                      {error}
+                    </li>
                   ))}
                 </ul>
+                <Typography variant="body2" sx={{ mt: 1, fontStyle: 'italic' }}>
+                  The export button will be enabled once all errors are resolved.
+                </Typography>
               </Alert>
             </Box>
           )}

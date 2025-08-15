@@ -1,8 +1,10 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 import json
 import duckdb
 import os
+import logging
 # from db import transform_hdf5_to_db
 from filters.register_all import register_filters
 from db import fetch_curves_batch
@@ -31,6 +33,9 @@ MAX_WORKERS = 8  # Number of parallel workers (tune based on CPU cores)
 
 # Ensure the DB directory exists
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 @app.websocket("/ws/data")
@@ -136,15 +141,17 @@ async def websocket_data_stream(websocket: WebSocket):
                 print(f"Received request: num_curves={num_curves}, curve_id={curve_id}, filters={filters}")
 
                 # Fetch curve IDs based on request
-                curve_ids = conn.execute(
-                    "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
-                ).fetchall()
-                curve_ids = [str(row[0]) for row in curve_ids]  # Ensure string IDs
-                print(f"Total curve IDs fetched: {curve_ids}")
-                
-                # If curve_id is provided, ensure it's included or handled separately
-                if curve_id and curve_id not in curve_ids:
-                    curve_ids.append(curve_id)  # Add specific curve_id if not already included
+                if curve_id:
+                    # If specific curve_id is provided, only fetch that curve
+                    curve_ids = [curve_id]
+                    print(f"Fetching specific curve_id: {curve_ids}")
+                else:
+                    # Otherwise fetch based on num_curves
+                    curve_ids_result = conn.execute(
+                        "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
+                    ).fetchall()
+                    curve_ids = [str(row[0]) for row in curve_ids_result]  # Ensure string IDs
+                    print(f"Total curve IDs fetched: {curve_ids}")
 
                 # Process in batches
                 for i in range(0, len(curve_ids), BATCH_SIZE):
@@ -250,19 +257,19 @@ async def process_and_stream_batch(
 
         # Use ThreadPoolExecutor for blocking DuckDB operations
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # Fetch non-single graphs only if filters have changed
-            if filters_changed:
+            # If batch size is 1, only do single curve processing to avoid duplicates
+            if len(batch_ids) == 1:
+                print("len = 1", len(batch_ids))
+                # Note: Using synchronous call here for simplicity; could also use executor if needed
+                graph_force_vs_z_single, graph_force_indentation_single, graph_elspectra_single = fetch_curves_batch(
+                    conn, batch_ids, filters, single=True
+                )
+            # Otherwise, fetch non-single graphs only if filters have changed
+            elif filters_changed:
                 graph_force_vs_z, graph_force_indentation, graph_elspectra = await loop.run_in_executor(
                     executor,
                     lambda: fetch_curves_batch(conn, batch_ids, filters)
                 )
-                
-        # Fetch specific curve data if curve_id is provided (always, regardless of filters_changed)
-        if curve_id:
-            # Note: Using synchronous call here for simplicity; could also use executor if needed
-            graph_force_vs_z_single, graph_force_indentation_single, graph_elspectra_single = fetch_curves_batch(
-                conn, [curve_id], filters, single=True
-            )
 
         # Prepare the response data
         response_data = {
@@ -479,8 +486,176 @@ async def export_hdf5_endpoint(data: Dict[str, Any]):
             "export_hdf5_path": export_hdf5_path,
             "errors": errors
         })
+
+
+# New endpoint to fetch all curves' fparams
+@app.post("/get-all-fparams")
+async def get_all_fparams(data: Dict[str, Any]):
+    """HTTP endpoint to fetch fparams for all curves with current filters."""
+    try:
+        # Extract parameters from request
+        filters = data.get("filters", {})
         
+        # Ensure we have fmodels to calculate fparams
+        if not filters.get("f_models"):
+            filters["f_models"] = {"hertz_filter_array": {"model": "hertz", "poisson": 0.5}}
         
+        # Connect to database
+        conn = duckdb.connect(DB_PATH)
+        
+        # Register filters (with error handling for existing functions)
+        try:
+            register_filters(conn)
+        except Exception as e:
+            if "already exists" in str(e):
+                print(f"Some functions already exist. Continuing with existing functions.")
+            else:
+                raise
+        
+        # Get ALL curve IDs (no limit)
+        curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z").fetchall()
+        curve_ids = [str(row[0]) for row in curve_ids_result]
+        
+        print(f"Found {len(curve_ids)} total curves in database")
+        
+        if not curve_ids:
+            return {
+                "status": "success",
+                "fparams": [],
+                "message": "No curves found"
+            }
+        
+        # Process curves in smaller batches to avoid memory issues
+        batch_size = 50  # Process 50 curves at a time
+        all_fparams = []
+        
+        for i in range(0, len(curve_ids), batch_size):
+            batch_curve_ids = curve_ids[i:i + batch_size]
+            print(f"Processing batch {i//batch_size + 1}: curves {i} to {min(i + batch_size, len(curve_ids))}")
+            
+            # Fetch curves with fparam calculation (use single=True to get fparams)
+            graph_force_vs_z, graph_force_indentation, graph_elspectra = fetch_curves_batch(
+                conn, batch_curve_ids, filters, single=True
+            )
+            
+            # Extract fparams from this batch
+            if graph_force_indentation and graph_force_indentation.get("curves"):
+                curves_data = graph_force_indentation["curves"]
+                if isinstance(curves_data, dict) and "curves_fparam" in curves_data:
+                    batch_fparams = curves_data["curves_fparam"]
+                    # Adjust curve_index to be global
+                    for fparam in batch_fparams:
+                        fparam["curve_index"] += i  # Add the batch offset
+                    all_fparams.extend(batch_fparams)
+                    print(f"Batch {i//batch_size + 1}: Found {len(batch_fparams)} fparams")
+        
+        fparams = all_fparams
+        
+        print(f"Total fparams found: {len(fparams)}")
+        
+        conn.close()
+        
+        return {
+            "status": "success",
+            "fparams": fparams,
+            "message": f"Retrieved fparams for {len(fparams)} curves"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch fparams: {str(e)}")
+        raise HTTPException(status_code=500, detail={
+            "status": "error",
+            "message": f"Failed to fetch fparams: {str(e)}"
+        })
+
+
+# New endpoint to fetch all curves' elasticity parameters
+@app.post("/get-all-elasticity-params")
+async def get_all_elasticity_params(data: Dict[str, Any]):
+    """HTTP endpoint to fetch elasticity parameters for all curves with current filters."""
+    try:
+        # Extract parameters from request
+        filters = data.get("filters", {})
+        print("Received filters:", filters)
+        
+        # Ensure we have emodels to calculate elasticity parameters
+        if not filters.get("e_models"):
+            filters["e_models"] = {"constant_filter_array": {"model": "constant"}}
+            print("Added default e_models:", filters["e_models"])
+        
+        # Connect to database
+        conn = duckdb.connect(DB_PATH)
+        
+        # Register filters (with error handling for existing functions)
+        try:
+            register_filters(conn)
+        except Exception as e:
+            if "already exists" in str(e):
+                print(f"Some functions already exist. Continuing with existing functions.")
+            else:
+                raise
+        
+        # Get ALL curve IDs (no limit)
+        curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z").fetchall()
+        curve_ids = [str(row[0]) for row in curve_ids_result]
+        
+        print(f"Found {len(curve_ids)} total curves in database")
+        
+        if not curve_ids:
+            return {
+                "status": "success",
+                "elasticity_params": [],
+                "message": "No curves found"
+            }
+        
+        # Process curves in smaller batches to avoid memory issues
+        batch_size = 50  # Process 50 curves at a time
+        all_elasticity_params = []
+        
+        for i in range(0, len(curve_ids), batch_size):
+            batch_curve_ids = curve_ids[i:i + batch_size]
+            print(f"Processing batch {i//batch_size + 1}: curves {i} to {min(i + batch_size, len(curve_ids))}")
+            
+            # Fetch curves with elasticity parameter calculation (use single=True to get elasticity params)
+            graph_force_vs_z, graph_force_indentation, graph_elspectra = fetch_curves_batch(
+                conn, batch_curve_ids, filters, single=True
+            )
+            
+            # Extract elasticity parameters from this batch
+            if graph_elspectra:
+                # Check for elasticity parameters in the separate field
+                if graph_elspectra.get("curves_elasticity_param"):
+                    batch_elasticity_params = graph_elspectra["curves_elasticity_param"]
+                    # Adjust curve_index to be global
+                    for elasticity_param in batch_elasticity_params:
+                        elasticity_param["curve_index"] += i  # Add the batch offset
+                    all_elasticity_params.extend(batch_elasticity_params)
+                    print(f"Batch {i//batch_size + 1}: Found {len(batch_elasticity_params)} elasticity params")
+                else:
+                    print(f"Batch {i//batch_size + 1}: No elasticity params found")
+            else:
+                print("No graph_elspectra data")
+        
+        elasticity_params = all_elasticity_params
+        
+        print(f"Total elasticity params found: {len(elasticity_params)}")
+        
+        conn.close()
+        
+        return {
+            "status": "success",
+            "elasticity_params": elasticity_params,
+            "message": f"Retrieved elasticity params for {len(elasticity_params)} curves"
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch elasticity params: {str(e)}")
+        raise HTTPException(status_code=500, detail={
+            "status": "error",
+            "message": f"Failed to fetch elasticity params: {str(e)}"
+        })
+
+
 # File-serving endpoint
 @app.get("/exports/{file_path:path}")
 async def serve_exported_file(file_path: str):

@@ -72,7 +72,7 @@ class HertzEffectiveModel(FmodelBase):
             # Evaluate the theory function over x to get the fitted curve
             y_fit = self.theory(x, E_eff)
             # print("hertz effective res", len(x), len(y_fit))
-            return [x.tolist(), y_fit.tolist()]  # Return as DOUBLE[][]
+            return [x.tolist(), y_fit.tolist(), [E_eff]]  # Return as DOUBLE[][] with parameter
         except (RuntimeError, ValueError) as e:
             print(f"Fitting failed: {str(e)}")
             return None

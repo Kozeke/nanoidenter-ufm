@@ -11,7 +11,7 @@ def register_fmodel(fmodel_class):
     """Register an fmodel class in the global registry."""
     fmodel_instance = fmodel_class()  # Create instance
     fmodel_instance.create()          # Initialize parameters
-    udf_function_name = f"{fmodel_class.NAME.lower()}"  # e.g., "hertz"
+    udf_function_name = f"fmodel_{fmodel_class.NAME.lower()}"  # e.g., "fmodel_hertz"
     FMODEL_REGISTRY[fmodel_class.NAME.lower()] = {
         "instance": fmodel_instance,
         "udf_function": udf_function_name

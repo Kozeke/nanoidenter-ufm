@@ -55,7 +55,7 @@ class BilayerModel(EmodelBase):
             # print(popt)
             # Calculate y_fit using the fitted parameters
             y_fit = self.theory(x, popt[0], popt[1], popt[2])
-            return [x.tolist(), y_fit.tolist()]  # Return [x, y_fit] as lists
+            return [x.tolist(), y_fit.tolist(), popt.tolist()]  # Return with parameters
 
         except (RuntimeError, ValueError):
             return None

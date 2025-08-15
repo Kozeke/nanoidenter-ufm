@@ -68,7 +68,7 @@ class HertzFmodel(FmodelBase):
             # Compute the fitted curve using the theory function
             y_fit = self.theory(x, elastic)
             # print("hertz res", len(x), len(y_fit))  # Debug output to match second
-            return [x.tolist(), y_fit.tolist()]         
+            return [x.tolist(), y_fit.tolist(), [elastic]]         
         except (RuntimeError, ValueError) as e:
             print(f"Fitting failed: {str(e)}")
             return None

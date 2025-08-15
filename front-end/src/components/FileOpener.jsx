@@ -410,13 +410,28 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
         }
       }
 
-      const attributes = target.attributes || {};
+      // Check for attributes in multiple possible locations
+      let attributes = {};
+      if (target.attributes && Object.keys(target.attributes).length > 0) {
+        attributes = target.attributes;
+      } else if (target.groups && target.groups.attributes && Object.keys(target.groups.attributes).length > 0) {
+        attributes = target.groups.attributes;
+      } else if (target.datasets && target.datasets.length > 0) {
+        // Check if any dataset has attributes
+        for (const dataset of target.datasets) {
+          if (dataset.attributes && Object.keys(dataset.attributes).length > 0) {
+            attributes = dataset.attributes;
+            break;
+          }
+        }
+      }
+      
       // Initialize metadata with all validation rule fields
       const initializedMetadata = Object.keys(metadataValidationRules).reduce((acc, key) => {
         acc[key] = '';
         return acc;
       }, {});
-      // Merge curve0 attributes
+      // Merge found attributes
       const mergedMetadata = { ...initializedMetadata, ...attributes };
 
       if (Object.keys(attributes).length === 0) {

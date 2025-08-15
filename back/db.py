@@ -156,10 +156,16 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         
         curves_cp = []
         curves_el = []
-        print("result batch", result_batch)
-        for row in result_batch:
+        curves_fparam = []
+        curves_elasticity_param = []
+        # print("result batch", result_batch)
+        # print("emodels:", emodels)
+        # print("single:", single)
+        for i, row in enumerate(result_batch):
             curve_id, indentation_result, elspectra_result, hertz_result, elastic_result = row
-            print("indentation_result",indentation_result)
+            # print("indentation_result",indentation_result)
+            # print("elspectra_result", elspectra_result)
+            # print("elastic_result", elastic_result)
             if indentation_result is not None:
                 zi, fi = indentation_result
                 curves_cp.append({
@@ -169,13 +175,19 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                 })
                 if hertz_result is not None and fmodels and single:
                     print("hertz_result", len(hertz_result))
-                    x, y = hertz_result
+                    x, y, fparam = hertz_result
                     # print(len(x),len(y))
                     curves_cp.append({
                         "curve_id": f"{curve_id}_hertz",
                         "x": x,
                         "y": y
                     })
+                    # 👉 Append fparam with curve index - return all parameters
+                    curves_fparam.append({
+                        "curve_index": i,
+                        "fparam": fparam  # Return all parameters, not just fparam[0]
+                    })
+            
             
             if elspectra_result is not None:
                 ze, e = elspectra_result
@@ -186,23 +198,39 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                     "y": e
                 })
                 if elastic_result is not None and emodels and single:
-                    # print("elastic_result", elastic_result)
-                    x, y = elastic_result
+                    print("elastic_result", elastic_result)
+                    x, y, elasticity_param = elastic_result
                     curves_el.append({
                         "curve_id": f"{curve_id}_elastic",
                         "x": x,
                         "y": y
                     })
+                    # 👉 Append elasticity_param with curve index
+                    curves_elasticity_param.append({
+                        "curve_index": i,
+                        "elasticity_param": elasticity_param
+                    })
         
         print("cp filters applied, batch indentation and elspectra calculated")
-        
+        print("curves_elasticity_param count:", len(curves_elasticity_param))
+        all_curves_data = {
+                "curves_cp": curves_cp,
+                "curves_fparam": curves_fparam,
+                "curves_elasticity_param": curves_elasticity_param
+            }
         if curves_cp:
             domain_cp = compute_domain(conn, curves_cp, "curves_temp_cp")
-            graph_force_indentation = {"curves": curves_cp, "domain": domain_cp}
+            graph_force_indentation = {"curves": all_curves_data, "domain": domain_cp}
         
         if curves_el:
             domain_el = compute_domain(conn, curves_el, "curves_temp_el")
+            # For elspectra, keep curves as a flat array for frontend compatibility
+            # but include elasticity parameters separately if they exist
             graph_elspectra = {"curves": curves_el, "domain": domain_el}
+            
+            # Add elasticity parameters as a separate field if they exist
+            if curves_elasticity_param:
+                graph_elspectra["curves_elasticity_param"] = curves_elasticity_param
 
     return graph_force_vs_z, graph_force_indentation, graph_elspectra
                

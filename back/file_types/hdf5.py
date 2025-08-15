@@ -272,6 +272,12 @@ def export_from_duckdb_to_hdf5(
                 logger.error("No curves found in database")
                 raise ValueError("No curves found in database")
 
+        # Check if file already exists and provide clear error message
+        if os.path.exists(output_path):
+            error_msg = f"File already exists: {output_path}. Please choose a different filename or remove the existing file manually."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        
         # Open HDF5 file
         with h5py.File(output_path, "w") as f:
             num_exported = 0
@@ -292,13 +298,13 @@ def export_from_duckdb_to_hdf5(
                 dataset_group_path = dataset_path  # Use full dataset_path as parent group
                 dataset_group = f.require_group(dataset_group_path)
                 
-                # Store deflection and z_sensor as separate datasets
+                # Store deflection and z_sensor as separate datasets with unique names for each curve
                 dataset_group.create_dataset(
-                    "deflection",
+                    f"deflection_{curve_id_str}",
                     data=np.array(deflection or [], dtype=np.float64)
                 )
                 dataset_group.create_dataset(
-                    "z_sensor",
+                    f"z_sensor_{curve_id_str}",
                     data=np.array(z_sensor or [], dtype=np.float64)
                 )
 

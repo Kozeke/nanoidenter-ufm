@@ -11,7 +11,7 @@ def apply_fmodels(query: str, fmodels: Dict, curve_ids: List[str]) -> str:
     for fmodel_name, params in fmodels.items():
         if fmodel_name in FMODEL_REGISTRY:  # Check if model is registered
             # Get the UDF function name directly from the registry
-            function_name = FMODEL_REGISTRY[fmodel_name]["udf_function"]  # e.g., "hertz"
+            function_name = FMODEL_REGISTRY[fmodel_name]["udf_function"]  # e.g., "fmodel_hertz"
             fmodel_instance = FMODEL_REGISTRY[fmodel_name]["instance"]
             param_values = []
             # Map params to instance parameters, using defaults if not provided

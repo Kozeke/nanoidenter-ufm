@@ -4,14 +4,14 @@ import ReactECharts from "echarts-for-react";
 const ElasticitySpectra = ({
   forceData = [],
   domainRange = { xMin: 0, xMax: 0, yMin: 0, yMax: 0 },
-  setSelectedCurveIds = () => {},
-  onCurveSelect = () => {},
+  setSelectedCurveIds = () => { },
+  onCurveSelect = () => { },
   selectedCurveIds = [],
   graphType = "line",
 }) => {
   // Track window height for responsive chart
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
-
+  console.log("asd", forceData)
   useEffect(() => {
     const handleResize = () => setWindowHeight(window.innerHeight);
     window.addEventListener("resize", handleResize);
@@ -40,11 +40,11 @@ const ElasticitySpectra = ({
 
   const validForceData = Array.isArray(forceData)
     ? forceData.map((curve) => ({
-        ...curve,
-        curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
-        x: Array.isArray(curve?.x) ? curve.x : [],
-        y: Array.isArray(curve?.y) ? curve.y : [],
-      }))
+      ...curve,
+      curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
+      x: Array.isArray(curve?.x) ? curve.x : [],
+      y: Array.isArray(curve?.y) ? curve.y : [],
+    }))
     : [];
   console.log("forceData (Elasticity):", JSON.stringify(validForceData, null, 2));
 
@@ -93,25 +93,53 @@ const ElasticitySpectra = ({
         },
       },
     },
-    series: validForceData.map((curve) => ({
-      name: curve.curve_id,
-      type: graphType,
-      smooth: graphType === "line" ? false : undefined,
-      showSymbol: graphType === "scatter" ? true : false,
-      symbolSize: graphType === "scatter" ? 4 : undefined,
-      large: true,
-      triggerEvent: true,
-      data:
-        (selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
-        Array.isArray(curve.x) &&
-        Array.isArray(curve.y) &&
-        curve.x.length === curve.y.length
-          ? curve.x.map((x, i) => [
+    series: validForceData.map((curve) => {
+      const isElastic = curve.curve_id.includes('_elastic');
+      const color = isElastic ? 'yellow' : '#5470C6'; // Yellow for _elastic
+
+      return {
+        name: curve.curve_id,
+        type: graphType,
+        smooth: graphType === "line" ? false : undefined,
+        showSymbol: graphType === "scatter" ? true : false,
+        symbolSize: graphType === "scatter" ? 4 : undefined,
+        large: true,
+        triggerEvent: true,
+        lineStyle:
+          graphType === "line"
+            ? {
+              color,
+              width: isElastic ? 5 : 2, // Highlight elastic curves
+            }
+            : undefined,
+        itemStyle: graphType === "scatter" ? { color } : undefined,
+        data: (() => {
+          let showCurve =
+            (selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
+            Array.isArray(curve.x) &&
+            Array.isArray(curve.y) &&
+            curve.x.length === curve.y.length;
+
+          if (!showCurve && curve.curve_id.includes('_elastic')) {
+            const base = curve.curve_id.replace('_elastic', '');
+            const mainId = `curve${base}`;
+            showCurve =
+              selectedCurveIds.includes(mainId) &&
+              Array.isArray(curve.x) &&
+              Array.isArray(curve.y) &&
+              curve.x.length === curve.y.length;
+          }
+
+          return showCurve
+            ? curve.x.map((x, i) => [
               x * xScaleFactor,
               curve.y[i] !== undefined ? curve.y[i] * yScaleFactor : 0,
             ])
-          : [],
-    })),
+            : [];
+        })(),
+      };
+    }),
+
     legend: { show: false },
     grid: { left: "12%", right: "10%", bottom: "15%", top: "8%" },
     dataZoom: [

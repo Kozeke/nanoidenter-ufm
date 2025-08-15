@@ -38,4 +38,4 @@ class ConstantModel(EmodelBase):
 
         # Use the average to generate y_fit via theory
         y_fit = self.theory(x, avg)
-        return [x.tolist(), y_fit.tolist()]
+        return [x.tolist(), y_fit.tolist(), [avg]]  # Return with parameters

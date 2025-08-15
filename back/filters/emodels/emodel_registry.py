@@ -10,7 +10,7 @@ def register_emodel(emodel_class):
     """Register an emodel class in the global registry."""
     emodel_instance = emodel_class()  # Calls EmodelBase.__init__, sets self.parameters
     emodel_instance.create()          # Populates self.parameters
-    udf_function_name = f"{emodel_class.NAME.lower()}"  # e.g., "sigmoid_fit"
+    udf_function_name = f"emodel_{emodel_class.NAME.lower()}"  # e.g., "emodel_sigmoid"
     EMODEL_REGISTRY[emodel_class.NAME.lower()] = {
         "instance": emodel_instance,
         "udf_function": udf_function_name
@@ -43,6 +43,7 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
 
     def udf_wrapper(ze_values, fe_values, param_values):
         try:
+            print(f"UDF wrapper called for {emodel_name} with ze_values length: {len(ze_values)}, fe_values length: {len(fe_values)}")
             ze_values = np.array(ze_values, dtype=np.float64)
             fe_values = np.array(fe_values, dtype=np.float64)
             param_values = np.array(param_values, dtype=np.float64)  # Convert param_values to numpy array
@@ -54,6 +55,8 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
                 if i < len(param_values):
                     param_dict[param_name] = param_values[i]
             
+            print(f"Parameter mapping for {emodel_name}: {param_dict}")
+            
             # Update instance parameters
             for k, v in param_dict.items():
                 emodel_instance.parameters[k]["default"] = v
@@ -62,9 +65,10 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
             ze_max = emodel_instance.get_value("maxInd") * 1e-9 if "maxInd" in emodel_instance.parameters else 800e-9
   
             x, y = getEizi(ze_min, ze_max, ze_values, fe_values)
+            print(f"Filtered data for {emodel_name}: x length: {len(x)}, y length: {len(y)}")
             
             result = emodel_instance.calculate(x, y)
-            # print("result", result)
+            print(f"Result for {emodel_name}: {result}")
             return result if result is not None else None
         except Exception as e:
             print(f"Error in UDF for {emodel_name}: {e}")
