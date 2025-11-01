@@ -14,16 +14,20 @@ class GofFilter(CpointBase):
         self.add_parameter("maxf", "float", "Percentage of force range for threshold [%]", 50)
         self.add_parameter("minx", "float", "Percentage of x range for threshold [%]", 50)
 
-    def calculate(self, x, y):
+    def calculate(self, x, y, metadata=None):
         """
         Returns contact point (z0, f0) based on max R-squared.
         :param x: Array of z-values
         :param y: Array of force values
+        :param metadata: Dictionary containing metadata values (spring_constant, tip_radius, tip_geometry)
         :return: List of [z0, f0] as [[float, float]] or None if no valid point is found
         """
         fitwindow = self.get_value("fitwindow")
         maxf = self.get_value("maxf")
         minx = self.get_value("minx")
+
+        # Extract metadata values with defaults
+        spring_constant = metadata.get('spring_constant', 1.0) if metadata else 1.0
 
         # Convert to numpy arrays once
         x = np.asarray(x, dtype=np.float64)
@@ -57,7 +61,7 @@ class GofFilter(CpointBase):
         # Process each point
         for j in range(jmin, jmax):
             try:
-                d, f = self.get_indentation(x, y, j, window)
+                d, f = self.get_indentation(x, y, j, window, spring_constant)
                 R2[j - jmin] = self.getFit(d, f)
             except:
                 continue  # Keep 0 as default value
@@ -71,9 +75,8 @@ class GofFilter(CpointBase):
         
         return [[float(x[j_gof]), float(y[j_gof])]]
 
-    def get_indentation(self, z, f, iContact, win):
+    def get_indentation(self, z, f, iContact, win, spring_constant):
         """Returns indentation and force arrays."""
-        spring_constant = 1.0
         slice_range = slice(iContact, iContact + win)
         Zf = z[slice_range] - z[iContact]
         force = f[slice_range] - f[iContact]

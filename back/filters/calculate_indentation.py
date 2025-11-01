@@ -30,6 +30,22 @@ def calc_indentation(z_values: List[float], force_values: List[float], cp: List[
     if i_contact >= len(z_values):
         return None
     
+    Z = np.asarray(z_values, dtype=float)
+    F = np.asarray(force_values, dtype=float)
+    z_cp, f_cp = float(cp[0][0]), float(cp[0][1])
+
+    # sanity
+    is_increasing = np.all(np.diff(Z) >= 0)
+    i_contact = int(np.argmin(np.abs(Z - z_cp)))
+    tail = len(Z) - i_contact
+
+    # print(
+    #     f"[indent dbg] N={len(Z)} inc={is_increasing} "
+    #     f"z_range=({Z[0]:.3e},{Z[-1]:.3e}) z_cp={z_cp:.3e} "
+    #     f"i_contact={i_contact} tail={tail} "
+    #     f"min|z-z_cp|={(np.abs(Z - z_cp)).min():.3e}"
+    # )
+    
     # Slice arrays from contact point onward
     z_array = np.array(z_values[i_contact:], dtype=np.float64)
     f_array = np.array(force_values[i_contact:], dtype=np.float64)
@@ -46,6 +62,7 @@ def calc_indentation(z_values: List[float], force_values: List[float], cp: List[
     # Calculate indentation (Zi) and force (Fi)
     zi = xf - yf / spring_constant
     fi = yf
-    
+    # print("zi", len(zi))
+    # print("fi", len(fi))
     # Return as a list of [Zi, Fi] arrays
     return [zi.tolist(), fi.tolist()]

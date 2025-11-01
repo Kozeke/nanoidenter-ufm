@@ -34,28 +34,27 @@ class BilayerModel(EmodelBase):
         """
         Fit the bilayer model to the data.
         :param x: Indentation depth (m, DOUBLE[])
-        :param y: Force values (N, DOUBLE[])
+        :param y: Elastic modulus values (Pa, DOUBLE[])
         :return: Fitted parameters [E0, Eb, d] or None if fitting fails
         """
-        x = np.asarray(x, dtype=np.float64)
-        y = np.asarray(y, dtype=np.float64)
-        # print("calc bimodule", len(x),len(y))
-        if len(x) < 2 or len(y) < 2:
-            return None
-
         try:
-            p0 = [100000, 1000, 1000]  # Initial guesses: E0 (Pa), Eb (Pa), d (nm)
-            popt, _ = curve_fit(self.theory, x, y, p0=p0, maxfev=10000)
+            z = np.asarray(x, dtype=np.float64)
+            e = np.asarray(y, dtype=np.float64)
             
-            # Check if popt is valid (assuming False means fitting failed, though unlikely)
-            if popt is False:  # This condition is unusual; see note below
-                # print("popt is false")
-                y_fit = [0] * len(x)  # Return zeros if fitting "fails"
-                return [x.tolist(), y_fit]
-            # print(popt)
-            # Calculate y_fit using the fitted parameters
-            y_fit = self.theory(x, popt[0], popt[1], popt[2])
-            return [x.tolist(), y_fit.tolist(), popt.tolist()]  # Return with parameters
+            # Require at least 3 points for a 3-parameter fit
+            if z.size < 3 or e.size < 3 or z.size != e.size:
+                return None
+            
+            # Check for empty or invalid data
+            if not np.any(np.isfinite(z)) or not np.any(np.isfinite(e)):
+                return None
 
-        except (RuntimeError, ValueError):
+            p0 = [100000, 1000, 1000]  # Initial guesses: E0 (Pa), Eb (Pa), d (nm)
+            popt, _ = curve_fit(self.theory, z, e, p0=p0, maxfev=10000)
+            
+            # Calculate y_fit using the fitted parameters
+            y_fit = self.theory(z, popt[0], popt[1], popt[2])
+            return [z.tolist(), y_fit.tolist(), popt.tolist()]  # Return with parameters
+
+        except (RuntimeError, ValueError, Exception):
             return None

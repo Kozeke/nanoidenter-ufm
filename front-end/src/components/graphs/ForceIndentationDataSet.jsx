@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import ReactECharts from "echarts-for-react";
 
 const ForceIndentationDataSet = ({
@@ -8,15 +8,85 @@ const ForceIndentationDataSet = ({
   onCurveSelect = () => { },
   selectedCurveIds = [],
   graphType = "line",
+  onGraphTypeChange = () => {}, // optional; safe if parent doesn't pass
+  activeTab = "", // Track active tab to trigger resize when tab becomes visible
 }) => {
+  const chartRef = useRef(null);      // ReactECharts component
+  const echartsRef = useRef(null);    // ECharts instance
   // Track window height for responsive chart
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
 
+  // Handle window resize and chart resize
   useEffect(() => {
-    const handleResize = () => setWindowHeight(window.innerHeight);
+    const handleResize = () => {
+      setWindowHeight(window.innerHeight);
+      // Resize ECharts instance when window resizes
+      const inst = echartsRef.current || chartRef.current?.getEchartsInstance?.();
+      if (inst) {
+        try { inst.resize(); } catch {}
+      }
+    };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  // Resize chart when tab becomes active, data changes, or domain changes
+  // This fixes the "blank after tab switch" issue when ECharts mounts in a hidden tab
+  useEffect(() => {
+    const inst = echartsRef.current || chartRef.current?.getEchartsInstance?.();
+    if (inst) {
+      // Use setTimeout to ensure the tab has rendered with proper dimensions
+      setTimeout(() => {
+        try { inst.resize(); } catch {}
+      }, 0);
+    }
+  }, [activeTab, forceData, domainRange]);
+
+  // --- Toolbar look (same as others) ---
+  const toolbarCardStyle = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "10px",
+    background: "linear-gradient(180deg, #ffffff 0%, #fafbff 100%)",
+    border: "1px solid #e9ecf5",
+    borderRadius: "10px",
+    boxShadow: "0 8px 18px rgba(20, 20, 43, 0.06)",
+    padding: "10px 12px",
+    marginBottom: "8px",
+  };
+  const leftWrapStyle = { display: "flex", alignItems: "center", gap: "10px" };
+  const titleStyle = { fontSize: 14, fontWeight: 700, color: "#1d1e2c", whiteSpace: "nowrap" };
+  const chipStyle = {
+    fontSize: 12, fontWeight: 700, color: "#3DA58A",
+    background: "#ECFDF5", border: "1px solid #CFFAEA", padding: "4px 8px", borderRadius: "999px",
+  };
+  const unitChipStyle = {
+    fontSize: 12, fontWeight: 600, color: "#4a4f6a",
+    background: "#f5f7ff", border: "1px solid #e9ecf5", padding: "3px 8px", borderRadius: "999px",
+  };
+  const segWrapStyle = {
+    display: "flex", alignItems: "center", gap: 0,
+    background: "#f2f4ff", border: "1px solid #dfe3ff", borderRadius: "12px", overflow: "hidden",
+  };
+  const segBtnStyle = (active) => ({
+    padding: "8px 12px", fontSize: 13, fontWeight: 700, border: "none", cursor: "pointer",
+    background: active ? "#fff" : "transparent",
+    color: active ? "#1d1e2c" : "#4a4f6a",
+    boxShadow: active ? "inset 0 0 0 1px #cfd6ff" : "none",
+    transition: "all .15s ease",
+  });
+  const actionBtnStyle = {
+    padding: "8px 10px", fontSize: 13, fontWeight: 700,
+    borderRadius: "10px", border: "1px solid #e6e9f7",
+    background: "#fff", color: "#2c2f3a", cursor: "pointer",
+    boxShadow: "0 2px 8px rgba(30, 41, 59, 0.06)",
+  };
+  const pressable = {
+    onMouseDown: (e) => (e.currentTarget.style.transform = "translateY(1px)"),
+    onMouseUp:   (e) => (e.currentTarget.style.transform = "translateY(0)"),
+    onMouseLeave:(e) => (e.currentTarget.style.transform = "translateY(0)"),
+  };
 
   const isMobile = window.innerWidth < 768;
   const headerHeight = isMobile ? 100 : 120; // Tabs + filters
@@ -37,26 +107,59 @@ const ForceIndentationDataSet = ({
     const magnitude = Math.floor(Math.log10(absMin));
     return Math.pow(10, -magnitude);
   }
-  console.log("forceData", forceData)
+  // console.log("forceData", forceData)
   
-  // Handle the structure where forceData is the curves object containing curves_cp and curves_fparam
-  const validForceData = forceData || {};
-  const curvesData = forceData || {};
+  // Normalize: accept either the full graph {curves:{...}, domain:{...}} or just the curves object
+  const graphObj = (forceData && forceData.curves) ? forceData.curves : (forceData || {});
+  const validForceData = graphObj;   // keep old naming if used elsewhere
+  const curvesData = graphObj;
   
-  // Extract curves_cp and curves_fparam from the curves object
-  const curvesCpData = curvesData.curves_cp || [];
-  const curvesFparamData = curvesData.curves_fparam || [];
+  // Extract curves_cp and curves_fparam from the curves object with proper array checks
+  const curvesCpData = Array.isArray(curvesData.curves_cp) ? curvesData.curves_cp : [];
+  const curvesFparamData = Array.isArray(curvesData.curves_fparam) ? curvesData.curves_fparam : [];
   
-  // Combine both types of curves for processing
-  const allCurves = [...curvesCpData, ...curvesFparamData];
-  
-  console.log("forceData (Indentation):", validForceData);
-  console.log("curves_cp:", curvesCpData);
-  console.log("curves_fparam:", curvesFparamData);
+  // Safe filtering: Only filter if there *is* a selection; otherwise keep all
+  // This prevents blank charts when selectedCurveIds from another tab don't match current curves
+  const filteredCp = (selectedCurveIds?.length > 0)
+    ? curvesCpData.filter(c => {
+        // Also check for _hertz variants
+        if (selectedCurveIds.includes(c.curve_id)) return true;
+        if (c.curve_id.includes('_hertz')) {
+          const base = c.curve_id.replace('_hertz', '');
+          const mainId = `curve${base}`;
+          return selectedCurveIds.includes(mainId);
+        }
+        return false;
+      })
+    : curvesCpData;
 
-  const xData = allCurves.length > 0 && allCurves[0]?.x.length > 0 ? allCurves[0].x : [];
+  const filteredFparam = (selectedCurveIds?.length > 0)
+    ? curvesFparamData.filter(fparam => {
+        const curveIndex = fparam.curve_index;
+        const correspondingCurve = curvesCpData[curveIndex];
+        return correspondingCurve && selectedCurveIds.includes(correspondingCurve.curve_id);
+      })
+    : curvesFparamData;
+
+  // If filtering produced 0 visible series, fall back to all to avoid a blank chart
+  const finalCp = filteredCp.length > 0 ? filteredCp : curvesCpData;
+  const finalFp = filteredFparam.length > 0 ? filteredFparam : curvesFparamData;
+  
+  // Combine both types of curves for processing (using filtered data)
+  const allCurves = [...finalCp, ...finalFp];
+  
+  // console.log("forceData (Indentation):", validForceData);
+  // console.log("curves_cp:", curvesCpData);
+  // console.log("curves_fparam:", curvesFparamData);
+
+  // If the first curve is invalid, fall back to the first valid curve for scaling
+  const firstValid = (arr) => arr.find(c => Array.isArray(c?.x) && c.x.length && Array.isArray(c?.y) && c.y.length);
+  const xData = allCurves.length > 0 ? (firstValid(allCurves)?.x || []) : [];
   const xScaleFactor = getScaleFactor(domainRange.xMin, xData);
-  const yScaleFactor = getScaleFactor(domainRange.yMin);
+  
+  // Normalize y-axis scaling to avoid edge-cases when yMin is 0
+  const yFirst = firstValid(allCurves)?.y || [];
+  const yScaleFactor = getScaleFactor(domainRange.yMin, yFirst);
 
   const xScaledRange = (domainRange.xMax - domainRange.xMin) * xScaleFactor;
   const xDecimals = xScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10))) : 0;
@@ -70,6 +173,9 @@ const ForceIndentationDataSet = ({
   const yExponent = Math.log10(yScaleFactor);
   const yUnit = yExponent === 0 ? 'N' : `×10^{-${Math.round(yExponent)}} N`;
 
+  // Debug: Log curve data before building chartOptions
+  console.log("FI curves_cp len:", curvesCpData[0]?.x?.length, "fparams len:", curvesFparamData.length, "domain:", domainRange);
+
   const chartOptions = {
     tooltip: { trigger: "axis" },
     xAxis: {
@@ -77,8 +183,8 @@ const ForceIndentationDataSet = ({
       name: `Indentation (${xUnit})`,
       nameLocation: "middle",
       nameGap: 25,
-      min: domainRange.xMin ? domainRange.xMin * xScaleFactor : undefined,
-      max: domainRange.xMax ? domainRange.xMax * xScaleFactor : undefined,
+      min: domainRange.xMin !== null ? domainRange.xMin * xScaleFactor : undefined,
+      max: domainRange.xMax !== null ? domainRange.xMax * xScaleFactor : undefined,
       axisLabel: {
         formatter: function (value) {
           return value.toFixed(xDecimals);
@@ -91,8 +197,8 @@ const ForceIndentationDataSet = ({
       nameLocation: "middle",
       nameGap: 40,
       scale: true,
-      min: domainRange.yMin * yScaleFactor,
-      max: domainRange.yMax * yScaleFactor,
+      min: domainRange.yMin !== null ? domainRange.yMin * yScaleFactor : undefined,
+      max: domainRange.yMax !== null ? domainRange.yMax * yScaleFactor : undefined,
       axisLabel: {
         formatter: function (value) {
           return value.toFixed(yDecimals);
@@ -100,12 +206,15 @@ const ForceIndentationDataSet = ({
       },
     },
     series: [
-      // curves_cp as line series
-      ...curvesCpData.map((curve) => ({
+      // curves_cp as line/scatter depending on toolbar
+      ...finalCp
+        .filter(c => Array.isArray(c?.x) && Array.isArray(c?.y) && c.x.length === c.y.length && c.x.length > 1)
+        .map((curve) => ({
         name: curve.curve_id,
-        type: "line",
+        type: graphType === "scatter" ? "scatter" : "line",
         smooth: false,
         showSymbol: false,
+        connectNulls: true,
         large: true,
         triggerEvent: true,
         itemStyle: {
@@ -115,61 +224,29 @@ const ForceIndentationDataSet = ({
           width: curve.curve_id.includes('_hertz') ? 5 : 1.5,
         },
         data: (() => {
-          let showCurve =
-            (selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
-            Array.isArray(curve.x) &&
-            Array.isArray(curve.y) &&
-            curve.x.length === curve.y.length;
-
-          if (!showCurve && curve.curve_id.includes('_hertz')) {
-            const base = curve.curve_id.replace('_hertz', '');
-            const mainId = `curve${base}`;
-            showCurve =
-              selectedCurveIds.includes(mainId) &&
-              Array.isArray(curve.x) &&
-              Array.isArray(curve.y) &&
-              curve.x.length === curve.y.length;
-          }
-
-          return showCurve
-            ? curve.x.map((x, i) => [
-              x * xScaleFactor,
-              curve.y[i] !== undefined ? curve.y[i] * yScaleFactor : 0,
-            ])
-            : [];
+          const isValid = Array.isArray(curve.x) && Array.isArray(curve.y) && curve.x.length === curve.y.length;
+          return isValid ? curve.x.map((x, i) => [x * xScaleFactor, (curve.y[i] ?? 0) * yScaleFactor]) : [];
         })(),
       })),
-             // curves_fparam as scatter series
-       ...curvesFparamData.map((fparamObj) => {
-         // Find the corresponding curve in curves_cp to get the x-coordinate
-         const curveIndex = fparamObj.curve_index;
-         const correspondingCurve = curvesCpData[curveIndex];
-         
-         if (!correspondingCurve) return null;
-         
-         // Use the middle point of the curve for x-coordinate, or a specific point
-         const xIndex = Math.floor(correspondingCurve.x.length / 2);
-         const xValue = correspondingCurve.x[xIndex] || 0;
-         const yValue = fparamObj.fparam;
-         
-         return {
-           name: `fparam_${curveIndex}`,
-           type: "scatter",
-           showSymbol: true,
-           symbolSize: 8,
-           large: true,
-           triggerEvent: true,
-           itemStyle: {
-             color: '#ff6b6b', // Red color for fparam points
-           },
-           data: (() => {
-             let showPoint = selectedCurveIds.length === 0 || 
-                           selectedCurveIds.includes(correspondingCurve.curve_id);
-             
-             return showPoint ? [[xValue * xScaleFactor, yValue * yScaleFactor]] : [];
-           })(),
-         };
-       }).filter(Boolean), // Remove null entries
+      // curves_fparam as scatter series (using filtered finalFp)
+      ...finalFp.map((fparamObj) => {
+        const curveIndex = fparamObj.curve_index;
+        const correspondingCurve = curvesCpData[curveIndex];
+        if (!correspondingCurve) return null;
+        const xIndex = Math.floor(correspondingCurve.x.length / 2);
+        const xValue = correspondingCurve.x[xIndex] || 0;
+        const yValue = fparamObj.fparam;
+        return {
+          name: `fparam_${curveIndex}`,
+          type: "scatter",
+          showSymbol: true,
+          symbolSize: 8,
+          large: true,
+          triggerEvent: true,
+          itemStyle: { color: '#ff6b6b' },
+          data: [[xValue * xScaleFactor, yValue * yScaleFactor]],
+        };
+      }).filter(Boolean), // Remove null entries
     ],
 
     legend: { show: false },
@@ -266,21 +343,67 @@ const ForceIndentationDataSet = ({
 
   return (
     <div style={{ flex: 1, height: "100%" }}>
-      {/* <h2
-        style={{
-          margin: "0 0 5px 0",
-          fontSize: isMobile ? "14px" : "16px",
-          color: "#333",
-        }}
-      >
-        Force vs Indentation
-      </h2> */}
+      {/* Toolbar */}
+      <div style={toolbarCardStyle}>
+        <div style={leftWrapStyle}>
+          <div style={titleStyle}>Force–Indentation</div>
+          <div style={chipStyle}>{allCurves.length} series</div>
+          <div style={unitChipStyle}>X: {xUnit}</div>
+          <div style={unitChipStyle}>Y: {yUnit}</div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div style={segWrapStyle} role="tablist" aria-label="Chart Type">
+            <button
+              style={segBtnStyle(graphType === "line")}
+              onClick={() => onGraphTypeChange("line")}
+              role="tab"
+              aria-selected={graphType === "line"}
+              {...pressable}
+            >
+              Line
+            </button>
+            <button
+              style={segBtnStyle(graphType === "scatter")}
+              onClick={() => onGraphTypeChange("scatter")}
+              role="tab"
+              aria-selected={graphType === "scatter"}
+              {...pressable}
+            >
+              Scatter
+            </button>
+          </div>
+
+          <button
+            style={actionBtnStyle}
+            onClick={() => {
+              const inst = echartsRef.current || chartRef.current?.getEchartsInstance?.();
+              if (!inst) return;
+              try {
+                inst.dispatchAction({ type: "dataZoom", start: 0, end: 100 });
+                inst.dispatchAction({ type: "dataZoom", yAxisIndex: 0, start: 0, end: 100 });
+              } catch {}
+            }}
+            {...pressable}
+          >
+            Reset Zoom
+          </button>
+        </div>
+      </div>
+
+      {/* Chart */}
       <ReactECharts
+        ref={chartRef}
         option={chartOptions}
         style={{ height: chartHeight, width: "100%" }}
         notMerge={true}
         opts={{ renderer: "canvas" }}
         onEvents={onChartEvents}
+        onChartReady={(inst) => {
+          echartsRef.current = inst;
+          // Ensure initial sizing if tab was already visible
+          try { inst.resize(); } catch {}
+        }}
       />
     </div>
   );

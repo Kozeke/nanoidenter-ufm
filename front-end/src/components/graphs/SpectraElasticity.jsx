@@ -1,31 +1,41 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import ReactECharts from "echarts-for-react";
 
 const ElasticitySpectra = ({
   forceData = [],
   domainRange = { xMin: 0, xMax: 0, yMin: 0, yMax: 0 },
-  setSelectedCurveIds = () => { },
-  onCurveSelect = () => { },
+  setSelectedCurveIds = () => {},
+  onCurveSelect = () => {},
   selectedCurveIds = [],
   graphType = "line",
+  onGraphTypeChange = () => {}, // optional, safe default
 }) => {
-  // Track window height for responsive chart
+  const chartRef = useRef(null);
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
-  console.log("asd", forceData)
+  const lastNonEmptyDataRef = useRef([]);
+
   useEffect(() => {
     const handleResize = () => setWindowHeight(window.innerHeight);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  // Avoid flicker when forceData briefly goes empty by rendering the last non-empty data
+  useEffect(() => {
+    if (Array.isArray(forceData) && forceData.length > 0) {
+      lastNonEmptyDataRef.current = forceData;
+    }
+  }, [forceData]);
+
   const isMobile = window.innerWidth < 768;
-  const headerHeight = isMobile ? 100 : 120; // Tabs + filters
-  const footerHeight = isMobile ? 50 : 0; // Controls (stacked on mobile)
+  const headerHeight = isMobile ? 100 : 120;
+  const footerHeight = isMobile ? 50 : 0;
   const chartHeight = Math.min(
-    Math.max(windowHeight - headerHeight - footerHeight - 300, 300), // Min 300px
-    800 // Max 800px
+    Math.max(windowHeight - headerHeight - footerHeight - 300, 300),
+    800
   );
 
+  // ---------- Scale helpers ----------
   function getScaleFactor(minValue, dataArray = []) {
     if (!minValue && minValue !== 0) return 1;
     if (minValue === 0 && dataArray.length > 0) {
@@ -38,32 +48,144 @@ const ElasticitySpectra = ({
     return Math.pow(10, -magnitude);
   }
 
-  const validForceData = Array.isArray(forceData)
-    ? forceData.map((curve) => ({
-      ...curve,
-      curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
-      x: Array.isArray(curve?.x) ? curve.x : [],
-      y: Array.isArray(curve?.y) ? curve.y : [],
-    }))
-    : [];
-  console.log("forceData (Elasticity):", JSON.stringify(validForceData, null, 2));
+  // Normalize the render data (use last non-empty to avoid blink)
+  const renderForceData = Array.isArray(forceData) && forceData.length > 0
+    ? forceData
+    : lastNonEmptyDataRef.current;
 
-  const xData = validForceData.length > 0 && validForceData[0]?.x.length > 0 ? validForceData[0].x : [];
+  // Helper: treat "curve1" and "1" as same base; add pairing with "_elastic"
+  const isElasticId = (id) => /_elastic$/i.test(id);
+  // strip any suffix after first underscore (e.g., _elastic, _hertz, _whatever)
+  const baseToken = (id) => {
+    const noSuffix = String(id).replace(/_.+$/i, "");   // "curve0_hertz" -> "curve0"
+    return noSuffix.replace(/^curve/i, "");             // "curve0" -> "0"
+  };
+
+  const isShownWithPartner = (id, selected) => {
+    if (!selected || selected.length === 0) return true;
+    const base = baseToken(id);
+    // compare by base to be suffix-agnostic AND type-agnostic
+    const selectedBases = new Set(
+      selected.map((s) => baseToken(String(s)))
+    );
+    return selectedBases.has(base);
+  };
+
+  const validForceData = Array.isArray(renderForceData)
+    ? renderForceData.map((curve) => ({
+        ...curve,
+        curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
+        x: Array.isArray(curve?.x) ? curve.x : [],
+        y: Array.isArray(curve?.y) ? curve.y : [],
+      }))
+    : [];
+
+  // Debug: Log the data to see what we're getting
+  // console.log("SpectraElasticity - forceData:", forceData);
+  // console.log("SpectraElasticity - validForceData:", validForceData);
+
+  const xData =
+    validForceData.length > 0 && validForceData[0]?.x.length > 0
+      ? validForceData[0].x
+      : [];
   const xScaleFactor = getScaleFactor(domainRange.xMin, xData);
   const yScaleFactor = getScaleFactor(domainRange.yMin);
 
   const xScaledRange = (domainRange.xMax - domainRange.xMin) * xScaleFactor;
-  const xDecimals = xScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10))) : 0;
-
   const yScaledRange = (domainRange.yMax - domainRange.yMin) * yScaleFactor;
-  const yDecimals = yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0;
+
+  const xDecimals =
+    xScaledRange > 0
+      ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10)))
+      : 0;
+  const yDecimals =
+    yScaledRange > 0
+      ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10)))
+      : 0;
 
   const xExponent = Math.log10(xScaleFactor);
-  const xUnit = xExponent === 0 ? 'm' : `×10^{-${Math.round(xExponent)}} m`;
-
   const yExponent = Math.log10(yScaleFactor);
-  const yUnit = yExponent === 0 ? 'Pa' : `×10^{-${Math.round(yExponent)}} Pa`;
 
+  const xUnit = xExponent === 0 ? "m" : `×10^{-${Math.round(xExponent)}} m`;
+  const yUnit = yExponent === 0 ? "Pa" : `×10^{-${Math.round(yExponent)}} Pa`;
+
+  // ---------- Toolbar styles ----------
+  const toolbarCardStyle = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "10px",
+    background: "linear-gradient(180deg, #ffffff 0%, #fafbff 100%)",
+    border: "1px solid #e9ecf5",
+    borderRadius: "10px",
+    boxShadow: "0 8px 18px rgba(20, 20, 43, 0.06)",
+    padding: "10px 12px",
+    marginBottom: "8px",
+  };
+  const leftWrapStyle = { display: "flex", alignItems: "center", gap: "10px" };
+  const titleStyle = {
+    fontSize: 14,
+    fontWeight: 700,
+    color: "#1d1e2c",
+    whiteSpace: "nowrap",
+  };
+  const chipStyle = {
+    fontSize: 12,
+    fontWeight: 700,
+    color: "#3DA58A",
+    background: "#ECFDF5",
+    border: "1px solid #CFFAEA",
+    padding: "4px 8px",
+    borderRadius: "999px",
+  };
+  const unitChipStyle = {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#4a4f6a",
+    background: "#f5f7ff",
+    border: "1px solid #e9ecf5",
+    padding: "3px 8px",
+    borderRadius: "999px",
+  };
+  const segWrapStyle = {
+    display: "flex",
+    alignItems: "center",
+    gap: 0,
+    background: "#f2f4ff",
+    border: "1px solid #dfe3ff",
+    borderRadius: "12px",
+    overflow: "hidden",
+  };
+  const segBtnStyle = (active) => ({
+    padding: "8px 12px",
+    fontSize: 13,
+    fontWeight: 700,
+    border: "none",
+    cursor: "pointer",
+    background: active ? "#fff" : "transparent",
+    color: active ? "#1d1e2c" : "#4a4f6a",
+    boxShadow: active ? "inset 0 0 0 1px #cfd6ff" : "none",
+    transition: "all .15s ease",
+  });
+  const actionBtnStyle = {
+    padding: "8px 10px",
+    fontSize: 13,
+    fontWeight: 700,
+    borderRadius: "10px",
+    border: "1px solid #e6e9f7",
+    background: "#fff",
+    color: "#2c2f3a",
+    cursor: "pointer",
+    boxShadow: "0 2px 8px rgba(30, 41, 59, 0.06)",
+  };
+  const pressable = {
+    onMouseDown: (e) => (e.currentTarget.style.transform = "translateY(1px)"),
+    onMouseUp: (e) => (e.currentTarget.style.transform = "translateY(0)"),
+    onMouseLeave: (e) => (e.currentTarget.style.transform = "translateY(0)"),
+  };
+
+  // ---------- Chart config ----------
+  const safeMin = (v) => (Number.isFinite(v) ? v : undefined);
   const chartOptions = {
     tooltip: { trigger: "axis" },
     xAxis: {
@@ -71,12 +193,10 @@ const ElasticitySpectra = ({
       name: `Z (${xUnit})`,
       nameLocation: "middle",
       nameGap: 25,
-      min: domainRange.xMin ? domainRange.xMin * xScaleFactor : undefined,
-      max: domainRange.xMax ? domainRange.xMax * xScaleFactor : undefined,
+      min: safeMin(domainRange.xMin * xScaleFactor),
+      max: safeMin(domainRange.xMax * xScaleFactor),
       axisLabel: {
-        formatter: function (value) {
-          return value.toFixed(xDecimals);
-        },
+        formatter: (value) => value.toFixed(xDecimals),
       },
     },
     yAxis: {
@@ -85,92 +205,55 @@ const ElasticitySpectra = ({
       nameLocation: "middle",
       nameGap: 40,
       scale: true,
-      min: domainRange.yMin * yScaleFactor,
-      max: domainRange.yMax * yScaleFactor,
+      min: safeMin(domainRange.yMin * yScaleFactor),
+      max: safeMin(domainRange.yMax * yScaleFactor),
       axisLabel: {
-        formatter: function (value) {
-          return value.toFixed(yDecimals);
-        },
+        formatter: (value) => value.toFixed(yDecimals),
       },
     },
     series: validForceData.map((curve) => {
-      const isElastic = curve.curve_id.includes('_elastic');
-      const color = isElastic ? 'yellow' : '#5470C6'; // Yellow for _elastic
+      const id = curve.curve_id;
+      const elastic = isElasticId(id);
+      const color = elastic ? "yellow" : "#5470C6";
+      const showCurve =
+        isShownWithPartner(id, selectedCurveIds) &&
+        Array.isArray(curve.x) &&
+        Array.isArray(curve.y) &&
+        curve.x.length === curve.y.length;
+
+      // Debug: Log each curve being processed
+      // console.log(`SpectraElasticity - Processing curve: ${id}, elastic: ${elastic}, showCurve: ${showCurve}, color: ${color}`);
 
       return {
-        name: curve.curve_id,
+        name: id,
         type: graphType,
         smooth: graphType === "line" ? false : undefined,
-        showSymbol: graphType === "scatter" ? true : false,
+        showSymbol: graphType === "scatter",
         symbolSize: graphType === "scatter" ? 4 : undefined,
         large: true,
         triggerEvent: true,
+        // keep elastic on top
+        z: elastic ? 3 : 2,
         lineStyle:
           graphType === "line"
-            ? {
-              color,
-              width: isElastic ? 5 : 2, // Highlight elastic curves
-            }
+            ? { color, width: elastic ? 4 : 2, opacity: 1 }
             : undefined,
         itemStyle: graphType === "scatter" ? { color } : undefined,
-        data: (() => {
-          let showCurve =
-            (selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
-            Array.isArray(curve.x) &&
-            Array.isArray(curve.y) &&
-            curve.x.length === curve.y.length;
-
-          if (!showCurve && curve.curve_id.includes('_elastic')) {
-            const base = curve.curve_id.replace('_elastic', '');
-            const mainId = `curve${base}`;
-            showCurve =
-              selectedCurveIds.includes(mainId) &&
-              Array.isArray(curve.x) &&
-              Array.isArray(curve.y) &&
-              curve.x.length === curve.y.length;
-          }
-
-          return showCurve
-            ? curve.x.map((x, i) => [
+        data: showCurve
+          ? curve.x.map((x, i) => [
               x * xScaleFactor,
               curve.y[i] !== undefined ? curve.y[i] * yScaleFactor : 0,
             ])
-            : [];
-        })(),
+          : [],
       };
     }),
-
     legend: { show: false },
     grid: { left: "12%", right: "10%", bottom: "15%", top: "8%" },
     dataZoom: [
-      {
-        type: "slider",
-        xAxisIndex: 0,
-        start: 0,
-        end: 100,
-        height: 20,
-        bottom: 10,
-      },
-      {
-        type: "slider",
-        yAxisIndex: 0,
-        start: 0,
-        end: 100,
-        width: 20,
-        right: 10,
-      },
-      {
-        type: "inside",
-        xAxisIndex: 0,
-        start: 0,
-        end: 100,
-      },
-      {
-        type: "inside",
-        yAxisIndex: 0,
-        start: 0,
-        end: 100,
-      },
+      { type: "slider", xAxisIndex: 0, start: 0, end: 100, height: 20, bottom: 10 },
+      { type: "slider", yAxisIndex: 0, start: 0, end: 100, width: 20, right: 10 },
+      { type: "inside", xAxisIndex: 0, start: 0, end: 100 },
+      { type: "inside", yAxisIndex: 0, start: 0, end: 100 },
     ],
     animation: false,
     progressive: 5000,
@@ -178,51 +261,81 @@ const ElasticitySpectra = ({
 
   const onChartEvents = {
     click: (params) => {
-      console.log("Chart click event (Elasticity):", {
-        componentType: params.componentType,
-        seriesType: params.seriesType,
-        seriesIndex: params.seriesIndex,
-        name: params.name,
-      });
       if (params.componentType === "series") {
-        const curveIndex = params.seriesIndex;
-        const selectedCurve = validForceData[curveIndex];
-        console.log("Selected curve (Elasticity):", {
-          curve_id: selectedCurve?.curve_id,
-          x: selectedCurve?.x?.slice(0, 5),
-          y: selectedCurve?.y?.slice(0, 5),
-        });
+        const selectedCurve = validForceData[params.seriesIndex];
         if (selectedCurve && selectedCurve.curve_id) {
           setSelectedCurveIds([selectedCurve.curve_id]);
-          if (onCurveSelect) {
-            onCurveSelect({
+          onCurveSelect?.({
               curve_id: selectedCurve.curve_id,
               x: selectedCurve.x || [],
               y: selectedCurve.y || [],
             });
-          }
         }
       }
     },
   };
 
+  // ---------- Render ----------
   return (
     <div style={{ flex: 1, height: "100%" }}>
-      {/* <h2
-        style={{
-          margin: "0 0 5px 0",
-          fontSize: isMobile ? "14px" : "16px",
-          color: "#333",
-        }}
-      >
-        Elasticity Spectra
-      </h2> */}
+      {/* Toolbar */}
+      <div style={toolbarCardStyle}>
+        <div style={leftWrapStyle}>
+          <div style={titleStyle}>Elasticity Spectra</div>
+          <div style={chipStyle}>{validForceData.length} series</div>
+          <div style={unitChipStyle}>X: {xUnit}</div>
+          <div style={unitChipStyle}>Y: {yUnit}</div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div style={segWrapStyle}>
+            <button
+              style={segBtnStyle(graphType === "line")}
+              onClick={() => onGraphTypeChange("line")}
+              {...pressable}
+            >
+              Line
+            </button>
+            <button
+              style={segBtnStyle(graphType === "scatter")}
+              onClick={() => onGraphTypeChange("scatter")}
+              {...pressable}
+            >
+              Scatter
+            </button>
+          </div>
+
+          <button
+            style={actionBtnStyle}
+            onClick={() => {
+              const inst = chartRef.current;
+              if (!inst) return;
+              try {
+                inst.dispatchAction({ type: "dataZoom", start: 0, end: 100 });
+                inst.dispatchAction({
+                  type: "dataZoom",
+                  yAxisIndex: 0,
+                  start: 0,
+                  end: 100,
+                });
+              } catch {}
+            }}
+            {...pressable}
+          >
+            Reset Zoom
+          </button>
+        </div>
+      </div>
+
+      {/* Chart */}
       <ReactECharts
+        ref={chartRef}
         option={chartOptions}
         style={{ height: chartHeight, width: "100%" }}
         notMerge={true}
         opts={{ renderer: "canvas" }}
         onEvents={onChartEvents}
+        onChartReady={(inst) => (chartRef.current = inst)}
       />
     </div>
   );

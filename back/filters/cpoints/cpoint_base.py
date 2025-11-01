@@ -4,6 +4,8 @@ import numpy as np
 class CpointBase(ABC):
     def __init__(self):
         self.parameters = {}
+        # Track parameter order to ensure deterministic mapping
+        self.parameter_order = []
 
     @abstractmethod
     def create(self):
@@ -11,7 +13,7 @@ class CpointBase(ABC):
         pass
 
     @abstractmethod
-    def calculate(self, x, y):
+    def calculate(self, x, y, metadata=None):
         """Process the input data and return filtered output."""
         pass
 
@@ -23,6 +25,9 @@ class CpointBase(ABC):
             "default": default,
             "options": options  # For combo types
         }
+        # Track parameter order for deterministic mapping
+        if name not in self.parameter_order:
+            self.parameter_order.append(name)
 
     def get_value(self, name):
         """Retrieve parameter value (to be set by the UI later)."""

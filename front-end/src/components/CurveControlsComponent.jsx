@@ -35,61 +35,101 @@ const CurveControlsComponent = ({
     const handleResize = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, []);  const isMobile = windowWidth < 768;  const containerStyle = {
+  }, []);  const isMobile = windowWidth < 768;
+
+  // --- Unified toolbar/card look (matches Dashboard/Filters) ---
+  const toolbarCardStyle = {
     display: "flex",
     flexDirection: isMobile ? "column" : "row",
     alignItems: isMobile ? "stretch" : "center",
-    gap: isMobile ? "8px" : "6px",
-    backgroundColor: "#fff",
-    padding: isMobile ? "8px" : "10px",
+    gap: isMobile ? "10px" : "8px",
+    background: "linear-gradient(180deg, #ffffff 0%, #fafbff 100%)",
+    border: "1px solid #e9ecf5",
+    borderRadius: "10px",
+    boxShadow: "0 8px 18px rgba(20, 20, 43, 0.06)",
+    padding: isMobile ? "10px" : "12px",
     boxSizing: "border-box",
-    height: "auto",
-    minHeight: isMobile ? "auto" : "100px",
-    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
-    borderRadius: "8px",
-  };  const formControlStyle = {
-    flex: isMobile ? "none" : "0 1 auto",
-    minWidth: isMobile ? "100%" : "120px",
-    maxWidth: isMobile ? "100%" : "180px",
-  };  const selectStyle = {
-    height: isMobile ? "40px" : "36px",
-    fontSize: isMobile ? "14px" : "12px",
-  };  const inputLabelStyle = {
-    fontSize: isMobile ? "14px" : "12px",
-  };  const menuItemStyle = {
-    padding: isMobile ? "4px 12px" : "2px 8px",
+    position: "sticky",
+    top: isMobile ? 0 : 56, // tweak if your top header height differs
+    zIndex: 4,
+  };
+
+  const dividerStyle = {
+    width: "1px",
+    height: isMobile ? "20px" : "28px",
+    backgroundColor: "#e6e9f7",
+    margin: isMobile ? "0" : "0 4px",
+  };
+
+  const formControlStyle = {
+    flex: isMobile ? "none" : "0 1 200px",
+    minWidth: isMobile ? "100%" : "180px",
+    maxWidth: isMobile ? "100%" : "260px",
+  };
+
+  const inputLabelStyle = { fontSize: 14, fontWeight: 600, color: "#4a4f6a" };
+
+  const selectStyle = {
+    height: 36,
+    fontSize: 14,
+    background: "#fff",
+    borderRadius: "10px",
+  };
+
+  const menuHeaderStyle = {
+    padding: "6px 12px",
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-  };  const headerStyle = {
-    padding: isMobile ? "4px 12px" : "2px 8px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    fontWeight: "bold",
-    fontSize: isMobile ? "14px" : "12px",
-    backgroundColor: "#f5f5f5",
-    borderBottom: "1px solid #ccc",
+    fontWeight: 700,
+    fontSize: 13,
+    backgroundColor: "#f5f7ff",
+    borderBottom: "1px solid #e9ecf5",
     pointerEvents: "none",
-  };  const checkboxStyle = {
-    padding: isMobile ? "6px" : "4px",
-  };  const numberInputContainerStyle = {
+  };
+
+  const menuItemStyle = {
+    padding: "6px 12px",
     display: "flex",
     alignItems: "center",
-    gap: "5px",
-    flex: isMobile ? "none" : "1 1 auto",
+    justifyContent: "space-between",
+    fontSize: 13,
+  };
+
+  const checkboxStyle = { padding: "4px" };
+
+  const fileLabelStyle = {
+    fontSize: 14,
+    color: "#1d1e2c",
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    maxWidth: isMobile ? "100%" : 320,
+  };
+
+  const numberRowStyle = {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    flex: isMobile ? "none" : "0 1 auto",
     width: isMobile ? "100%" : "auto",
-    marginLeft: isMobile ? "0" : "auto",
-  };  const numberInputStyle = {
-    width: isMobile ? "80px" : "60px",
-    padding: isMobile ? "6px" : "3px",
-    fontSize: isMobile ? "14px" : "12px",
+    marginLeft: isMobile ? 0 : "auto",
+  };
+
+  const numberLabelStyle = { fontSize: 14, color: "#4a4f6a", fontWeight: 600 };
+
+  const numberInputStyle = {
+    width: 80,
+    height: 36,
+    padding: "6px 10px",
+    fontSize: 14,
     textAlign: "center",
-    borderRadius: "4px",
-    border: "1px solid #ccc",
-  };  const labelStyle = {
-    fontSize: isMobile ? "14px" : "12px",
-    color: "#333",
+    borderRadius: "10px",
+    border: "1px solid #e6e9f7",
+    background: "#fff",
+    boxShadow: "0 2px 8px rgba(30,41,59,0.06) inset",
+    outline: "none",
   };  const handleSelectChange = useCallback((event) => {
     const value = event.target.value;
     setSelectedCurveIds(value);
@@ -122,139 +162,126 @@ setSelectedCurveIds((prev) => {
     setGraphType(value);
     console.log("Graph type changed to:", value);
   }, [setGraphType]);  return (
-    <div style={containerStyle}>
-      <div style={{ ...labelStyle, marginRight: isMobile ? "0" : "10px" }}>
+    <div style={toolbarCardStyle}>
+      {/* File name */}
+      <div style={fileLabelStyle}>
         File: {filename || "No file selected"}
       </div>
-      <div style={{
-        width: "1px",
-        height: isMobile ? "20px" : "30px",
-        backgroundColor: "#ccc",
-        margin: isMobile ? "0 8px" : "0 6px"
-      }}></div>
-    <FormControl style={formControlStyle}>
-  <InputLabel id="curve-select-label" style={inputLabelStyle}>
-    Select Curves
-  </InputLabel>
-  <Select
-    labelId="curve-select-label"
-    multiple
-    value={selectedCurveIds}
-    onChange={handleSelectChange}
-    renderValue={(selected) =>
-      selected.length === 0 ? "All Curves" : selected.join(", ")
-    }
-    style={selectStyle}>
-<MenuItem style={headerStyle} disabled>
-  <Box display="flex" alignItems="center" width="100%">
-    <Box width="50px" textAlign="center">
-      Display
-    </Box>
-    <Box flexGrow={1} textAlign="left">
-      Curve
-    </Box>
-    <Box width="50px" textAlign="center">
-      Export
-    </Box>
-  </Box>
-</MenuItem>
-<MenuItem style={menuItemStyle}>
-  <Box display="flex" alignItems="center" width="100%">
-    <Box width="50px" textAlign="center">
-      <Checkbox
-        checked={
-          forceData.length > 0 &&
-          forceData.every((curve) =>
-            selectedCurveIds.includes(curve.curve_id)
-          )
-        }
-        onChange={(event) => {
-          event.stopPropagation();
-          const allCurveIds = forceData.map((curve) => curve.curve_id);
-          if (event.target.checked) {
-            setSelectedCurveIds(allCurveIds);
-            onExportCurveIdsChange(allCurveIds); // Select all for export too
-            console.log("Selected all curves for display and export:", allCurveIds);
-          } else {
-            setSelectedCurveIds([]);
-            onExportCurveIdsChange([]); // Deselect all for export
-            console.log("Deselected all curves for display and export");
+
+      {/* Divider */}
+      {!isMobile && <div style={dividerStyle} />}
+
+      {/* Curve selector with Display/Export columns */}
+      <FormControl style={formControlStyle}>
+        <InputLabel id="curve-select-label" style={inputLabelStyle}>
+          Select Curves
+        </InputLabel>
+        <Select
+          labelId="curve-select-label"
+          multiple
+          value={selectedCurveIds}
+          onChange={handleSelectChange}
+          renderValue={(selected) =>
+            selected.length === 0 ? "All Curves" : selected.join(", ")
           }
-        }}
-        size="small"
-        style={checkboxStyle}
-      />
-    </Box>
-    <Box flexGrow={1}>
-      <ListItemText
-        primary="Select All"
-        primaryTypographyProps={{
-          fontSize: isMobile ? "14px" : "12px",
-        }}
-      />
-    </Box>
-    <Box width="50px" textAlign="center">
-      <Checkbox
-        checked={
-          forceData.length > 0 &&
-          forceData.every((curve) =>
-            selectedExportCurveIds.includes(curve.curve_id)
-          )
-        }
-        onChange={(event) => {
-          event.stopPropagation();
-          const allCurveIds = forceData.map((curve) => curve.curve_id);
-          if (event.target.checked) {
-            onExportCurveIdsChange(allCurveIds);
-            setSelectedCurveIds(allCurveIds); // Ensure all are displayed when exported
-            console.log("Selected all curves for export:", allCurveIds);
-          } else {
-            onExportCurveIdsChange([]);
-            console.log("Deselected all curves for export");
-          }
-        }}
-        size="small"
-        style={{ ...checkboxStyle, marginLeft: "10px" }}
-        title="Export All"
-      />
-    </Box>
-  </Box>
-</MenuItem>
-{forceData.map((curve) => (
-  <MenuItem
-    key={curve.curve_id}
-    value={curve.curve_id}
-    style={menuItemStyle}
-  >
-    <Box display="flex" alignItems="center" width="100%">
-      <Box width="50px" textAlign="center">
-        <Checkbox
-          checked={selectedCurveIds.includes(curve.curve_id)}
-          size="small"
-          style={checkboxStyle}
-        />
-      </Box>
-      <Box flexGrow={1}>
-        <ListItemText
-          primary={curve.curve_id}
-          primaryTypographyProps={{
-            fontSize: isMobile ? "14px" : "12px",
-          }}
-        />
-      </Box>
-      <Box width="50px" textAlign="center">
-        <Checkbox
-          checked={selectedExportCurveIds.includes(curve.curve_id)}
-          onChange={handleExportChange(curve.curve_id)}
-          size="small"
-          style={{ ...checkboxStyle, marginLeft: "10px" }}
-          title="Export"
-        />
-      </Box>
-    </Box>
-  </MenuItem>
-))}  </Select>
-</FormControl>
+          style={selectStyle}
+        >
+          <MenuItem style={menuHeaderStyle} disabled>
+            <Box display="flex" alignItems="center" width="100%">
+              <Box width="56px" textAlign="center">Display</Box>
+              <Box flexGrow={1} textAlign="left">Curve</Box>
+              <Box width="56px" textAlign="center">Export</Box>
+            </Box>
+          </MenuItem>
+
+          <MenuItem style={menuItemStyle}>
+            <Box display="flex" alignItems="center" width="100%">
+              <Box width="56px" textAlign="center">
+                <Checkbox
+                  checked={
+                    forceData.length > 0 &&
+                    forceData.every((c) => selectedCurveIds.includes(c.curve_id))
+                  }
+                  onChange={(event) => {
+                    event.stopPropagation();
+                    const allIds = forceData.map((c) => c.curve_id);
+                    if (event.target.checked) {
+                      setSelectedCurveIds(allIds);
+                      onExportCurveIdsChange(allIds);
+                    } else {
+                      setSelectedCurveIds([]);
+                      onExportCurveIdsChange([]);
+                    }
+                  }}
+                  size="small"
+                  style={checkboxStyle}
+                />
+              </Box>
+              <Box flexGrow={1}>
+                <ListItemText
+                  primary="Select All"
+                  primaryTypographyProps={{ fontSize: 13, fontWeight: 600 }}
+                />
+              </Box>
+              <Box width="56px" textAlign="center">
+                <Checkbox
+                  checked={
+                    forceData.length > 0 &&
+                    forceData.every((c) => selectedExportCurveIds.includes(c.curve_id))
+                  }
+                  onChange={(event) => {
+                    event.stopPropagation();
+                    const allIds = forceData.map((c) => c.curve_id);
+                    if (event.target.checked) {
+                      onExportCurveIdsChange(allIds);
+                      setSelectedCurveIds(allIds);
+                    } else {
+                      onExportCurveIdsChange([]);
+                    }
+                  }}
+                  size="small"
+                  style={{ ...checkboxStyle, marginLeft: "6px" }}
+                  title="Export All"
+                />
+              </Box>
+            </Box>
+          </MenuItem>
+
+          {forceData.map((curve) => (
+            <MenuItem key={curve.curve_id} value={curve.curve_id} style={menuItemStyle}>
+              <Box display="flex" alignItems="center" width="100%">
+                <Box width="56px" textAlign="center">
+                  <Checkbox
+                    checked={selectedCurveIds.includes(curve.curve_id)}
+                    size="small"
+                    style={checkboxStyle}
+                  />
+                </Box>
+                <Box flexGrow={1}>
+                  <ListItemText
+                    primary={curve.curve_id}
+                    primaryTypographyProps={{ fontSize: 13 }}
+                  />
+                </Box>
+                <Box width="56px" textAlign="center">
+                  <Checkbox
+                    checked={selectedExportCurveIds.includes(curve.curve_id)}
+                    onChange={handleExportChange(curve.curve_id)}
+                    size="small"
+                    style={{ ...checkboxStyle, marginLeft: "6px" }}
+                    title="Export"
+                  />
+                </Box>
+              </Box>
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+
+      {/* Divider */}
+      {!isMobile && <div style={dividerStyle} />}
+
+      {/* Graph type */}
       <FormControl style={formControlStyle}>
         <InputLabel id="graph-type-label" style={inputLabelStyle}>
           Graph Type
@@ -265,22 +292,17 @@ setSelectedCurveIds((prev) => {
           onChange={handleGraphTypeChange}
           style={selectStyle}
         >
-          <MenuItem value="line" style={menuItemStyle}>
-            Line
-          </MenuItem>
-          <MenuItem value="scatter" style={menuItemStyle}>
-            Scatter
-          </MenuItem>
+          <MenuItem value="line" style={menuItemStyle}>Line</MenuItem>
+          <MenuItem value="scatter" style={menuItemStyle}>Scatter</MenuItem>
         </Select>
       </FormControl>
-      <div style={{
-        width: "1px",
-        height: isMobile ? "20px" : "30px",
-        backgroundColor: "#ccc",
-        margin: isMobile ? "0 8px" : "0 6px"
-      }}></div>
-      <div style={numberInputContainerStyle}>
-        <label style={labelStyle}>Number of Curves:</label>
+
+      {/* Divider */}
+      {!isMobile && <div style={dividerStyle} />}
+
+      {/* Number of curves + Curve ID */}
+      <div style={numberRowStyle}>
+        <label style={numberLabelStyle}>Number of Curves:</label>
         <input
           type="number"
           min="1"
@@ -289,7 +311,7 @@ setSelectedCurveIds((prev) => {
           onChange={(e) => handleNumCurvesChange(e.target.value)}
           style={numberInputStyle}
         />
-        <label style={labelStyle}>Curve ID:</label>
+        <label style={numberLabelStyle}>Curve ID:</label>
         <input
           type="text"
           value={curveIdInput}
@@ -298,13 +320,6 @@ setSelectedCurveIds((prev) => {
           style={numberInputStyle}
         />
       </div>
-       <div style={{
-         width: "1px",
-         height: isMobile ? "20px" : "30px",
-         backgroundColor: "#ccc",
-         margin: isMobile ? "0 8px" : "0 6px"
-       }}></div>
-       
     </div>
   );
 };

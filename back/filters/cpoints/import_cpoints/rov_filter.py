@@ -11,11 +11,12 @@ class RovFilter(CpointBase):
         self.add_parameter("x_range", "float", "X range [nm]", 1000)
         self.add_parameter("windowRov", "float", "Window size for variance ratio [nm]", 200)
 
-    def calculate(self, x, y):
+    def calculate(self, x, y, metadata=None):
         """
         Returns contact point based on maximum variance ratio.
         :param x: Array of z-values (DOUBLE[])
         :param y: Array of force values (DOUBLE[])
+        :param metadata: Dictionary containing metadata values (spring_constant, tip_radius, tip_geometry)
         :return: List of [z0, f0] as [[float, float]] or None if no valid point is found
         """
         safe_threshold = self.get_value("safe_threshold")

@@ -76,13 +76,19 @@ async def process_file_endpoint(data: Dict[str, Any]):
         opener = get_opener(file_type)
         logger.info("info22")
 
-        if not opener.validate_metadata(metadata):
+        # Convert tip_radius from nanometers to meters for internal processing
+        processed_metadata = metadata.copy()
+        if "tip_radius" in processed_metadata:
+            tip_radius_nm = float(processed_metadata["tip_radius"])
+            processed_metadata["tip_radius"] = tip_radius_nm * 1e-9  # Convert nm to m
+
+        if not opener.validate_metadata(processed_metadata):
             errors.append("Invalid or incomplete metadata")
-            logger.error(f"Metadata validation failed: {metadata}")
+            logger.error(f"Metadata validation failed: {processed_metadata}")
             raise ValueError("Invalid or incomplete metadata")
         logger.info("info2222")
 
-        curves = opener.process(file_path, force_path, z_path, metadata)
+        curves = opener.process(file_path, force_path, z_path, processed_metadata)
         logging.info("info2")
 
         transformed_curves = transform_data(curves)
@@ -98,7 +104,7 @@ async def process_file_endpoint(data: Dict[str, Any]):
             "filename": file_path,
             "duckdb_status": "saved",
             "spring_constant": float(metadata.get("spring_constant", 0.1)),
-            "tip_radius_um": float(metadata.get("tip_radius", 1e-6)) * 1e6,
+            "tip_radius_um": float(metadata.get("tip_radius", 10)) / 1000,  # Convert nm to μm for display
             "errors": errors
         }
     except Exception as e:

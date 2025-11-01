@@ -1,8 +1,3 @@
-from typing import List, Optional, Dict
-import numpy as np
-from scipy.interpolate import interp1d
-from scipy.signal import savgol_filter
-
 from typing import List, Optional
 import numpy as np
 from scipy.interpolate import interp1d
@@ -13,7 +8,7 @@ def calc_elspectra(
     force_values: List[float],
     win: int,
     order: int,
-    tip_geometry: str = 'sphere',
+    tip_geometry: str = "sphere",
     tip_radius: float = 1e-05,
     tip_angle: float = 30.0,
     interp: bool = True
@@ -21,75 +16,81 @@ def calc_elspectra(
     """
     Computes the elastic modulus spectrum based on indentation data.
 
-    Parameters:
-    - z_values: List of indentation depths.
-    - force_values: List of corresponding force values.
-    - win: Window size for Savitzky-Golay filter (must be odd).
-    - order: Polynomial order for the filter.
-    - tip_geometry: Geometry of the tip ('sphere', 'cylinder', 'cone', 'pyramid').
-    - tip_radius: Radius of the tip (for spherical or cylindrical tips).
-    - tip_angle: Angle of the tip in degrees (for cone or pyramid).
-    - interp: Whether to interpolate force values.
-
     Returns:
-    - A list containing two lists: [Ze, E], where Ze is the array of adjusted indentation depths and E is the elastic modulus.
-    - Returns None if there are insufficient data points (for compatibility, adjusted to match original).
+        [Ze, E] or None/False exactly as in the original implementation.
     """
+    # Use asarray once to avoid copies and ensure dtype
+    x = np.asarray(z_values, dtype=np.float64)
+    y = np.asarray(force_values, dtype=np.float64)
 
-    # print("calc_elspectra")
-    # print("Tip Radius:", tip_radius)
-    # print(win, order)
-    x = np.array(z_values)
-    y = np.array(force_values)
-
-    # print("Input lengths:", len(x), len(y))
-
-    if len(x) < 2:
-        return None  # Not enough data to process
+    # Same early-exit as original
+    if x.size < 2:
+        return None
 
     if interp:
-        yi = interp1d(x, y)  # Match original: no extrapolate
-        max_x = np.max(x)
-        min_x = 1e-9
-        if np.min(x) > 1e-9:
-            min_x = np.min(x)
-        xx = np.arange(min_x, max_x, 1.0e-9)
-        yy = yi(xx)
-        ddt = 1.0e-9
+        # Match original: no 'fill_value' / no 'bounds_error' change, linear interpolation
+        yi = interp1d(x, y)
+        x_min = float(x.min())
+        x_max = float(x.max())
+
+        # Preserve original min bound logic
+        min_x = x_min if x_min > 1e-9 else 1.0e-9
+        max_x = x_max
+
+        # Same 1 nm grid step and range semantics as original
+        xx = np.arange(min_x, max_x, 1.0e-9, dtype=np.float64)
+        # If range collapses, behave like original savgol path (will fail length check later)
+        if xx.size == 0:
+            yy = np.empty(0, dtype=np.float64)
+            ddt = 1.0e-9
+        else:
+            yy = yi(xx)
+            ddt = 1.0e-9
     else:
+        # Original skipping of the first point
         xx = x[1:]
         yy = y[1:]
-        ddt = (x[-1] - x[1]) / (len(x) - 2)
+        # Same finite-difference spacing definition
+        ddt = (x[-1] - x[1]) / (x.size - 2)
 
-    # Compute contact radius based on tip geometry
-    if tip_geometry == 'sphere':
+    # --- Contact radius / geometry (same formulas as original) ---
+    geom = tip_geometry
+    if geom == "sphere":
         aradius = np.sqrt(xx * tip_radius)
-    elif tip_geometry == 'cylinder':
+    elif geom == "cylinder":
         aradius = tip_radius
-    elif tip_geometry == 'cone':
-        aradius = 2 * xx / np.tan(np.radians(tip_angle)) / np.pi
-    elif tip_geometry == 'pyramid':  # Bilodeau formula
-        aradius = 0.709 * xx * np.tan(np.radians(tip_angle))
+    elif geom == "cone":
+        ang_rad = np.radians(tip_angle)
+        # 2 * xx / tan(angle) / pi
+        aradius = (2.0 * xx) / (np.tan(ang_rad) * np.pi)
+    elif geom == "pyramid":  # Bilodeau formula
+        ang_rad = np.radians(tip_angle)
+        # 0.709 * xx * tan(angle)
+        aradius = 0.709 * xx * np.tan(ang_rad)
     else:
-        return False  # Match original: False for invalid geometry
+        return False  # invalid geometry (kept)
 
-    coeff = 3 / (8 * aradius)  # Match original spacing
+    coeff = 3.0 / (8.0 * aradius)
 
-    # Ensure window size is odd
+    # Ensure window is odd (same behavior)
     if win % 2 == 0:
         win += 1
 
-    if len(yy) <= win:
-        return False  # Match original: False if too short
+    # Same length check as original
+    if yy.size <= win:
+        return False
 
-    # Compute derivative
+    # Derivative via Savitzky–Golay (identical call signature)
     deriv = savgol_filter(yy, win, order, delta=ddt, deriv=1)
     Ey = coeff * deriv
 
-    dwin = int(win - 1)  # Fix: Match original trimming (60 for win=61)
-    Ex = xx[dwin:-dwin]  # Adjusted depth values
-    Ey = Ey[dwin:-dwin]  # Elastic modulus values
-
-    # print("Processed lengths - Ey:", len(Ey), "Ex:", len(Ex))
+    # Keep original trimming rule (not the usual win//2)
+    dwin = int(win - 1)
+    if dwin == 0:
+        Ex = xx
+        Ey = Ey
+    else:
+        Ex = xx[dwin:-dwin]
+        Ey = Ey[dwin:-dwin]
 
     return [Ex.tolist(), Ey.tolist()]

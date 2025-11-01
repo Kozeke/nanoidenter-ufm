@@ -17,16 +17,17 @@ logger = logging.getLogger(__name__)
 
 class TXTOpener(Opener):
     def validate_metadata(self, metadata: Dict) -> bool:
-        mandatory_fields = ["file_id", "date", "instrument", "sample", "spring_constant", "inv_ols", "tip_geometry", "tip_radius"]
+        # mandatory_fields = ["file_id", "date", "instrument", "sample", "spring_constant", "inv_ols", "tip_geometry", "tip_radius"]
+        mandatory_fields = ["file_id", "date", "spring_constant", "tip_geometry", "tip_radius"]
         try:
             for field in mandatory_fields:
                 if field not in metadata or metadata[field] is None:
                     logger.warning(f"Missing or None metadata field: {field}")
                     return False
-                if field in ["spring_constant", "inv_ols", "tip_radius"] and not isinstance(metadata[field], (int, float)):
+                if field in ["spring_constant", "tip_radius"] and not isinstance(metadata[field], (int, float)):
                     logger.warning(f"Invalid type for {field}: expected number, got {type(metadata[field])}")
                     return False
-                if field in ["spring_constant", "inv_ols", "tip_radius"] and float(metadata[field]) <= 0:
+                if field in ["spring_constant", "tip_radius"] and float(metadata[field]) <= 0:
                     logger.warning(f"Invalid value for {field}: must be positive, got {metadata[field]}")
                     return False
             return True

@@ -10,6 +10,7 @@ import {
   TextField,
   FormControl,
   InputLabel,
+  FormHelperText,
   Typography,
   Alert,
   Box,
@@ -20,7 +21,37 @@ import {
   CircularProgress
 } from '@mui/material';
 
-const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
+// --- Unified action button styles (same as Dashboard/ExportButton) ---
+const actionBtnStyle = (variant = "primary", disabled = false) => {
+  const base = {
+    padding: "8px 12px",
+    fontSize: 14,
+    fontWeight: 700,
+    borderRadius: "10px",
+    border: "1px solid transparent",
+    cursor: disabled ? "not-allowed" : "pointer",
+    transition: "transform .04s ease, box-shadow .15s ease, background .15s ease",
+    whiteSpace: "nowrap",
+  };
+  if (disabled) {
+    return { ...base, background: "#f5f6fb", color: "#9aa0b5", border: "1px solid #eceef7" };
+  }
+  if (variant === "primary") {
+    return { ...base, background: "linear-gradient(180deg,#6772ff 0%,#5468ff 100%)", color: "#fff", boxShadow: "0 8px 16px rgba(90,105,255,.25)" };
+  }
+  if (variant === "secondary") {
+    return { ...base, background: "#fff", color: "#2c2f3a", border: "1px solid #e6e9f7", boxShadow: "0 2px 8px rgba(30,41,59,.06)" };
+  }
+  return base;
+};
+
+const pressable = {
+  onMouseDown: (e) => (e.currentTarget.style.transform = "translateY(1px)"),
+  onMouseUp:   (e) => (e.currentTarget.style.transform = "translateY(0)"),
+  onMouseLeave:(e) => (e.currentTarget.style.transform = "translateY(0)"),
+};
+
+const FileOpener = ({ onProcessSuccess, setIsLoading, renderTrigger }) => {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(0);
   const [filePath, setFilePath] = useState('');
@@ -40,18 +71,27 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
   const metadataValidationRules = {
     file_id: { required: 'boolean', label: 'File ID', type: 'text' },
     date: { required: 'boolean', label: 'Date', type: 'text', regex: /^\d{4}-\d{2}-\d{2}$/, regexError: 'Date must be in YYYY-MM-DD format' },
-    instrument: { required: 'boolean', label: 'Instrument', type: 'text' },
-    sample: { required: false, label: 'Sample', type: 'text' },
+    // instrument: { required: 'boolean', label: 'Instrument', type: 'text' },
+    // sample: { required: false, label: 'Sample', type: 'text' },
     spring_constant: { required: 'number', label: 'Spring Constant (N/m)', type: 'number', min: 0 },
-    inv_ols: { required: 'boolean', label: 'Inverse Optical Lever Sensitivity (m/V)', type: 'number', min: 0 },
-    tip_geometry: { required: 'boolean', label: 'Tip Geometry', type: 'text' },
-    tip_radius: { required: 'boolean', label: 'Tip Radius (m)', type: 'number', min: 0 },
-    sampling_rate: { required: 'boolean', label: 'Sampling Rate (Hz)', type: 'number', min: 0 },
-    velocity: { required: 'boolean', label: 'Velocity (m/s)', type: 'number', min: 0 },
-    geometry: { required: 'true', label: 'Geometry', type: 'text' },
-    parameter: { required: 'true', label: 'Parameter', type: 'text' },
-    unit: { required: 'true', label: 'Unit', type: 'text' },
-    value: { required: 'true', label: 'Value', type: 'number', min: 0 },
+    // inv_ols: { required: 'boolean', label: 'Inverse Optical Lever Sensitivity (m/V)', type: 'number', min: 0 },
+    tip_geometry: { required: 'boolean', label: 'Tip Geometry', type: 'select', options: ['cylinder', 'cone', 'sphere', 'pyramid'] },
+    tip_radius: { required: 'boolean', label: 'Tip Radius (nm)', type: 'number', min: 0 },
+    // sampling_rate: { required: 'boolean', label: 'Sampling Rate (Hz)', type: 'number', min: 0 },
+    // velocity: { required: 'boolean', label: 'Velocity (m/s)', type: 'number', min: 0 },
+    // geometry: { required: 'true', label: 'Geometry', type: 'text' },
+    // parameter: { required: 'true', label: 'Parameter', type: 'text' },
+    // unit: { required: 'true', label: 'Unit', type: 'text' },
+    // value: { required: 'true', label: 'Value', type: 'number', min: 0 },
+  };
+
+  // Active validation rules (excluding commented ones)
+  const activeValidationRules = {
+    file_id: metadataValidationRules.file_id,
+    date: metadataValidationRules.date,
+    spring_constant: metadataValidationRules.spring_constant,
+    tip_geometry: metadataValidationRules.tip_geometry,
+    tip_radius: metadataValidationRules.tip_radius,
   };
   const steps = [
     'Select Force Dataset',
@@ -63,7 +103,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
   const validateMetadata = () => {
     const newErrors = [];
     Object.entries(metadata).forEach(([key, value]) => {
-      const rule = metadataValidationRules[key] || { required: false, label: key };
+      const rule = activeValidationRules[key] || { required: false, label: key };
       if (rule.required && (!value || value.toString().trim() === '')) {
         newErrors.push(`${rule.label} is required`);
       }
@@ -118,17 +158,17 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
 
   const navigateToFirstSegment = (initialGroup, initialPath = []) => {
     if (!initialGroup.groups) {
-      console.warn('No hierarchical groups found (e.g., CSV file)');
+      // console.warn('No hierarchical groups found (e.g., CSV file)');
       return { group: initialGroup, path: initialPath };
     }
     let group = initialGroup;
     let path = [...initialPath];
 
-    console.log('Navigating to first segment, Initial group:', group);
+    // console.log('Navigating to first segment, Initial group:', group);
 
     const firstCurve = Object.keys(group.groups || {}).find((key) => key !== 'datasets' && key !== 'attributes');
     if (!firstCurve) {
-      console.warn('No top-level groups found');
+      // console.warn('No top-level groups found');
       return { group, path };
     }
     group = group.groups[firstCurve];
@@ -139,12 +179,12 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
       group = group.groups[firstSegment];
       path = [...path, firstSegment];
     } else {
-      console.warn(`No segments found in ${path.join('/')}`);
+      // console.warn(`No segments found in ${path.join('/')}`);
     }
 
-    console.log('Navigated to:', path, 'Group:', group);
+    // console.log('Navigated to:', path, 'Group:', group);
     if (!group.datasets?.length && !Object.keys(group.groups || {}).length && !Object.keys(group.attributes || {}).length) {
-      console.warn(`No datasets, subgroups, or attributes found in ${path.join('/')}`);
+      // console.warn(`No datasets, subgroups, or attributes found in ${path.join('/')}`);
     }
     return { group, path };
   };
@@ -187,7 +227,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
           setStep(0);
           setOpen(true);
           setIsDialogReady(true);
-          console.log('Initial Structure:', JSON.stringify(result.structure, null, 2));
+          // console.log('Initial Structure:', JSON.stringify(result.structure, null, 2));
 
           let initialGroup, initialPath = [];
           if (result.file_type === 'csv' || result.file_type === 'txt') {
@@ -197,8 +237,8 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
             const { group, path } = navigateToFirstSegment(result.structure);
             initialGroup = { ...group };
             initialPath = path;
-            console.log('Starting Group:', initialGroup, 'Path:', initialPath);
-            console.log('Segment0 groups:', result.structure.groups?.curve0?.groups?.segment0?.groups);
+            // console.log('Starting Group:', initialGroup, 'Path:', initialPath);
+            // console.log('Segment0 groups:', result.structure.groups?.curve0?.groups?.segment0?.groups);
           }
           setCurrentGroup(initialGroup);
           setNavigationPath(initialPath);
@@ -218,7 +258,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
 
   const navigateToGroup = (groupName) => {
     if (fileType === 'csv' || fileType === 'txt') {
-      console.warn('Navigation not supported for flat files');
+      // console.warn('Navigation not supported for flat files');
       return;
     }
     let group = structure;
@@ -227,7 +267,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
     try {
       for (const part of newPath) {
         if (!group.groups || !group.groups[part]) {
-          console.error(`Group not found: ${part} in path ${newPath.join('/')}`);
+          // console.error(`Group not found: ${part} in path ${newPath.join('/')}`);
           setErrors([`Group not found: ${part}`]);
           return;
         }
@@ -235,19 +275,19 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
       }
       setCurrentGroup({ ...group });
       setNavigationPath(newPath);
-      console.log(`Navigated to: ${newPath.join('/')}`, 'Current Group:', group);
+      // console.log(`Navigated to: ${newPath.join('/')}`, 'Current Group:', group);
       if (!group.datasets?.length && !Object.keys(group.groups || {}).length && !Object.keys(group.attributes || {}).length) {
         setWarnings([`No datasets, subgroups, or attributes found in ${newPath.join('/')}`]);
       }
     } catch (error) {
-      console.error('Navigation error:', error);
+      // console.error('Navigation error:', error);
       setErrors(['Error navigating group structure']);
     }
   };
 
   const goBack = () => {
     if (fileType === 'csv' || fileType === 'txt') {
-      console.warn('Navigation not supported for flat files');
+      // console.warn('Navigation not supported for flat files');
       return;
     }
     if (navigationPath.length === 0) return;
@@ -257,7 +297,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
     try {
       for (const part of newPath) {
         if (!group.groups || !group.groups[part]) {
-          console.error(`Group not found: ${part} in path ${newPath.join('/')}`);
+          // console.error(`Group not found: ${part} in path ${newPath.join('/')}`);
           setErrors([`Group not found: ${part}`]);
           return;
         }
@@ -265,12 +305,12 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
       }
       setCurrentGroup({ ...group });
       setNavigationPath(newPath);
-      console.log(`Went back to: ${newPath.join('/') || 'Root'}`, 'Current Group:', group);
+      // console.log(`Went back to: ${newPath.join('/') || 'Root'}`, 'Current Group:', group);
       if (!group.datasets?.length && !Object.keys(group.groups || {}).length && !Object.keys(group.attributes || {}).length) {
         setWarnings([`No datasets, subgroups, or attributes found in ${newPath.join('/') || 'Root'}`]);
       }
     } catch (error) {
-      console.error('Go back error:', error);
+      // console.error('Go back error:', error);
       setErrors(['Error navigating back']);
     }
   };
@@ -294,7 +334,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
       setNavigationPath([]);
     }
     setStep(1);
-    console.log('Selected Force:', path, 'New Path:', newPath);
+    // console.log('Selected Force:', path, 'New Path:', newPath);
   };
 
   const handleStepClick = (stepIndex) => {
@@ -313,7 +353,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
       setCurrentGroup(newGroup);
       setNavigationPath(newPath);
     }
-    console.log(`Navigated to step ${stepIndex}: ${steps[stepIndex]}`);
+    // console.log(`Navigated to step ${stepIndex}: ${steps[stepIndex]}`);
   };
 
   const handleSelectZ = (path) => {
@@ -325,7 +365,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
       setCurrentGroup(newGroup);
       setNavigationPath(newPath);
       setStep(2);
-      console.log('Selected Z:', path, 'New Path:', newPath, 'Current Group:', newGroup);
+      // console.log('Selected Z:', path, 'New Path:', newPath, 'Current Group:', newGroup);
       return;
     }
     let group = structure;
@@ -334,7 +374,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
         newGroup = group.groups.curve0.groups.segment0;
         newPath = ['curve0', 'segment0'];
       } else {
-        console.warn('curve0/segment0 not found, falling back to first segment');
+        // console.warn('curve0/segment0 not found, falling back to first segment');
         const { group: fallbackGroup, path: fallbackPath } = navigateToFirstSegment(structure);
         newGroup = fallbackGroup;
         newPath = fallbackPath;
@@ -342,9 +382,9 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
       setCurrentGroup({ ...newGroup });
       setNavigationPath(newPath);
       setStep(2);
-      console.log('Selected Z:', path, 'New Path:', newPath, 'Current Group:', newGroup);
+      // console.log('Selected Z:', path, 'New Path:', newPath, 'Current Group:', newGroup);
     } catch (error) {
-      console.error('Error navigating to segment0:', error);
+      // console.error('Error navigating to segment0:', error);
       setErrors(['Failed to navigate to segment0 for metadata selection']);
       setCurrentGroup(structure);
       setNavigationPath([]);
@@ -366,24 +406,24 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
         }
         attributes = dataset.attributes || {};
       }
-      const initializedMetadata = Object.keys(metadataValidationRules).reduce((acc, key) => {
+      const initializedMetadata = Object.keys(activeValidationRules).reduce((acc, key) => {
         acc[key] = '';
         return acc;
       }, {});
       const mergedMetadata = { ...initializedMetadata, ...attributes };
       if (Object.keys(attributes).length === 0) {
-        console.warn(`No attributes found at ${path}`);
+        // console.warn(`No attributes found at ${path}`);
         setWarnings((prev) => [...prev, `No attributes found at ${path}. Enter metadata manually.`]);
       } else {
-        console.log('Found attributes:', attributes);
+        // console.log('Found attributes:', attributes);
       }
       setMetadata(mergedMetadata);
       setMetadataPath(path);
       setStep(4);
-      console.log('Selected Metadata Location:', path, 'Merged Metadata:', mergedMetadata);
+      // console.log('Selected Metadata Location:', path, 'Merged Metadata:', mergedMetadata);
       return;
     }
-    console.log('Attempting to select metadata at path:', path);
+    // console.log('Attempting to select metadata at path:', path);
     let target = structure;
     const pathParts = path.split('/');
 
@@ -393,7 +433,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
       } else {
         for (let i = 0; i < pathParts.length; i++) {
           const part = pathParts[i];
-          console.log(`Traversing part ${i}: ${part}, Current target keys:`, Object.keys(target));
+          // console.log(`Traversing part ${i}: ${part}, Current target keys:`, Object.keys(target));
           if (target.groups && target.groups[part]) {
             target = target.groups[part];
           } else {
@@ -427,7 +467,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
       }
       
       // Initialize metadata with all validation rule fields
-      const initializedMetadata = Object.keys(metadataValidationRules).reduce((acc, key) => {
+      const initializedMetadata = Object.keys(activeValidationRules).reduce((acc, key) => {
         acc[key] = '';
         return acc;
       }, {});
@@ -435,18 +475,18 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
       const mergedMetadata = { ...initializedMetadata, ...attributes };
 
       if (Object.keys(attributes).length === 0) {
-        console.warn(`No attributes found at ${path}`);
+        // console.warn(`No attributes found at ${path}`);
         setWarnings((prev) => [...prev, `No attributes found at ${path}. Enter metadata manually.`]);
       } else {
-        console.log('Found attributes:', attributes);
+        // console.log('Found attributes:', attributes);
       }
 
       setMetadata(mergedMetadata);
       setMetadataPath(path);
       setStep(4);
-      console.log('Selected Metadata Location:', path, 'Merged Metadata:', mergedMetadata, 'Target:', target);
+      // console.log('Selected Metadata Location:', path, 'Merged Metadata:', mergedMetadata, 'Target:', target);
     } catch (error) {
-      console.error('Error selecting metadata location:', error.message);
+      // console.error('Error selecting metadata location:', error.message);
       setErrors([`Invalid metadata location: ${path}. ${error.message}`]);
     }
   };
@@ -512,7 +552,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
       setMetadataPath('');
       setMetadata({});
       setErrors([]);
-      console.log('Processing result:', result);
+      // console.log('Processing result:', result);
     } catch (err) {
       let errorMessage = err.message;
       try {
@@ -531,18 +571,48 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
 
   useEffect(() => {
     if (open && step <= 3) {
-      console.log('Current Group State:', currentGroup, 'Navigation Path:', navigationPath, 'Step:', step);
+      // console.log('Current Group State:', currentGroup, 'Navigation Path:', navigationPath, 'Step:', step);
     }
   }, [currentGroup, open, step, navigationPath]);
 
   return (
     <div>
-      <Button variant="contained" onClick={handleOpenFile} disabled={loading}>
-        Open File
-      </Button>
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth disableEscapeKeyDown={loading}
-      disableBackdropClick={loading}>
-        <DialogTitle>{steps[step]}</DialogTitle>
+      {renderTrigger ? (
+        renderTrigger(handleOpenFile)
+      ) : (
+        <button
+          onClick={handleOpenFile}
+          disabled={loading}
+          style={actionBtnStyle("secondary", loading)}
+          {...pressable}
+        >
+          Open file
+        </button>
+      )}
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        maxWidth="sm"
+        fullWidth
+        disableEscapeKeyDown={loading}
+        PaperProps={{
+          sx: {
+            borderRadius: "12px",
+            overflow: "hidden",
+            boxShadow: "0 12px 28px rgba(20,20,43,.12)",
+            border: "1px solid #e9ecf5",
+          },
+        }}
+      >
+        <DialogTitle
+          sx={{
+            fontWeight: 700,
+            background: "linear-gradient(180deg,#ffffff 0%,#fafbff 100%)",
+            borderBottom: "1px solid #e9ecf5",
+          }}
+        >
+          {steps[step]}
+        </DialogTitle>
         <DialogContent>
           <Box mb={2}>
             <Stepper activeStep={step} alternativeLabel>
@@ -563,11 +633,12 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
             <Typography
               variant="body1"
               sx={{
-                backgroundColor: '#e3f2fd',
-                padding: '8px',
-                borderRadius: '4px',
-                color: '#1565c0',
-                fontWeight: 'bold',
+                background: "#f5f7ff",
+                border: "1px solid #e9ecf5",
+                padding: "10px",
+                borderRadius: "10px",
+                color: "#1d1e2c",
+                fontWeight: 600,
               }}
             >
               {step === 0 && 'Please select the dataset containing Force data.'}
@@ -616,7 +687,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
                     value=""
                     onChange={(e) => {
                       const value = e.target.value;
-                      console.log('Selected value:', value, 'Current Path:', navigationPath, 'Step:', step);
+                      // console.log('Selected value:', value, 'Current Path:', navigationPath, 'Step:', step);
                       if (value.includes('(Dataset')) {
                         const cleanPath = value.split(' (Dataset')[0];
                         if (step === 0) handleSelectForce(cleanPath);
@@ -631,23 +702,40 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
                           } else {
                             fullPath = [...navigationPath, cleanPath].join('/');
                           }
-                          console.log('Constructed metadata path:', fullPath);
+                          // console.log('Constructed metadata path:', fullPath);
                           handleSelectMetadata(fullPath);
                         } else {
                           navigateToGroup(cleanPath);
                         }
                       }
                     }}
+                    MenuProps={{
+                      PaperProps: {
+                        sx: {
+                          borderRadius: "12px",
+                          mt: 1,
+                          boxShadow: "0 8px 18px rgba(20,20,43,.06)",
+                          border: "1px solid #e9ecf5",
+                        },
+                      },
+                    }}
                   >
                     {step === 2 && Object.keys(currentGroup.attributes || {}).length > 0 && (
-                      <MenuItem value="current (Group)">
+                      <MenuItem 
+                        value="current (Group)"
+                        sx={{ fontSize: 14, fontWeight: 600, "&:hover": { background: "#f5f7ff" } }}
+                      >
                         Current Location (Group, Has Attributes)
                       </MenuItem>
                     )}
                     {Object.keys(currentGroup.groups || {})
                       .filter((key) => key !== 'datasets' && key !== 'attributes')
                       .map((name) => (
-                        <MenuItem key={name} value={`${name} (Group)`}>
+                        <MenuItem 
+                          key={name} 
+                          value={`${name} (Group)`}
+                          sx={{ fontSize: 14, fontWeight: 600, "&:hover": { background: "#f5f7ff" } }}
+                        >
                           {name} (Group)
                           {Object.keys(currentGroup.groups[name].attributes || {}).length > 0 && ' (Has Attributes)'}
                         </MenuItem>
@@ -660,6 +748,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
                           (step >= 1 && ds.path === forcePath) || // Disable forcePath in Steps 1, 2
                           (step >= 2 && ds.path === zPath)       // Disable zPath in Step 2
                         }
+                        sx={{ fontSize: 14, fontWeight: 600, "&:hover": { background: "#f5f7ff" } }}
                       >
                         {ds.name} (Dataset, Shape: {ds.shape}, Dtype: {ds.dtype})
                         {Object.keys(ds.attributes || {}).length > 0 && ' (Has Attributes)'}
@@ -668,9 +757,13 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
                   </Select>
                 </FormControl>
                 {navigationPath.length > 0 && (
-                  <Button onClick={goBack} variant="outlined" style={{ marginTop: '10px' }}>
-                    UP ONE LEVEL
-                  </Button>
+                  <button
+                    onClick={goBack}
+                    style={{ ...actionBtnStyle("secondary"), marginTop: 10 }}
+                    {...pressable}
+                  >
+                    Up one level
+                  </button>
                 )}
               </div>
             )}
@@ -687,54 +780,85 @@ const FileOpener = ({ onProcessSuccess, setIsLoading }) => {
                 </Typography>
               )}
               <Typography variant="h6" gutterBottom>
-                Tip Properties
-              </Typography>
-              {['geometry', 'parameter', 'unit', 'value'].map((key) => (
-                <TextField
-                  key={key}
-                  name={key}
-                  label={metadataValidationRules[key]?.label || key.replace('_', ' ').toUpperCase()}
-                  value={metadata[key] ?? ''}
-                  onChange={handleMetadataChange}
-                  fullWidth
-                  margin="normal"
-                  type={metadataValidationRules[key]?.type === 'number' ? 'number' : 'text'}
-                  error={errors.some((error) => error.includes(metadataValidationRules[key]?.label || key))}
-                  helperText={errors.find((error) => error.includes(metadataValidationRules[key]?.label || key))}
-                />
-              ))}
-              <Divider style={{ margin: '20px 0' }} />
-              <Typography variant="h6" gutterBottom>
                 Additional Metadata
               </Typography>
-              {Object.keys(metadataValidationRules)
-                .filter((key) => !['geometry', 'parameter', 'unit', 'value'].includes(key))
-                .map((key) => (
-                  <TextField
-                    key={key}
-                    name={key}
-                    label={metadataValidationRules[key]?.label || key.replace('_', ' ').toUpperCase()}
-                    value={metadata[key] ?? ''}
-                    onChange={handleMetadataChange}
-                    fullWidth
-                    margin="normal"
-                    type={metadataValidationRules[key]?.type === 'number' ? 'number' : 'text'}
-                    error={errors.some((error) => error.includes(metadataValidationRules[key]?.label || key))}
-                    helperText={errors.find((error) => error.includes(metadataValidationRules[key]?.label || key))}
-                    disabled={loading} // Disable inputs during loading
-                  />
-                ))}
+              {Object.keys(activeValidationRules).map((key) => {
+                const rule = activeValidationRules[key];
+                if (rule?.type === 'select') {
+                  return (
+                    <FormControl key={key} fullWidth margin="normal" error={errors.some((error) => error.includes(rule?.label || key))}>
+                      <InputLabel>{rule?.label || key.replace('_', ' ').toUpperCase()}</InputLabel>
+                      <Select
+                        name={key}
+                        value={metadata[key] ?? ''}
+                        onChange={handleMetadataChange}
+                        disabled={loading}
+                        label={rule?.label || key.replace('_', ' ').toUpperCase()}
+                        MenuProps={{
+                          PaperProps: {
+                            sx: {
+                              borderRadius: "12px",
+                              mt: 1,
+                              boxShadow: "0 8px 18px rgba(20,20,43,.06)",
+                              border: "1px solid #e9ecf5",
+                            },
+                          },
+                        }}
+                      >
+                        {rule.options?.map((option) => (
+                          <MenuItem 
+                            key={option} 
+                            value={option}
+                            sx={{ fontSize: 14, fontWeight: 600, "&:hover": { background: "#f5f7ff" } }}
+                          >
+                            {option.charAt(0).toUpperCase() + option.slice(1)}
+                          </MenuItem>
+                        ))}
+                      </Select>
+                      {errors.find((error) => error.includes(rule?.label || key)) && (
+                        <FormHelperText>{errors.find((error) => error.includes(rule?.label || key))}</FormHelperText>
+                      )}
+                    </FormControl>
+                  );
+                } else {
+                  return (
+                    <TextField
+                      key={key}
+                      name={key}
+                      label={rule?.label || key.replace('_', ' ').toUpperCase()}
+                      value={metadata[key] ?? ''}
+                      onChange={handleMetadataChange}
+                      fullWidth
+                      margin="normal"
+                      type={rule?.type === 'number' ? 'number' : 'text'}
+                      error={errors.some((error) => error.includes(rule?.label || key))}
+                      helperText={errors.find((error) => error.includes(rule?.label || key))}
+                      disabled={loading} // Disable inputs during loading
+                    />
+                  );
+                }
+              })}
             </div>
           )}
         </DialogContent>
-        <DialogActions>
-          <Button onClick={ () => setOpen(false) } disabled={loading}>
+        <DialogActions sx={{ px: 3, pb: 2, gap: 8 }}>
+          <button
+            onClick={() => setOpen(false)}
+            disabled={loading}
+            style={actionBtnStyle("secondary", loading)}
+            {...pressable}
+          >
             Cancel
-          </Button>
+          </button>
           {step === 4 && (
-            <Button onClick={handleSubmit} disabled={errors.length > 0 || loading}>
+            <button
+              onClick={handleSubmit}
+              disabled={errors.length > 0 || loading}
+              style={actionBtnStyle("primary", errors.length > 0 || loading)}
+              {...pressable}
+            >
               Submit
-            </Button>
+            </button>
           )}
         </DialogActions>
       </Dialog>

@@ -2,82 +2,107 @@
 import duckdb
 from typing import Dict
 import json
-from pathlib import Path
 import numpy as np
 
 FMODEL_REGISTRY: Dict[str, Dict] = {}
 
 def register_fmodel(fmodel_class):
     """Register an fmodel class in the global registry."""
-    fmodel_instance = fmodel_class()  # Create instance
-    fmodel_instance.create()          # Initialize parameters
-    udf_function_name = f"fmodel_{fmodel_class.NAME.lower()}"  # e.g., "fmodel_hertz"
+    inst = fmodel_class()
+    inst.create()
+    udf_function_name = f"fmodel_{fmodel_class.NAME.lower()}"
     FMODEL_REGISTRY[fmodel_class.NAME.lower()] = {
-        "instance": fmodel_instance,
+        "instance": inst,
         "udf_function": udf_function_name
     }
-    
+
 def getJclose(x0, x):
-    """Find the index of the closest value to x0 in array x."""
-    x = np.array(x)
-    return np.argmin((x - x0) ** 2)
+    """Index of closest value to x0 in array x."""
+    x = np.asarray(x, dtype=float)
+    return int(np.argmin((x - x0) ** 2))
 
 def getFizi(xmin, xmax, zi, fi):
-    """Filter zi and fi arrays between xmin and xmax."""
+    """
+    Return zi, fi windowed to [xmin, xmax] (inclusive start, exclusive end).
+    Handles swapped bounds and clamps to available zi range.
+    """
+    zi = np.asarray(zi, dtype=float)
+    fi = np.asarray(fi, dtype=float)
+    if zi.size == 0 or fi.size == 0 or zi.size != fi.size:
+        return np.array([]), np.array([])
+
+    # Ensure ascending bounds
+    if xmax < xmin:
+        xmin, xmax = xmax, xmin
+
+    # Clamp to data range
+    zmin, zmax = float(zi.min()), float(zi.max())
+    xmin = max(xmin, zmin)
+    xmax = min(xmax, zmax)
+
+    # Degenerate or empty window
+    if not np.isfinite(xmin) or not np.isfinite(xmax) or xmax <= xmin:
+        return np.array([]), np.array([])
+
     jmin = getJclose(xmin, zi)
     jmax = getJclose(xmax, zi)
-    return np.array(zi[jmin:jmax]), np.array(fi[jmin:jmax])
+
+    # Ensure proper slicing (exclusive end); expand by 1 if identical index
+    if jmax <= jmin:
+        jmax = min(jmin + 1, zi.size)
+
+    return zi[jmin:jmax], fi[jmin:jmax]
 
 def create_fmodel_udf(fmodel_name: str, conn: duckdb.DuckDBPyConnection):
-    """Register an fmodel as a DuckDB UDF with getFizi filtering before calculate."""
-    fmodel_instance = FMODEL_REGISTRY[fmodel_name.lower()]["instance"]
+    """
+    Register a DuckDB UDF for the force model.
+    Signature: fn(zi: DOUBLE[], fi: DOUBLE[], params: DOUBLE[]) -> DOUBLE[][]
+    Expected params include minInd/maxInd (in nm) if the model defines them.
+    """
+    inst = FMODEL_REGISTRY[fmodel_name.lower()]["instance"]
     udf_name = FMODEL_REGISTRY[fmodel_name.lower()]["udf_function"]
-    # print("Fmodel setup complete:", fmodel_instance)
 
-    # Define parameter types: zi_values, fi_values, and a single DOUBLE[] for all parameters
     udf_param_types = [
         duckdb.list_type('DOUBLE'),  # zi_values
         duckdb.list_type('DOUBLE'),  # fi_values
-        duckdb.list_type('DOUBLE')   # param_values (array of all parameters)
+        duckdb.list_type('DOUBLE')   # param_values
     ]
 
     def udf_wrapper(zi_values, fi_values, param_values):
         try:
-            zi_values = np.array(zi_values, dtype=np.float64)
-            fi_values = np.array(fi_values, dtype=np.float64)
-            param_values = np.array(param_values, dtype=np.float64)
+            zi_values = np.asarray(zi_values, dtype=np.float64)
+            fi_values = np.asarray(fi_values, dtype=np.float64)
+            param_values = np.asarray(param_values, dtype=np.float64)
 
-            # Map param_values to expected parameters
-            expected_params = list(fmodel_instance.parameters.keys())
-            param_dict = {}
-            for i, param_name in enumerate(expected_params):
-                if i < len(param_values):
-                    param_dict[param_name] = param_values[i]
+            # Map provided param_values by declared order
+            expected = list(inst.parameters.keys())
+            for i, pname in enumerate(expected):
+                if i < param_values.size:
+                    inst.parameters[pname]["default"] = float(param_values[i])
 
-            # Update instance parameters
-            for k, v in param_dict.items():
-                fmodel_instance.parameters[k]["default"] = v
-
-            # Get zi_min and zi_max from parameters (default to 0 and 800 nm if not present)
-            zi_min = fmodel_instance.get_value("minInd") * 1e-9 if "minInd" in fmodel_instance.parameters else 0
-            zi_max = fmodel_instance.get_value("maxInd") * 1e-9 if "maxInd" in fmodel_instance.parameters else 800e-9
+            # Window in meters (UI is nm; convert here)
+            if "minInd" in inst.parameters:
+                zi_min = float(inst.get_value("minInd")) * 1e-9
+            else:
+                zi_min = 0.0
+            if "maxInd" in inst.parameters:
+                zi_max = float(inst.get_value("maxInd")) * 1e-9
+            else:
+                zi_max = 800e-9  # sane default
 
             x, y = getFizi(zi_min, zi_max, zi_values, fi_values)
-            # print("res", len(x), len(y))
 
-            if len(x) > 5:  # Minimum length check
-                result = fmodel_instance.calculate(x, y)
-                if result is None:
-                    return None
-                return result
+            # Require a minimal window to avoid ill-conditioned fits
+            if x.size > 5:
+                result = inst.calculate(x, y)
+                return result if result is not None else None
             return None
+
         except Exception as e:
             print(f"Error in UDF for {fmodel_name}: {e}")
             return None
 
-    # Consistent return type for all models: DOUBLE[][]
     return_type = duckdb.list_type(duckdb.list_type('DOUBLE'))
-
     try:
         conn.create_function(
             udf_name,
@@ -91,15 +116,15 @@ def create_fmodel_udf(fmodel_name: str, conn: duckdb.DuckDBPyConnection):
             print(f"Function '{udf_name}' already exists. Skipping creation.")
         else:
             raise
-    print(f"UDF {udf_name} registered with types: {udf_param_types}, return type: {return_type}")
-    
+
+    print(f"UDF {udf_name} registered.")
     
 def save_fmodel_to_db(fmodel_class, conn: duckdb.DuckDBPyConnection):
     """Save fmodel metadata to the database."""
-    fmodel_instance = fmodel_class()
-    fmodel_instance.create()
-    parameters_json = json.dumps(fmodel_instance.parameters)
-    conn.execute("""
-        INSERT OR REPLACE INTO fmodels (name, description, doi, parameters)
-        VALUES (?, ?, ?, ?)
-    """, (fmodel_class.NAME, fmodel_class.DESCRIPTION, fmodel_class.DOI, parameters_json))
+    inst = fmodel_class()
+    inst.create()
+    parameters_json = json.dumps(inst.parameters)
+    conn.execute(
+        "INSERT OR REPLACE INTO fmodels (name, description, doi, parameters) VALUES (?, ?, ?, ?)",
+        (fmodel_class.NAME, fmodel_class.DESCRIPTION, fmodel_class.DOI, parameters_json)
+    )

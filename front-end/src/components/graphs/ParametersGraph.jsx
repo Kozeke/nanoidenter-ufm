@@ -1,5 +1,40 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import ReactECharts from "echarts-for-react";
+
+// --- Toolbar styles (match other panels) ---
+const toolbarCardStyle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: "10px",
+  background: "linear-gradient(180deg, #ffffff 0%, #fafbff 100%)",
+  border: "1px solid #e9ecf5",
+  borderRadius: "10px",
+  boxShadow: "0 8px 18px rgba(20, 20, 43, 0.06)",
+  padding: "10px 12px",
+  marginBottom: "8px",
+};
+const leftWrapStyle = { display: "flex", alignItems: "center", gap: "10px" };
+const titleStyle = { fontSize: 14, fontWeight: 700, color: "#1d1e2c", whiteSpace: "nowrap" };
+const chipStyle = {
+  fontSize: 12, fontWeight: 700, color: "#3DA58A",
+  background: "#ECFDF5", border: "1px solid #CFFAEA", padding: "4px 8px", borderRadius: "999px",
+};
+const unitChipStyle = {
+  fontSize: 12, fontWeight: 600, color: "#4a4f6a",
+  background: "#f5f7ff", border: "1px solid #e9ecf5", padding: "3px 8px", borderRadius: "999px",
+};
+const actionBtnStyle = {
+  padding: "8px 10px", fontSize: 13, fontWeight: 700,
+  borderRadius: "10px", border: "1px solid #e6e9f7",
+  background: "#fff", color: "#2c2f3a", cursor: "pointer",
+  boxShadow: "0 2px 8px rgba(30, 41, 59, 0.06)",
+};
+const pressable = {
+  onMouseDown: (e) => (e.currentTarget.style.transform = "translateY(1px)"),
+  onMouseUp:   (e) => (e.currentTarget.style.transform = "translateY(0)"),
+  onMouseLeave:(e) => (e.currentTarget.style.transform = "translateY(0)"),
+};
 
 const ParametersGraph = ({
   forceData = [],
@@ -11,6 +46,7 @@ const ParametersGraph = ({
   selectedParameters = [],
   selectedForceModel = "",
 }) => {
+  const chartRef = useRef(null);
   // Track window height for responsive chart
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
 
@@ -40,46 +76,46 @@ const ParametersGraph = ({
     return Math.pow(10, -magnitude);
   }
 
-  console.log("forceData (Parameters):", forceData);
-  console.log("allFparams:", allFparams);
+  // console.log("forceData (Parameters):", forceData);
+  // console.log("allFparams:", allFparams);
   
   // Use the fetched fparams data directly
   const curvesFparamData = allFparams;
    
-  console.log("curves_fparam:", curvesFparamData);
-  console.log("selectedParameters:", selectedParameters);
-  console.log("selectedForceModel:", selectedForceModel);
+  // console.log("curves_fparam:", curvesFparamData);
+  // console.log("selectedParameters:", selectedParameters);
+  // console.log("selectedForceModel:", selectedForceModel);
   
   // Determine if we're dealing with force or elasticity data
   const isForceData = curvesFparamData.length > 0 && curvesFparamData[0].hasOwnProperty('fparam');
   const isElasticityData = curvesFparamData.length > 0 && curvesFparamData[0].hasOwnProperty('elasticity_param');
   
-  console.log("isForceData:", isForceData, "isElasticityData:", isElasticityData);
+  // console.log("isForceData:", isForceData, "isElasticityData:", isElasticityData);
   
   // Debug force model parameters
   if (curvesFparamData.length > 0) {
-    console.log("First force param object:", curvesFparamData[0]);
+    // console.log("First force param object:", curvesFparamData[0]);
     if (curvesFparamData[0].fparam) {
-      console.log("Force param array:", curvesFparamData[0].fparam);
-      console.log("Force param length:", curvesFparamData[0].fparam.length);
-      console.log("Force param type:", typeof curvesFparamData[0].fparam);
+      // console.log("Force param array:", curvesFparamData[0].fparam);
+      // console.log("Force param length:", curvesFparamData[0].fparam.length);
+      // console.log("Force param type:", typeof curvesFparamData[0].fparam);
     }
   }
 
   // Debug elasticity parameters
   if (curvesFparamData.length > 0) {
-    console.log("First elasticity param object:", curvesFparamData[0]);
+    // console.log("First elasticity param object:", curvesFparamData[0]);
     if (curvesFparamData[0].elasticity_param) {
-      console.log("Elasticity param array:", curvesFparamData[0].elasticity_param);
-      console.log("Elasticity param length:", curvesFparamData[0].elasticity_param.length);
+      // console.log("Elasticity param array:", curvesFparamData[0].elasticity_param);
+      // console.log("Elasticity param length:", curvesFparamData[0].elasticity_param.length);
       
       // Debug for LineMax model specifically
       if (selectedForceModel === "linemax") {
-        console.log("LineMax model detected, parameters should be [avg, median, max, min]");
-        console.log("E[Pa] should be at index 0:", curvesFparamData[0].elasticity_param[0]);
-        console.log("M<E>[Pa] should be at index 1:", curvesFparamData[0].elasticity_param[1]);
-        console.log("Emax[Pa] should be at index 2:", curvesFparamData[0].elasticity_param[2]);
-        console.log("Emin should be at index 3:", curvesFparamData[0].elasticity_param[3]);
+        // console.log("LineMax model detected, parameters should be [avg, median, max, min]");
+        // console.log("E[Pa] should be at index 0:", curvesFparamData[0].elasticity_param[0]);
+        // console.log("M<E>[Pa] should be at index 1:", curvesFparamData[0].elasticity_param[1]);
+        // console.log("Emax[Pa] should be at index 2:", curvesFparamData[0].elasticity_param[2]);
+        // console.log("Emin should be at index 3:", curvesFparamData[0].elasticity_param[3]);
       }
     }
   }
@@ -94,7 +130,7 @@ const ParametersGraph = ({
       param.includes('E0') || param.includes('Eb') || param.includes('EH') || param.includes('EL') || param.includes('Emax') || param.includes('M<E>') || param.includes('d[nm]') || param.includes('T[nm]') || param.includes('k[Pa/nm]') || param.includes('Emin')
     );
     
-    console.log("isElasticityParams:", isElasticityParams, "parameters:", parameters);
+    // console.log("isElasticityParams:", isElasticityParams, "parameters:", parameters);
     
     return data.map(obj => {
       const result = {
@@ -103,54 +139,54 @@ const ParametersGraph = ({
       
       if (isElasticityParams || isElasticityData) {
         // Handle elasticity parameters
-        parameters.forEach(param => {
-          if (obj.elasticity_param && Array.isArray(obj.elasticity_param)) {
-            console.log(`Processing param ${param}, elasticity_param:`, obj.elasticity_param);
-            if (param === "E[Pa]" && obj.elasticity_param.length > 0) {
-              result.E = obj.elasticity_param[0];
-              console.log(`Extracted E[Pa] = ${result.E} from index 0`);
-            } else if (param === "E0[Pa]" && obj.elasticity_param.length > 0) {
-              result.E0 = obj.elasticity_param[0];
-            } else if (param === "Eb[Pa]" && obj.elasticity_param.length > 1) {
-              result.Eb = obj.elasticity_param[1];
-            } else if (param === "d[nm]" && obj.elasticity_param.length > 2) {
-              result.d = obj.elasticity_param[2];
-              console.log(`Extracted d[nm] = ${result.d} from index 2`);
-            } else if (param === "EH[Pa]" && obj.elasticity_param.length > 0) {
-              result.EH = obj.elasticity_param[0];
-            } else if (param === "EL[Pa]" && obj.elasticity_param.length > 1) {
-              result.EL = obj.elasticity_param[1];
-            } else if (param === "T[nm]" && obj.elasticity_param.length > 2) {
-              result.T = obj.elasticity_param[2];
-            } else if (param === "k[Pa/nm]" && obj.elasticity_param.length > 3) {
-              result.k = obj.elasticity_param[3];
-            } else if (param === "M<E>[Pa]" && obj.elasticity_param.length > 1) {
-              result.ME = obj.elasticity_param[1];
-              console.log(`Extracted M<E>[Pa] = ${result.ME} from index 1`);
-            } else if (param === "Emax[Pa]" && obj.elasticity_param.length > 2) {
-              result.Emax = obj.elasticity_param[2];
-              console.log(`Extracted Emax[Pa] = ${result.Emax} from index 2`);
-            } else if (param === "Emin" && obj.elasticity_param.length > 3) {
-              result.Emin = obj.elasticity_param[3];
-              console.log(`Extracted Emin = ${result.Emin} from index 3`);
-            }
-          }
-        });
-      } else if (isForceData) {
-        // Handle force model parameters (original logic)
-        parameters.forEach(param => {
-          console.log(`Processing force param ${param}, fparam:`, obj.fparam);
-          if (param === "E[Pa]" && obj.fparam && Array.isArray(obj.fparam)) {
-            result.E = obj.fparam[0]; // First parameter is E
-            console.log(`Extracted E[Pa] = ${result.E} from index 0`);
-          } else if (param === "m[N/m]" && obj.fparam && Array.isArray(obj.fparam) && obj.fparam.length > 1) {
-            result.m = obj.fparam[1]; // Second parameter is m
-            console.log(`Extracted m[N/m] = ${result.m} from index 1`);
-          } else if (param === "E[Pa]" && typeof obj.fparam === 'number') {
-            result.E = obj.fparam; // Single parameter case
-            console.log(`Extracted E[Pa] = ${result.E} (single parameter)`);
-          }
-        });
+                 parameters.forEach(param => {
+           if (obj.elasticity_param && Array.isArray(obj.elasticity_param)) {
+             // console.log(`Processing param ${param}, elasticity_param:`, obj.elasticity_param);
+             if (param === "E[Pa]" && obj.elasticity_param.length > 0) {
+               result.E = obj.elasticity_param[0];
+               // console.log(`Extracted E[Pa] = ${result.E} from index 0`);
+             } else if (param === "E0[Pa]" && obj.elasticity_param.length > 0) {
+               result.E0 = obj.elasticity_param[0];
+             } else if (param === "Eb[Pa]" && obj.elasticity_param.length > 1) {
+               result.Eb = obj.elasticity_param[1];
+             } else if (param === "d[nm]" && obj.elasticity_param.length > 2) {
+               result.d = obj.elasticity_param[2];
+               // console.log(`Extracted d[nm] = ${result.d} from index 2`);
+             } else if (param === "EH[Pa]" && obj.elasticity_param.length > 0) {
+               result.EH = obj.elasticity_param[0];
+             } else if (param === "EL[Pa]" && obj.elasticity_param.length > 1) {
+               result.EL = obj.elasticity_param[1];
+             } else if (param === "T[nm]" && obj.elasticity_param.length > 2) {
+               result.T = obj.elasticity_param[2];
+             } else if (param === "k[Pa/nm]" && obj.elasticity_param.length > 3) {
+               result.k = obj.elasticity_param[3];
+             } else if (param === "M<E>[Pa]" && obj.elasticity_param.length > 1) {
+               result.ME = obj.elasticity_param[1];
+               // console.log(`Extracted M<E>[Pa] = ${result.ME} from index 1`);
+             } else if (param === "Emax[Pa]" && obj.elasticity_param.length > 2) {
+               result.Emax = obj.elasticity_param[2];
+               // console.log(`Extracted Emax[Pa] = ${result.Emax} from index 2`);
+             } else if (param === "Emin" && obj.elasticity_param.length > 3) {
+               result.Emin = obj.elasticity_param[3];
+               // console.log(`Extracted Emin = ${result.Emin} from index 3`);
+             }
+           }
+         });
+             } else if (isForceData) {
+         // Handle force model parameters (original logic)
+         parameters.forEach(param => {
+           // console.log(`Processing force param ${param}, fparam:`, obj.fparam);
+           if (param === "E[Pa]" && obj.fparam && Array.isArray(obj.fparam)) {
+             result.E = obj.fparam[0]; // First parameter is E
+             // console.log(`Extracted E[Pa] = ${result.E} from index 0`);
+           } else if (param === "m[N/m]" && obj.fparam && Array.isArray(obj.fparam) && obj.fparam.length > 1) {
+             result.m = obj.fparam[1]; // Second parameter is m
+             // console.log(`Extracted m[N/m] = ${result.m} from index 1`);
+           } else if (param === "E[Pa]" && typeof obj.fparam === 'number') {
+             result.E = obj.fparam; // Single parameter case
+             // console.log(`Extracted E[Pa] = ${result.E} (single parameter)`);
+           }
+         });
       }
       
       return result;
@@ -180,7 +216,7 @@ const ParametersGraph = ({
   };
 
   const processedData = processFparamData(curvesFparamData, selectedParameters, selectedForceModel);
-  console.log("processedData:", processedData);
+  // console.log("processedData:", processedData);
 
   // Create series for each selected parameter
   const createSeries = (data, parameters) => {
@@ -280,6 +316,12 @@ const ParametersGraph = ({
   
   // Calculate domain for all data points
   const allCurveIndices = processedData.map(obj => obj.curve_index);
+  
+  // Toolbar summaries
+  const totalPoints = processedData.length;                  // number of plotted points
+  const shownParams = selectedParameters && selectedParameters.length
+    ? selectedParameters.join(", ")
+    : "No parameter selected";
   
   // Check if we're dealing with elasticity parameters
   // Only check for elasticity-specific parameters, not general E[Pa] which can be both
@@ -465,21 +507,21 @@ const ParametersGraph = ({
 
   const onChartEvents = {
     click: (params) => {
-      console.log("Chart click event (Parameters):", {
-        componentType: params.componentType,
-        seriesType: params.seriesType,
-        seriesIndex: params.seriesIndex,
-        name: params.name,
-        value: params.value,
-      });
+      // console.log("Chart click event (Parameters):", {
+      //   componentType: params.componentType,
+      //   seriesType: params.seriesType,
+      //   seriesIndex: params.seriesIndex,
+      //   name: params.name,
+      //   value: params.value,
+      // });
       if (params.componentType === "series") {
         const curveIndex = params.value[0];
         const fparamValue = params.value[1];
         
-        console.log("Selected parameter point:", {
-          curve_index: curveIndex,
-          fparam: fparamValue,
-        });
+        // console.log("Selected parameter point:", {
+        //   curve_index: curveIndex,
+        //   fparam: fparamValue,
+        // });
         
         // You can add selection logic here if needed
         if (onCurveSelect) {
@@ -494,12 +536,46 @@ const ParametersGraph = ({
 
   return (
     <div style={{ flex: 1, height: "100%" }}>
+      {/* Toolbar */}
+      <div style={toolbarCardStyle}>
+        <div style={leftWrapStyle}>
+          <div style={titleStyle}>Parameters</div>
+          <div style={chipStyle}>{totalPoints} points</div>
+          <div style={unitChipStyle}>X: Curve Index</div>
+          <div style={unitChipStyle}>Y: Parameter Value</div>
+          {/* Show which params are plotted — truncate long lists naturally */}
+          <div style={{ ...unitChipStyle, maxWidth: 260, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {shownParams}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <button
+            style={actionBtnStyle}
+            onClick={() => {
+              const inst = chartRef.current;
+              if (!inst) return;
+              try {
+                inst.dispatchAction({ type: "dataZoom", start: 0, end: 100 });
+                inst.dispatchAction({ type: "dataZoom", yAxisIndex: 0, start: 0, end: 100 });
+              } catch {}
+            }}
+            {...pressable}
+          >
+            Reset Zoom
+          </button>
+        </div>
+      </div>
+
+      {/* Chart */}
       <ReactECharts
+        ref={chartRef}
         option={chartOptions}
         style={{ height: chartHeight, width: "100%" }}
         notMerge={true}
         opts={{ renderer: "canvas" }}
         onEvents={onChartEvents}
+        onChartReady={(inst) => (chartRef.current = inst)}
       />
     </div>
   );

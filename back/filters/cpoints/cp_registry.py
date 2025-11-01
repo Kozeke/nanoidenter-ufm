@@ -21,37 +21,78 @@ def create_contact_point_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
     udf_name = CONTACT_POINT_REGISTRY[filter_name.lower()]["udf_function"]  # e.g., "autothresh"
     # print("Contact point filter setup complete:", filter_instance)
 
-    # Define parameter types: x_values, y_values, and a single DOUBLE[] for all parameters
+    # Define parameter types: x_values, y_values, param_values, and metadata values
     udf_param_types = [
         duckdb.list_type('DOUBLE'),  # x_values (z_values)
         duckdb.list_type('DOUBLE'),  # y_values (force_values)
-        duckdb.list_type('DOUBLE')   # param_values (array of all parameters)
+        duckdb.list_type('DOUBLE'),  # param_values (array of all parameters)
+        'DOUBLE',                    # spring_constant
+        'DOUBLE',                    # tip_radius
+        'VARCHAR'                    # tip_geometry
     ]
 
-    def udf_wrapper(x_values, y_values, param_values):
+    def udf_wrapper(x_values, y_values, param_values, spring_constant, tip_radius, tip_geometry):
         try:
+            # print(f"🔍 UDF DEBUG for {filter_name}:")
+            # print(f"  📊 Input data: x_values={len(x_values)} points, y_values={len(y_values)} points")
+            # print(f"  📋 Raw param_values: {param_values}")
+            # print(f"  🔧 Metadata: spring_constant={spring_constant}, tip_radius={tip_radius}, tip_geometry={tip_geometry}")
+            
             x_values = np.array(x_values, dtype=np.float64)
             y_values = np.array(y_values, dtype=np.float64)
             param_values = np.array(param_values, dtype=np.float64)
 
-            # Map param_values to expected parameters
-            expected_params = list(filter_instance.parameters.keys())
+            # Create metadata dictionary
+            metadata = {
+                'spring_constant': spring_constant,
+                'tip_radius': tip_radius,
+                'tip_geometry': tip_geometry
+            }
+
+            # Map param_values to expected parameters using deterministic order
+            # Force deterministic order to prevent parameter swapping
+            # Use parameter_order which tracks the order parameters were added in create()
+            expected_params = filter_instance.parameter_order
+            # print(f"  📝 Expected parameter order: {expected_params}")
+            # print(f"  📝 Parameter values array: {param_values}")
+            
             param_dict = {}
             for i, param_name in enumerate(expected_params):
                 if i < len(param_values):
-                    param_dict[param_name] = param_values[i]
+                    param_dict[param_name] = float(param_values[i])
+                    # print(f"    ✅ {param_name} = {param_values[i]} (index {i})")
+                else:
+                    # print(f"    ⚠️  {param_name} = MISSING (index {i} >= {len(param_values)})")
+                    pass
+
+            # print(f"  🎯 Final parameter mapping: {param_dict}")
 
             # Update instance parameters
             for k, v in param_dict.items():
                 filter_instance.parameters[k]["value"] = v
 
-            # Calculate contact point
-            result = filter_instance.calculate(x_values, y_values)
+            # Calculate contact point with metadata
+            # All contact point filters now accept metadata parameter
+            # print(f"  🚀 Calling calculate() with metadata...")
+            result = filter_instance.calculate(x_values, y_values, metadata)
+            # print(f"  📤 Calculate result: {result}")
+            
+            # Debug logs after CP calculation
+            if result is not None and len(result) > 0 and len(result[0]) >= 2:
+                xcp = result[0][0]
+                ycp = result[0][1]
+                print(f"[DEBUG] CP raw values: xcp={xcp}, ycp={ycp}")
+                print(f"[DEBUG] Z range: {np.min(x_values)} to {np.max(x_values)}")
+            
             if result is None:
+                # print(f"  ❌ Result is None - no contact point found")
                 return None
+            # print(f"  ✅ Contact point found: {result}")
             return result
         except Exception as e:
-            print(f"Error in UDF for {filter_name}: {e}")
+            print(f"❌ Error in UDF for {filter_name}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     # Consistent return type: DOUBLE[][]
@@ -63,7 +104,7 @@ def create_contact_point_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
             udf_wrapper,
             udf_param_types,
             return_type=return_type,
-            null_handling="SPECIAL" if filter_name in ["Autothresh", "GofSphere", "StepDrift"] else "DEFAULT"
+            null_handling="SPECIAL"  # All contact point filters can return None
         )
     except duckdb.CatalogException as e:
         if "already exists" in str(e):

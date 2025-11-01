@@ -37,13 +37,25 @@ def apply(query: str, filters: Dict, curve_ids: List[str]) -> str:
             else:  # Filters that take both z_values and force_values
                 filter_chain = f"{function_name}({z_col}, {filter_chain}{param_string})"
 
+    # Extract numeric curve IDs from strings like "curve0" -> 0
+    numeric_curve_ids = []
+    for cid in curve_ids:
+        if cid.startswith('curve'):
+            try:
+                numeric_id = int(cid[5:])  # Remove "curve" prefix
+                numeric_curve_ids.append(str(numeric_id))
+            except ValueError:
+                continue
+        else:
+            numeric_curve_ids.append(cid)
+    
     # Construct the final SQL query
     query = f"""
         SELECT curve_id, 
                {z_col}, 
                {filter_chain} AS force_values
         FROM force_vs_z 
-        WHERE curve_id IN ({','.join([f"'{cid}'" for cid in curve_ids])})
+        WHERE curve_id IN ({','.join(numeric_curve_ids)})
     """
     print(f"Generated query: {query}")
     return query

@@ -11,68 +11,65 @@ class AutothreshFilter(CpointBase):
         # Add zeroRange as a parameter for user control
         self.add_parameter("zeroRange", "float", "Zero range offset [nm]", 500)
 
-    def calculate(self, x, y):
+    def calculate(self, x, y, metadata=None):
         """
         Apply autothresh filter to find contact point.
-        :param x: Input array (e.g., z_values)
-        :param y: Input array (e.g., force_values)
-        :return: List of [z_cp, f_cp] as [[float, float]] or None if no valid point is found
+        Returns [[z_cp, f_cp]] or None.
         """
-        zeroRange = self.get_value("zeroRange")
-        # print("autothreshhg", len(x), len(y))
+        zeroRange = self.get_value("zeroRange")  # same name, same units (nm)
+
         if len(x) < 2 or len(y) < 2:
-            return None  # Return None instead of [[]]
-        # print("autorthresh")
-        # Ensure inputs are numpy arrays
+            return None
+
+        # --- cast & copy
         x = np.asarray(x, dtype=np.float64)
         worky = np.copy(np.asarray(y, dtype=np.float64))
 
-        # Find target index for zero range
+        # --- pick zero-range target (x is in meters; zeroRange is nm)
         xtarget = np.min(x) + zeroRange * 1e-9
         jtarget = np.argmin(np.abs(x - xtarget))
-
         if jtarget == 0 or jtarget >= len(x):
-            # print(jtarget,len(x) )
             return None
 
-        # Linear fit based on direction of x
+        # --- baseline: linear fit on the pre-contact side (depends on x direction)
         if x[0] < x[-1]:
             xlin, ylin = x[:jtarget], worky[:jtarget]
         else:
             xlin, ylin = x[jtarget:], worky[jtarget:]
 
-        if len(xlin) < 2 or len(ylin) < 2:
+        if len(xlin) < 2:
             return None
 
-        # Compute linear fit and subtract from y-values
         m, q = np.polyfit(xlin, ylin, 1)
         worky -= (m * x + q)
 
-        # Compute midpoints efficiently
-        differences = (worky[1:] + worky[:-1]) / 2
-        midpoints = np.unique(differences)
+        # --- midpoints of adjacent samples (original logic)
+        differences = (worky[1:] + worky[:-1]) / 2.0
+        # use set() then sort() to mirror the original behavior
+        midpoints = np.array(list(set(differences)), dtype=np.float64)
+        midpoints.sort()
 
-        # Filter for positive midpoints
-        positive_midpoints = midpoints[midpoints > 0]
-        if len(positive_midpoints) == 0:
+        # only positive midpoints
+        positive_midpoints = midpoints[midpoints > 0.0]
+        if positive_midpoints.size == 0:
             return None
 
-        # Identify crossings in y
-        crossings = np.sum(
-            np.logical_and(worky[1:] > positive_midpoints[:, None],
-                        worky[:-1] < positive_midpoints[:, None]), axis=1)
+        # --- scan thresholds in order; pick the FIRST with exactly ONE crossing
+        #     crossing definition: y[k] < th and y[k+1] > th
+        inflection = None
+        for th in positive_midpoints:
+            cross = np.logical_and(worky[:-1] < th, worky[1:] > th)
+            if np.count_nonzero(cross) == 1:
+                inflection = th
+                break
 
-        # Find candidates where exactly one crossing occurs
-        candidates = np.where(crossings == 1)[0]
-        if len(candidates) == 0:
+        if inflection is None:
             return None
 
-        # Select first valid inflection point
-        inflection = positive_midpoints[candidates[0]]
-        jcpguess = np.argmin(np.abs(differences - inflection)) + 1
-
+        # closest midpoint index (+1 to map midpoint to the right sample index)
+        jcpguess = int(np.argmin(np.abs(differences - inflection)) + 1)
         if jcpguess >= len(x):
             return None
 
-        # Return contact point as [z, f], ensuring non-empty
-        return [[x[jcpguess], y[jcpguess]]]
+        # return z_cp, f_cp from the ORIGINAL (un-detrended) signal
+        return [[float(x[jcpguess]), float(y[jcpguess])]]

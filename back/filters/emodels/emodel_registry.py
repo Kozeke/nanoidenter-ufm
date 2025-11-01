@@ -18,14 +18,39 @@ def register_emodel(emodel_class):
 
 def getJclose(x0, x):
     """Find the index of the closest value to x0 in array x."""
-    x = np.array(x)
-    return np.argmin((x - x0) ** 2)
+    x = np.asarray(x, dtype=float)
+    if x.size == 0:
+        return 0  # Return 0 if empty array
+    return int(np.argmin((x - x0) ** 2))
 
 def getEizi(xmin, xmax, zi, ei):
-    """Filter zi and ei arrays between xmin and xmax."""
+    """Filter zi and ei arrays between xmin and xmax. Returns empty arrays if insufficient data."""
+    zi = np.asarray(zi, dtype=float)
+    ei = np.asarray(ei, dtype=float)
+    if zi.size == 0 or ei.size == 0 or zi.size != ei.size:
+        return np.array([]), np.array([])
+
+    # Ensure ascending bounds
+    if xmax < xmin:
+        xmin, xmax = xmax, xmin
+
+    # Clamp to data range
+    zmin, zmax = float(zi.min()), float(zi.max())
+    xmin = max(xmin, zmin)
+    xmax = min(xmax, zmax)
+
+    # Degenerate or empty window
+    if not np.isfinite(xmin) or not np.isfinite(xmax) or xmax <= xmin:
+        return np.array([]), np.array([])
+
     jmin = getJclose(xmin, zi)
     jmax = getJclose(xmax, zi)
-    return np.array(zi[jmin:jmax]), np.array(ei[jmin:jmax])
+
+    # Ensure proper slicing (exclusive end); expand by 1 if identical index
+    if jmax <= jmin:
+        jmax = min(jmin + 1, zi.size)
+
+    return zi[jmin:jmax], ei[jmin:jmax]
 
 
 def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
@@ -43,7 +68,7 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
 
     def udf_wrapper(ze_values, fe_values, param_values):
         try:
-            print(f"UDF wrapper called for {emodel_name} with ze_values length: {len(ze_values)}, fe_values length: {len(fe_values)}")
+            # print(f"UDF wrapper called for {emodel_name} with ze_values length: {len(ze_values)}, fe_values length: {len(fe_values)}")
             ze_values = np.array(ze_values, dtype=np.float64)
             fe_values = np.array(fe_values, dtype=np.float64)
             param_values = np.array(param_values, dtype=np.float64)  # Convert param_values to numpy array
@@ -55,7 +80,7 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
                 if i < len(param_values):
                     param_dict[param_name] = param_values[i]
             
-            print(f"Parameter mapping for {emodel_name}: {param_dict}")
+            # print(f"Parameter mapping for {emodel_name}: {param_dict}")
             
             # Update instance parameters
             for k, v in param_dict.items():
@@ -65,10 +90,14 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
             ze_max = emodel_instance.get_value("maxInd") * 1e-9 if "maxInd" in emodel_instance.parameters else 800e-9
   
             x, y = getEizi(ze_min, ze_max, ze_values, fe_values)
-            print(f"Filtered data for {emodel_name}: x length: {len(x)}, y length: {len(y)}")
+            # print(f"Filtered data for {emodel_name}: x length: {len(x)}, y length: {len(y)}")
+            
+            # Guard: if filtering resulted in empty arrays, return None immediately
+            if x.size == 0 or y.size == 0:
+                return None
             
             result = emodel_instance.calculate(x, y)
-            print(f"Result for {emodel_name}: {result}")
+            # print(f"Result for {emodel_name}: {result}")
             return result if result is not None else None
         except Exception as e:
             print(f"Error in UDF for {emodel_name}: {e}")

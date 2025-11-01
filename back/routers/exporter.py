@@ -35,6 +35,16 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
     num_curves = data.get("num_curves")
     level_names = data.get("level_names", ["curve0", "segment0"])
     metadata = data.get("metadata", {})
+    
+    # SoftMech-style export parameters
+    export_type = data.get("export_type", "raw")  # raw, average, scatter
+    dataset_type = data.get("dataset_type", "Force")  # Force, Elasticity, El from F, Force Model, Elasticity Model
+    direction = data.get("direction", "V")  # V, H
+    loose = data.get("loose", 100)  # 10-100
+    
+    # Get filters from request
+    filters = data.get("filters", {})
+    
     db_path = "data/experiment.db"
     errors = []
 
@@ -48,6 +58,22 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
     if not export_path.lower().endswith("." + extension):
         errors.append(f"Export path must end with .{extension}")
         raise HTTPException(status_code=400, detail={"status": "error", "message": f"Invalid export path extension for {extension.upper()}", "errors": errors})
+
+    # Validate SoftMech-style parameters
+    if export_type not in ["raw", "average", "scatter"]:
+        errors.append("export_type must be one of: raw, average, scatter")
+    
+    if export_type == "average":
+        if dataset_type not in ["Force", "Elasticity", "El from F"]:
+            errors.append("dataset_type must be one of: Force, Elasticity, El from F")
+        if direction not in ["V", "H"]:
+            errors.append("direction must be one of: V, H")
+        if not isinstance(loose, int) or loose < 10 or loose > 100:
+            errors.append("loose must be an integer between 10 and 100")
+    
+    if export_type == "scatter":
+        if dataset_type not in ["Force Model", "Elasticity Model"]:
+            errors.append("dataset_type must be one of: Force Model, Elasticity Model")
 
     try:
         # Sanitize file system path
@@ -83,39 +109,54 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
             errors.append("All level names must be non-empty strings")
             raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid level names", "errors": errors})
 
-        # Validate metadata
-        for key, value in metadata.items():
-            if value and isinstance(value, str) and not value.strip():
-                errors.append(f"Metadata field {key} cannot be empty")
-        if errors:
-            raise HTTPException(status_code=400, detail={
-                "status": "error",
-                "message": "Invalid metadata",
-                "errors": errors
-            })
+        # Validate metadata (skip for CSV exports with SoftMech-style metadata)
+        if extension != "csv" or export_type == "raw":
+            for key, value in metadata.items():
+                if value and isinstance(value, str) and not value.strip():
+                    errors.append(f"Metadata field {key} cannot be empty")
+            if errors:
+                raise HTTPException(status_code=400, detail={
+                    "status": "error",
+                    "message": "Invalid metadata",
+                    "errors": errors
+                })
 
         # Exporter-specific validation
         exporter.validate_params(data)
         logger.info("exporter4")
 
         logger.info(f"Starting {extension.upper()} export to {export_path} with {len(converted_curve_ids or [])} curves")
+        logger.info(f"Export type: {export_type}, Dataset type: {dataset_type}")
         os.makedirs(os.path.dirname(export_path), exist_ok=True)
+        
+        # Prepare kwargs with SoftMech-style parameters
+        export_kwargs = {
+            "dataset_path": data.get("dataset_path"),
+            "level_names": level_names if level_names else None,
+            "metadata_path": data.get("metadata_path", ""),
+            "metadata": metadata,
+            "export_type": export_type,
+            "dataset_type": dataset_type,
+            "direction": direction,
+            "loose": loose,
+            "filters": filters  # Pass filters to the exporter
+        }
+        
         num_exported = exporter.export(
             db_path=db_path,
             output_path=export_path,
             curve_ids=converted_curve_ids,
-            dataset_path=data.get("dataset_path"),
-            level_names=level_names if level_names else None,
-            metadata_path=data.get("metadata_path", ""),
-            metadata=metadata
+            **export_kwargs
         )
-        logger.info("exporter4")
+        logger.info("exporter5")
 
         return {
             "status": "success",
             "message": f"Successfully exported {num_exported} curves",
             "export_path": export_path,
-            "exported_curves": num_exported
+            "exported_curves": num_exported,
+            "export_type": export_type,
+            "dataset_type": dataset_type
         }
     except Exception as e:
         errors.append(str(e))
@@ -125,6 +166,100 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
             "message": f"Failed to export: {str(e)}",
             "export_path": export_path,
             "errors": errors
+        })
+
+@router.post("/calculate-softmech-metadata")
+async def calculate_softmech_metadata(data: Dict[str, Any]):
+    """Calculate SoftMech-style metadata for preview in frontend."""
+    try:
+        curve_ids = data.get("curve_ids", [])
+        num_curves = data.get("num_curves")
+        export_type = data.get("export_type", "raw")
+        dataset_type = data.get("dataset_type", "Force")
+        direction = data.get("direction", "V")
+        loose = data.get("loose", 100)
+        filters = data.get("filters", {})
+        
+        db_path = "data/experiment.db"
+        
+        # Convert curve_ids
+        converted_curve_ids = None
+        if curve_ids:
+            converted_curve_ids = []
+            for curve_id in curve_ids:
+                match = re.match(r"curve(\d+)", curve_id)
+                if match:
+                    converted_curve_ids.append(int(match.group(1)))
+        
+        # Fetch curve_ids if num_curves is provided
+        if not converted_curve_ids and num_curves is not None:
+            with duckdb.connect(db_path) as conn:
+                curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
+                converted_curve_ids = [row[0] for row in curve_ids_result]
+        
+        if not converted_curve_ids:
+            return {
+                "status": "error",
+                "message": "No curves found"
+            }
+        
+        # Get exporter to access the metadata calculation method
+        exporter = get_exporter("csv")
+        
+        # Get tip parameters from database
+        with duckdb.connect(db_path) as conn:
+            # Check if tip_angle column exists
+            columns = conn.execute("DESCRIBE force_vs_z").fetchall()
+            column_names = [col[0] for col in columns]
+            
+            if "tip_angle" in column_names:
+                metadata_row = conn.execute("""
+                    SELECT tip_geometry, tip_radius, tip_angle, spring_constant 
+                    FROM force_vs_z LIMIT 1
+                """).fetchone()
+                tip_geometry, tip_radius, tip_angle, spring_constant = metadata_row or ("sphere", 1e-6, 30.0, 0.1)
+            else:
+                # tip_angle column doesn't exist, use default value
+                metadata_row = conn.execute("""
+                    SELECT tip_geometry, tip_radius, spring_constant 
+                    FROM force_vs_z LIMIT 1
+                """).fetchone()
+                tip_geometry, tip_radius, spring_constant = metadata_row or ("sphere", 1e-6, 0.1)
+                tip_angle = 30.0  # Default value
+        
+        # For now, return basic metadata. In a full implementation, you would:
+        # 1. Fetch the actual curve data using fetch_curves_batch
+        # 2. Calculate the averaged curves
+        # 3. Use the _calculate_softmech_metadata method
+        
+        # This is a simplified version - in practice, you'd need to process the actual data
+        # Validate and sanitize tip_geometry
+        valid_tip_shapes = ['sphere', 'cylinder', 'cone', 'pyramid']
+        if tip_geometry not in valid_tip_shapes:
+            # If tip_geometry is invalid, default to sphere
+            tip_geometry = 'sphere'
+        
+        calculated_metadata = {
+            "direction": direction,
+            "loose": loose,
+            "tip_shape": tip_geometry,
+            "tip_radius_nm": tip_radius * 1e9 if tip_geometry in ['sphere', 'cylinder'] and tip_radius else None,
+            "tip_angle_deg": tip_angle if tip_geometry in ['cone', 'pyramid'] else None,
+            "elastic_constant_nm": spring_constant,
+            "average_hertz_modulus_pa": 0,  # Would be calculated from actual data
+            "hertz_max_indentation_nm": 0   # Would be calculated from actual data
+        }
+        
+        return {
+            "status": "success",
+            "calculated_metadata": calculated_metadata
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to calculate SoftMech metadata: {str(e)}")
+        raise HTTPException(status_code=500, detail={
+            "status": "error",
+            "message": f"Failed to calculate metadata: {str(e)}"
         })
 
 @router.get("/exports/{file_path:path}")
