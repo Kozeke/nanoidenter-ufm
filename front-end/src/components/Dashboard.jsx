@@ -49,7 +49,8 @@ const Dashboard = () => {
     yMin: null,
     yMax: null,
   }); const [metadataObject, setMetadataObject] = useState({ columns: [], sample_row: {} });
-  const [numCurves, setNumCurves] = useState(1);
+  // Default value for number of curves - set to 10 and keep it at 10 even after loading data
+  const [numCurves, setNumCurves] = useState(10);
   const socketRef = useRef(null);
   const initialRequestSent = useRef(false);
   const [regularFilters, setRegularFilters] = useState({});
@@ -63,7 +64,8 @@ const Dashboard = () => {
   const [activeTab, setActiveTab] = useState("forceDisplacement");
   const [curveId, setCurveId] = useState("");
   const prevFiltersRef = useRef({ regular: null, cp: null });
-  const prevNumCurvesRef = useRef(1); // Initialize with default numCurves
+  // Initialize with default numCurves (10)
+  const prevNumCurvesRef = useRef(10);
   const [forceRequest, setForceRequest] = useState(false);
   const [selectedExportCurveIds, setSelectedForExportCurveIds] = useState([]);
   const isMetadataReady = metadataObject.columns.length > 0 || Object.keys(metadataObject.sample_row).length > 0;
@@ -492,8 +494,9 @@ const Dashboard = () => {
     setDomainRange({ xMin: null, xMax: null, yMin: null, yMax: null });
     setIndentationDomain({ xMin: null, xMax: null, yMin: null, yMax: null });
     setElspectraDomain({ xMin: null, xMax: null, yMin: null, yMax: null });
+    // Set numCurves: if loaded data has fewer than 10 curves, use that value; otherwise use 10
     if (result.curves) {
-      setNumCurves(result.curves);
+      setNumCurves(Math.min(result.curves, 10));
     }
     setFilename(result.filename || ""); // Set filename from result
     setForceRequest(true);
