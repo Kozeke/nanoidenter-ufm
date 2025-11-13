@@ -1,3 +1,4 @@
+# FastAPI application exposing REST and WebSocket endpoints for curve analytics streaming.
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -259,6 +260,27 @@ async def websocket_data_stream(websocket: WebSocket):
                 # Wait for a request from the client
                 request = await websocket.receive_text()
                 request_data = json.loads(request)
+
+                # --- New: action / compute_scope handling ---
+                # Identifies requested operation for downstream handling
+                action = request_data.get("action")
+                # Indicates scope of computation for processing pipeline
+                compute_scope = request_data.get("compute_scope")
+
+                # If client asked for metadata, send it,
+                # but DO NOT skip curve processing – we still fall through.
+                if action == "get_metadata":
+                    await get_metadata(conn, websocket)
+
+                # Derive compute_scope if not explicitly passed
+                if compute_scope is None:
+                    if action == "update_fmodel":
+                        compute_scope = "fmodel_only"
+                    elif action == "update_emodel":
+                        compute_scope = "emodel_only"
+                    else:
+                        compute_scope = "full"
+                compute_scope = str(compute_scope).lower()
                 
                 
                 num_curves = request_data.get("num_curves") or 1
@@ -299,12 +321,20 @@ async def websocket_data_stream(websocket: WebSocket):
                 for i in range(0, len(curve_ids), BATCH_SIZE):
                     batch_ids = curve_ids[i:i + BATCH_SIZE]
                     # print(f"Processing batch: {batch_ids}")
-                    await process_and_stream_batch(conn, batch_ids, filters, websocket, curve_id, filters_changed, set_zero_force, elasticity_params, elastic_model_params, force_model_params)
+                    await process_and_stream_batch(
+                        conn,
+                        batch_ids,
+                        filters,
+                        websocket,
+                        curve_id,
+                        filters_changed,
+                        set_zero_force,
+                        elasticity_params,
+                        elastic_model_params,
+                        force_model_params,
+                        compute_scope=compute_scope,
+                    )
                     await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
-                # Check for metadata request
-                action = request_data.get("action", None)
-                if action == "get_metadata":
-                    await get_metadata(conn, websocket)
                 # print("send meta and now curves")
                 # Signal completion of this request
                 await websocket.send_text(json.dumps({"status": "complete"}))
@@ -371,28 +401,60 @@ async def process_and_stream_batch(
     filters: Dict,
     websocket: WebSocket,
     curve_id: str = None,
-    filters_changed: bool = False,  # New flag,
-    set_zero_force: bool = True,  # New parameter for set_zero_force
-    elasticity_params: Dict = None,  # New parameter for elasticity parameters
-    elastic_model_params: Dict = None,  # New parameter for elastic model parameters
-    force_model_params: Dict = None,  # New parameter for force model parameters
+    filters_changed: bool = False,
+    set_zero_force: bool = True,
+    elasticity_params: Dict = None,
+    elastic_model_params: Dict = None,
+    force_model_params: Dict = None,
+    compute_scope: str = "full",  # NEW
 ) -> None:
     """
-    Process a batch of curve IDs and optionally a single curve ID, fetch data from DuckDB, and stream results via WebSocket.
+    Process a batch of curve IDs and optionally a single curve ID, fetch data from DuckDB,
+    and stream results via WebSocket.
 
-    Args:
-        conn: DuckDB connection object
-        batch_ids: List of curve IDs to process in this batch
-        filters: Dictionary of filters to apply (e.g., {'regular': {...}, 'cp_filters': {...}})
-        websocket: WebSocket connection to stream results
-        curve_id: Optional specific curve ID to fetch separately
-        filters_changed: Boolean flag indicating if filters have changed
+    compute_scope:
+        - "full"         → compute all graphs (current behaviour)
+        - "fmodel_only"  → update only force-model overlay (indentation graph)
+        - "emodel_only"  → update only elasticity-model overlay (elspectra graph)
     """
     try:
-        # Get the current event loop
         loop = asyncio.get_running_loop()
 
-        # Initialize graph variables
+        # Normalise scope
+        compute_scope = (compute_scope or "full").lower()
+        if compute_scope not in {"full", "fmodel_only", "emodel_only"}:
+            compute_scope = "full"
+
+        scope_full = compute_scope == "full"
+        scope_f_only = compute_scope == "fmodel_only"
+        scope_e_only = compute_scope == "emodel_only"
+
+        # Copy filters in a safe, shallow way and normalise keys
+        filters_for_call = {
+            "regular": dict(filters.get("regular", {})),
+            "cp_filters": dict(filters.get("cp_filters", {})),
+            "f_models": dict(filters.get("f_models", {})),
+            "e_models": dict(filters.get("e_models", {})),
+        }
+
+        # Decide which parts of the pipeline we actually need
+        if scope_f_only:
+            # Only force-model (uses indentation) → no elasticity models, no elspectra
+            filters_for_call["e_models"] = {}
+            compute_elspectra_flag = False
+        elif scope_e_only:
+            # Only elasticity-model (uses elspectra) → no force models
+            filters_for_call["f_models"] = {}
+            compute_elspectra_flag = True
+        else:
+            # Full pipeline
+            compute_elspectra_flag = True
+
+        # Decide if "single" semantics are needed (one curve with models)
+        want_models = bool(filters_for_call.get("f_models") or filters_for_call.get("e_models"))
+        is_single_batch = len(batch_ids) == 1
+
+        # Init graph containers
         graph_force_vs_z = None
         graph_force_indentation = None
         graph_elspectra = None
@@ -400,83 +462,101 @@ async def process_and_stream_batch(
         graph_force_indentation_single = None
         graph_elspectra_single = None
 
-        # Use ThreadPoolExecutor for blocking DuckDB operations
+        # Use ThreadPoolExecutor for blocking DuckDB ops
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # If this is a specific single curve request (curve_id is provided), use single=True
-            # Get metadata for the curves
             from db import get_metadata_for_curves
             metadata = get_metadata_for_curves(conn, batch_ids)
             print(f"DEBUG: Retrieved metadata: {metadata}")
-            
-            # Decide if we want the "single" path (include fmodel/emodel fits in the payload)
-            want_models = bool(filters.get("f_models") or filters.get("e_models"))
 
-            # Case A: explicit single curve request
-            if curve_id and len(batch_ids) == 1:
-                print("Single curve request:", batch_ids)
-                # Note: Using synchronous call here for simplicity; could also use executor if needed
+            # ---- SINGLE-CURVE PATH (models / targeted updates) ----
+            if is_single_batch and (curve_id or want_models or not scope_full):
+                print(f"Single curve path ({compute_scope}):", batch_ids)
+                # For single curve & model updates, call synchronously
                 graph_force_vs_z_single, graph_force_indentation_single, graph_elspectra_single = fetch_curves_batch(
-                    conn, batch_ids, filters, single=True, metadata=metadata, set_zero_force=set_zero_force, elasticity_params=elasticity_params, elastic_model_params=elastic_model_params, force_model_params=force_model_params
+                    conn,
+                    batch_ids,
+                    filters_for_call,
+                    single=True,
+                    metadata=metadata,
+                    set_zero_force=set_zero_force,
+                    elasticity_params=elasticity_params,
+                    elastic_model_params=elastic_model_params,
+                    force_model_params=force_model_params,
+                    compute_elspectra=compute_elspectra_flag,
                 )
 
-            # Case B: implicit single curve (e.g., num_curves = 1) AND models are selected
-            elif len(batch_ids) == 1 and want_models:
-                print("Implicit single curve with models:", batch_ids)
-                graph_force_vs_z_single, graph_force_indentation_single, graph_elspectra_single = fetch_curves_batch(
-                    conn, batch_ids, filters, single=True, metadata=metadata, set_zero_force=set_zero_force, elasticity_params=elasticity_params, elastic_model_params=elastic_model_params, force_model_params=force_model_params
-                )
-
-            # Case C: regular batch mode
-            elif filters_changed or not curve_id:
-                print("Batch processing:", batch_ids)
+            # ---- BATCH PATH (full graphs) ----
+            elif filters_changed or not curve_id or scope_full:
+                print(f"Batch processing ({compute_scope}):", batch_ids)
                 graph_force_vs_z, graph_force_indentation, graph_elspectra = await loop.run_in_executor(
                     executor,
-                    lambda: fetch_curves_batch(conn, batch_ids, filters, metadata=metadata, set_zero_force=set_zero_force, elasticity_params=elasticity_params, elastic_model_params=elastic_model_params, force_model_params=force_model_params)
+                    lambda: fetch_curves_batch(
+                        conn,
+                        batch_ids,
+                        filters_for_call,
+                        metadata=metadata,
+                        set_zero_force=set_zero_force,
+                        elasticity_params=elasticity_params,
+                        elastic_model_params=elastic_model_params,
+                        force_model_params=force_model_params,
+                        compute_elspectra=compute_elspectra_flag,
+                    ),
                 )
 
-        # Prepare the response data
-        response_data = {
+        # ---- BUILD RESPONSE ----
+        response_data: Dict[str, Any] = {
             "status": "batch",
-            "data": {}
+            "data": {},
         }
 
-        # Include batch graph data if fetched
-        if graph_force_vs_z:
-            response_data["data"].update({
-                "graphForcevsZ": graph_force_vs_z,
-                "graphForceIndentation": graph_force_indentation,
-                "graphElspectra": graph_elspectra
-            })
+        if scope_full:
+            # Original behaviour: send all graphs if present
+            if graph_force_vs_z:
+                response_data["data"].update({
+                    "graphForcevsZ": graph_force_vs_z,
+                    "graphForceIndentation": graph_force_indentation,
+                    "graphElspectra": graph_elspectra,
+                })
 
-        # Add single curve data if available (for specific curve_id requests)
-        if graph_force_vs_z_single:
-            response_data["data"].update({
-                "graphForcevsZSingle": graph_force_vs_z_single,
-                "graphForceIndentationSingle": graph_force_indentation_single,
-                "graphElspectraSingle": graph_elspectra_single
-            })
+            if graph_force_vs_z_single:
+                response_data["data"].update({
+                    "graphForcevsZSingle": graph_force_vs_z_single,
+                    "graphForceIndentationSingle": graph_force_indentation_single,
+                    "graphElspectraSingle": graph_elspectra_single,
+                })
 
-        # Stream results if there’s any data
+        elif scope_f_only:
+            # Only update force-model overlay on the indentation graph
+            # → do NOT touch force-vs-Z or elspectra in this payload
+            if graph_force_indentation_single:
+                response_data["data"]["graphForceIndentationSingle"] = graph_force_indentation_single
+
+        elif scope_e_only:
+            # Only update elasticity-model overlay on the elspectra graph
+            # → do NOT touch other graphs
+            if graph_elspectra_single:
+                response_data["data"]["graphElspectraSingle"] = graph_elspectra_single
+
+        # Send or report empty
         if response_data["data"]:
             await websocket.send_text(json.dumps(
                 response_data,
-                default=str  # Handles non-serializable types like numpy arrays
+                default=str,
             ))
-            # print(f"Streamed batch for IDs: {batch_ids}, curve_id: {curve_id}")
         else:
-            print(f"No data returned for batch: {batch_ids}")
+            print(f"No data returned for batch (scope={compute_scope}): {batch_ids}")
             await websocket.send_text(json.dumps({
                 "status": "batch_empty",
                 "message": "No curves returned for this batch",
-                "batch_ids": batch_ids
+                "batch_ids": batch_ids,
             }))
 
     except Exception as e:
-        print(f"Error processing batch {batch_ids}: {e}")
+        print(f"Error processing batch {batch_ids} (scope={compute_scope}): {e}")
         await websocket.send_text(json.dumps({
             "status": "batch_error",
             "message": f"Error processing batch: {str(e)}",
-            "batch_ids": batch_ids
+            "batch_ids": batch_ids,
         }))
     
 @app.on_event("startup")

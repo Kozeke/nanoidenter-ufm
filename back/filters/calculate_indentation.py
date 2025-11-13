@@ -1,3 +1,4 @@
+# Provides indentation calculation utilities for force curve processing workflows
 from typing import List, Optional
 import numpy as np
 
@@ -59,8 +60,17 @@ def calc_indentation(z_values: List[float], force_values: List[float], cp: List[
     # Calculate Xf (Z adjusted for contact point)
     xf = z_array - z_cp
     
+    # Prevent crash when upstream provides invalid spring constant data
+    try:
+        # Stores validated spring constant to keep division safe and stable
+        k = float(spring_constant)
+    except (TypeError, ValueError):
+        k = 1.0
+    if not np.isfinite(k) or k == 0.0:
+        k = 1.0
+
     # Calculate indentation (Zi) and force (Fi)
-    zi = xf - yf / spring_constant
+    zi = xf - yf / k
     fi = yf
     # print("zi", len(zi))
     # print("fi", len(fi))

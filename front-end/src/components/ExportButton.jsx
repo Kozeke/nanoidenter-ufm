@@ -1,3 +1,4 @@
+// Manages export dialog workflow and validation for data export operations.
 import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   Button,
@@ -123,6 +124,16 @@ const ExportButton = ({
     tip_radius: parseFloat(metadataObject.sample_row?.tip_radius) || 0
   });
 
+  // Provides a reusable helper to clear any error messages containing a specific token.
+  const clearErrorContains = useCallback((token) => {
+    if (!token) return;
+    setErrors((prev) =>
+      prev.filter((error) =>
+        typeof error === 'string' ? !error.toLowerCase().includes(token.toLowerCase()) : true
+      )
+    );
+  }, []);
+
   // Update editable metadata when database metadata changes
   useEffect(() => {
     // console.log('Metadata object:', metadataObject);
@@ -149,6 +160,56 @@ const ExportButton = ({
       });
     }
   }, [metadataObject.sample_row, initialMetadata]);
+
+  // Revalidates current step inputs whenever dependencies change to keep the wizard responsive.
+  useEffect(() => {
+    if (!open) return;
+
+    if (exportPath && selectedFormat) {
+      clearErrorContains('export path');
+    }
+
+    if (Array.isArray(levelNames) && levelNames.every((name) => name?.trim())) {
+      clearErrorContains('level names');
+    }
+
+    if (datasetPath?.trim()) {
+      clearErrorContains('dataset path');
+    }
+
+    if (metadataPath?.trim()) {
+      clearErrorContains('metadata path');
+    }
+
+    const d = editableSoftMechMetadata || {};
+    if (d.file_id?.trim()) {
+      clearErrorContains('file id');
+    }
+    if (d.date?.trim()) {
+      clearErrorContains('date is required');
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d.date || '')) {
+      clearErrorContains('date must be');
+    }
+    if (Number.isFinite(+d.spring_constant) && +d.spring_constant > 0) {
+      clearErrorContains('spring constant');
+    }
+    if ((d.tip_geometry || '').trim()) {
+      clearErrorContains('tip geometry');
+    }
+    if (Number.isFinite(+d.tip_radius) && +d.tip_radius >= 0) {
+      clearErrorContains('tip radius');
+    }
+  }, [
+    open,
+    exportPath,
+    selectedFormat,
+    levelNames,
+    datasetPath,
+    metadataPath,
+    editableSoftMechMetadata,
+    clearErrorContains,
+  ]);
 
   const getSteps = () => {
     if (selectedFormat === 'hdf5') {
@@ -338,6 +399,7 @@ const ExportButton = ({
     }
 
     setLoadingMetadata(true);
+    // Prevent crash if SoftMech metadata calculation temporarily fails.
     try {
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/calculate-softmech-metadata`, {
         method: 'POST',
@@ -439,6 +501,7 @@ const ExportButton = ({
   const handleSubmit = async () => {
     setLoading(true);
     setErrors([]); // Clear any previous errors
+    // Prevent crash if backend export fails or network issues occur.
     try {
       console.log("Export request - curveIds:", curveIds);
       console.log("Export request - numCurves:", numCurves);
@@ -581,8 +644,10 @@ const ExportButton = ({
   };
 
   const handleMetadataChange = (e) => {
-    setMetadata({ ...metadata, [e.target.name]: e.target.value });
-    setErrors(errors.filter((error) => !error.includes(metadataValidationRules[e.target.name]?.label || e.target.name)));
+    const { name, value } = e.target;
+    setMetadata({ ...metadata, [name]: value });
+    const token = metadataValidationRules[name]?.label || name;
+    clearErrorContains(token);
   };
 
   // Function to generate a simple textual preview of HDF5 structure
@@ -795,7 +860,9 @@ const ExportButton = ({
                         const newLevelNames = [...levelNames];
                         newLevelNames[index] = e.target.value;
                         setLevelNames(newLevelNames);
-                        setErrors([]);
+                      if (e.target.value.trim()) {
+                        clearErrorContains('level names');
+                      }
                       }}
                       fullWidth
                       margin="normal"
@@ -820,7 +887,9 @@ const ExportButton = ({
                     value={exportPath}
                     onChange={(e) => {
                       setExportPath(e.target.value);
-                      setErrors([]);
+                      if (e.target.value) {
+                        clearErrorContains('export path');
+                      }
                     }}
                     fullWidth
                     margin="normal"
@@ -832,7 +901,9 @@ const ExportButton = ({
                     value={datasetPath}
                     onChange={(e) => {
                       setDatasetPath(e.target.value);
-                      setErrors([]);
+                      if (e.target.value.trim()) {
+                        clearErrorContains('dataset path');
+                      }
                     }}
                     fullWidth
                     margin="normal"
@@ -847,7 +918,9 @@ const ExportButton = ({
                   value={metadataPath}
                   onChange={(e) => {
                     setMetadataPath(e.target.value);
-                    setErrors([]);
+                    if (e.target.value.trim()) {
+                      clearErrorContains('metadata path');
+                    }
                   }}
                   fullWidth
                   margin="normal"
@@ -971,7 +1044,9 @@ const ExportButton = ({
                     value={exportPath}
                     onChange={(e) => {
                       setExportPath(e.target.value);
-                      setErrors([]);
+                      if (e.target.value) {
+                        clearErrorContains('export path');
+                      }
                     }}
                     fullWidth
                     margin="normal"
@@ -1047,10 +1122,15 @@ const ExportButton = ({
                       <TextField
                         label="File ID"
                         value={editableSoftMechMetadata.file_id}
-                        onChange={(e) => setEditableSoftMechMetadata({
-                          ...editableSoftMechMetadata,
-                          file_id: e.target.value
-                        })}
+                        onChange={(e) => {
+                          setEditableSoftMechMetadata((prev) => ({
+                            ...prev,
+                            file_id: e.target.value,
+                          }));
+                          if (e.target.value.trim()) {
+                            clearErrorContains('file id');
+                          }
+                        }}
                         fullWidth
                         margin="normal"
                         required
@@ -1062,10 +1142,20 @@ const ExportButton = ({
                         label="Date"
                         type="date"
                         value={editableSoftMechMetadata.date}
-                        onChange={(e) => setEditableSoftMechMetadata({
-                          ...editableSoftMechMetadata,
-                          date: e.target.value
-                        })}
+                        onChange={(e) => {
+                          // Captures the updated date string for metadata validation.
+                          const value = e.target.value;
+                          setEditableSoftMechMetadata((prev) => ({
+                            ...prev,
+                            date: value,
+                          }));
+                          if (value.trim()) {
+                            clearErrorContains('date is required');
+                          }
+                          if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+                            clearErrorContains('date must be');
+                          }
+                        }}
                         fullWidth
                         margin="normal"
                         required
@@ -1078,10 +1168,17 @@ const ExportButton = ({
                         label="Spring Constant [N/m]"
                         type="number"
                         value={editableSoftMechMetadata.spring_constant}
-                        onChange={(e) => setEditableSoftMechMetadata({
-                          ...editableSoftMechMetadata,
-                          spring_constant: parseFloat(e.target.value) || 0
-                        })}
+                        onChange={(e) => {
+                          // Normalizes the spring constant input for validation feedback.
+                          const value = parseFloat(e.target.value) || 0;
+                          setEditableSoftMechMetadata((prev) => ({
+                            ...prev,
+                            spring_constant: value,
+                          }));
+                          if (value > 0) {
+                            clearErrorContains('spring constant');
+                          }
+                        }}
                         fullWidth
                         margin="normal"
                         required
@@ -1094,10 +1191,15 @@ const ExportButton = ({
                         <InputLabel>Tip Geometry</InputLabel>
                               <Select
                           value={editableSoftMechMetadata.tip_geometry}
-                          onChange={(e) => setEditableSoftMechMetadata({
-                            ...editableSoftMechMetadata,
-                            tip_geometry: e.target.value
-                          })}
+                          onChange={(e) => {
+                            setEditableSoftMechMetadata((prev) => ({
+                              ...prev,
+                              tip_geometry: e.target.value,
+                            }));
+                            if (e.target.value) {
+                              clearErrorContains('tip geometry');
+                            }
+                          }}
                           label="Tip Geometry"
                                 disabled={loading}
                               >
@@ -1112,10 +1214,18 @@ const ExportButton = ({
                         label="Tip Radius [nm]"
                         type="number"
                         value={editableSoftMechMetadata.tip_radius}
-                        onChange={(e) => setEditableSoftMechMetadata({
-                          ...editableSoftMechMetadata,
-                          tip_radius: parseFloat(e.target.value) || 0
-                        })}
+                        onChange={(e) => {
+                          // Captures the numeric tip radius so validation errors can clear reactively.
+                          const parsed = parseFloat(e.target.value);
+                          const normalized = Number.isFinite(parsed) ? parsed : 0;
+                          setEditableSoftMechMetadata((prev) => ({
+                            ...prev,
+                            tip_radius: normalized,
+                          }));
+                          if (normalized >= 0) {
+                            clearErrorContains('tip radius');
+                          }
+                        }}
                               fullWidth
                               margin="normal"
                         required
@@ -1143,10 +1253,15 @@ const ExportButton = ({
                   <TextField
                     label="File ID"
                     value={editableSoftMechMetadata.file_id}
-                    onChange={(e) => setEditableSoftMechMetadata({
-                      ...editableSoftMechMetadata,
-                      file_id: e.target.value
-                    })}
+                    onChange={(e) => {
+                      setEditableSoftMechMetadata((prev) => ({
+                        ...prev,
+                        file_id: e.target.value,
+                      }));
+                      if (e.target.value.trim()) {
+                        clearErrorContains('file id');
+                      }
+                    }}
                     fullWidth
                     margin="normal"
                     required
@@ -1157,10 +1272,20 @@ const ExportButton = ({
                     label="Date"
                     type="date"
                     value={editableSoftMechMetadata.date}
-                    onChange={(e) => setEditableSoftMechMetadata({
-                      ...editableSoftMechMetadata,
-                      date: e.target.value
-                    })}
+                    onChange={(e) => {
+                      // Stores the current date entry so validator errors clear in sync.
+                      const value = e.target.value;
+                      setEditableSoftMechMetadata((prev) => ({
+                        ...prev,
+                        date: value,
+                      }));
+                      if (value.trim()) {
+                        clearErrorContains('date is required');
+                      }
+                      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+                        clearErrorContains('date must be');
+                      }
+                    }}
                     fullWidth
                     margin="normal"
                     required
@@ -1172,10 +1297,17 @@ const ExportButton = ({
                     label="Spring Constant [N/m]"
                     type="number"
                     value={editableSoftMechMetadata.spring_constant}
-                    onChange={(e) => setEditableSoftMechMetadata({
-                      ...editableSoftMechMetadata,
-                      spring_constant: parseFloat(e.target.value) || 0
-                    })}
+                    onChange={(e) => {
+                      // Converts the spring constant to a number for clearing related errors.
+                      const value = parseFloat(e.target.value) || 0;
+                      setEditableSoftMechMetadata((prev) => ({
+                        ...prev,
+                        spring_constant: value,
+                      }));
+                      if (value > 0) {
+                        clearErrorContains('spring constant');
+                      }
+                    }}
                     fullWidth
                     margin="normal"
                     required
@@ -1187,10 +1319,15 @@ const ExportButton = ({
                     <InputLabel>Tip Geometry</InputLabel>
                     <Select
                       value={editableSoftMechMetadata.tip_geometry}
-                      onChange={(e) => setEditableSoftMechMetadata({
-                        ...editableSoftMechMetadata,
-                        tip_geometry: e.target.value
-                      })}
+                      onChange={(e) => {
+                        setEditableSoftMechMetadata((prev) => ({
+                          ...prev,
+                          tip_geometry: e.target.value,
+                        }));
+                        if (e.target.value) {
+                          clearErrorContains('tip geometry');
+                        }
+                      }}
                       label="Tip Geometry"
                     >
                       <MenuItem value="sphere">Sphere</MenuItem>
@@ -1204,10 +1341,18 @@ const ExportButton = ({
                     label="Tip Radius [nm]"
                     type="number"
                     value={editableSoftMechMetadata.tip_radius}
-                    onChange={(e) => setEditableSoftMechMetadata({
-                      ...editableSoftMechMetadata,
-                      tip_radius: parseFloat(e.target.value) || 0
-                    })}
+                    onChange={(e) => {
+                      // Maintains numeric tip radius to remove lingering validation errors promptly.
+                      const parsed = parseFloat(e.target.value);
+                      const normalized = Number.isFinite(parsed) ? parsed : 0;
+                      setEditableSoftMechMetadata((prev) => ({
+                        ...prev,
+                        tip_radius: normalized,
+                      }));
+                      if (normalized >= 0) {
+                        clearErrorContains('tip radius');
+                      }
+                    }}
                     fullWidth
                     margin="normal"
                     required
@@ -1274,7 +1419,9 @@ const ExportButton = ({
                     value={exportPath}
                     onChange={(e) => {
                       setExportPath(e.target.value);
-                      setErrors([]);
+                      if (e.target.value) {
+                        clearErrorContains('export path');
+                      }
                     }}
                     fullWidth
                     margin="normal"

@@ -1,22 +1,39 @@
+# Coordinates DuckDB data access, filtering, and caching for nanoindenter workflows
 import h5py
 import duckdb
+from typing import Dict, Tuple, List, Optional, AsyncGenerator
 from filters.filters.apply_filters import apply
 from filters.cpoints.apply_contact_point_filters import apply_cp_filters
 from filters.fmodels.apply_fmodels import apply_fmodels
 from filters.emodels.apply_emodels import apply_emodels
-from typing import Dict, Tuple, List, Optional
 from filters.register_all import register_filters
 import pandas as pd  # Ensure pandas is imported
-import json
 import hashlib
-import os
+import json
 import math
 import asyncio
-from typing import AsyncGenerator
 
-# Use the same DB path as main.py to avoid configuration conflicts
-# This should match DB_PATH in main.py exactly
-DB_PATH = os.path.join("data", "experiment.db")
+# Stores absolute DuckDB database path for analysis queries
+DB_PATH = "data/all.db"
+
+# Provide stable hash strings for filter dictionaries
+def _hash_dict(d: Dict) -> str:
+    """
+    Stable hash for a filter dictionary.
+    Empty dict -> 'no_filters' to avoid None handling in SQL.
+    """
+    if not d:
+        return "no_filters"
+    payload = json.dumps(d, sort_keys=True, separators=(",", ":"))
+    return hashlib.md5(payload.encode("utf-8")).hexdigest()
+
+# Ensure cache tables exist for hash-based curve caching
+def ensure_cache_tables(conn: duckdb.DuckDBPyConnection) -> None:
+    """
+    Ensure cache tables exist (contact_points, indentations, elspectra).
+    Delegates to _ensure_extended_cache_tables which defines the canonical schema.
+    """
+    _ensure_extended_cache_tables(conn)
 
 # Singleton connection to ensure consistent DuckDB configuration
 _conn_singleton = None
@@ -45,7 +62,8 @@ def _json_hash(obj) -> str:
     json_str = json.dumps(obj, sort_keys=True)
     return hashlib.md5(json_str.encode()).hexdigest()
 
-def ensure_cache_tables(conn: duckdb.DuckDBPyConnection):
+# Preserve legacy cache structures that store extended intermediate results
+def _ensure_extended_cache_tables(conn: duckdb.DuckDBPyConnection):
     """Create cache tables for contact_points, indentations, and elspectra if they don't exist."""
     # Create contact_points cache table
     conn.execute("""
@@ -168,7 +186,34 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         - graph_force_indentation: Dict with curves and domain for Force vs Indentation
         - graph_elspectra: Dict with curves and domain for Elspectra
     """
-    
+    # Stores request metadata overrides ensuring fallbacks for indentation defaults
+    meta = metadata or {}
+
+    # Prevent crash if metadata includes non-numeric spring constant
+    try:
+        # Provides finite fallback spring constant for indentation guards
+        k_default = float(meta.get("spring_constant", 1.0))
+    except (TypeError, ValueError):
+        k_default = 1.0
+    if not math.isfinite(k_default) or k_default == 0.0:
+        k_default = 1.0
+
+    # Prevent crash if metadata includes non-numeric tip radius
+    try:
+        # Supplies finite fallback tip radius used in indentation metadata
+        r_default = float(meta.get("tip_radius", 1e-5))
+    except (TypeError, ValueError):
+        r_default = 1e-5
+    if not math.isfinite(r_default) or r_default <= 0.0:
+        r_default = 1e-5
+
+    # Stores raw tip geometry metadata before sanitizing for SQL
+    tip_geometry_value = meta.get("tip_geometry", "sphere")
+    # Captures request-provided tip geometry fallback for indentation metadata
+    g_default = str(tip_geometry_value) if tip_geometry_value is not None else "sphere"
+    # Escapes default tip geometry for safe SQL literal embedding
+    g_default_sql = g_default.replace("'", "''")
+
     # Set default values for new parameters
     if elastic_model_params is None:
         elastic_model_params = {"maxInd": 800, "minInd": 0}
@@ -193,13 +238,18 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         else:
             numeric_curve_ids.append(cid)
     
+    # Guarantee cache tables exist before applying hash-based lookups
+    ensure_cache_tables(conn)
+
+    # Align zero-force flag with cached indentation rows
+    set_zero_force = True
+
     # Auto-enable single when exactly one curve and at least one model is requested
     if not single:
         if len(numeric_curve_ids) == 1 and (filters.get("f_models") or filters.get("e_models")):
             single = True
     
     # ---- CACHING SETUP ----
-    ensure_cache_tables(conn)  # safe to call repeatedly
     
     # Identify the active CP UDF + params (pick first enabled entry)
     active_cp = None
@@ -393,13 +443,13 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                         z_values, 
                         force_values, 
                         cp_values,
-                        spring_constant, 
+                        COALESCE(spring_constant, {k_default}), 
                         {set_zero_force}
                     ) AS indentation_result,
                     cp_values,
-                    spring_constant,
-                    tip_radius,
-                    tip_geometry
+                    COALESCE(spring_constant, {k_default}) AS spring_constant,
+                    COALESCE(tip_radius, {r_default}) AS tip_radius,
+                    COALESCE(tip_geometry, '{g_default_sql}') AS tip_geometry
                 FROM cp_data
                 WHERE cp_values IS NOT NULL
             ),
@@ -409,8 +459,8 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             SELECT 
                 b.curve_id,
                 b.indentation,
-                b.elspectra_result,
                 b.cp_values,
+                b.elspectra_result,
                 {'f.fmodel_values' if fmodels else 'NULL AS hertz_result'},
                 {'e.emodel_values' if emodels else 'NULL AS elastic_result'}
             FROM base_results b
@@ -420,42 +470,6 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         
         try:
             result_batch = conn.execute(batch_query).fetchall()
-            
-            # Persist newly computed CPs into cache
-            if cp_filters:
-                try:
-                    # 1) Materialize the CTE as a temp table
-                    conn.execute(f"""
-                        CREATE TEMP TABLE computed_cps AS
-                        SELECT curve_id, cp_values, spring_constant, tip_radius, tip_geometry
-                        FROM ({query_cp}) base
-                        WHERE curve_id NOT IN (
-                            SELECT curve_id FROM contact_points
-                            WHERE method = ? AND params_hash = ? AND curve_id IN ({ids_csv})
-                        )
-                        AND cp_values IS NOT NULL
-                    """, [cp_method, cp_params_hash])
-
-                    # 2) Remove stale rows for these curve_ids + (method, params_hash)
-                    conn.execute("""
-                        DELETE FROM contact_points
-                        WHERE method = ? AND params_hash = ?
-                          AND curve_id IN (SELECT curve_id FROM computed_cps)
-                    """, [cp_method, cp_params_hash])
-
-                    # 3) Insert fresh rows
-                    conn.execute("""
-                        INSERT INTO contact_points
-                            (curve_id, method, params_hash, cp_values, spring_constant, tip_radius, tip_geometry)
-                        SELECT curve_id, ?, ?, cp_values, spring_constant, tip_radius, tip_geometry
-                        FROM computed_cps
-                    """, [cp_method, cp_params_hash])
-
-                    # 4) Cleanup
-                    conn.execute("DROP TABLE computed_cps")
-                except Exception as cache_error:
-                    # Log but don't fail the main query if cache insert fails
-                    print(f"Warning: Failed to cache contact points: {cache_error}")
         except Exception as e:
             print(f"Error in combined batch query: {e}")
             raise
@@ -464,51 +478,53 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         curves_el = []
         curves_fparam = []
         curves_elasticity_param = []
+        # Collect contact point rows for deferred cache writes
+        cp_cache_rows = []
+        # Collect indentation rows for deferred cache writes
+        indent_cache_rows = []
         # print("result batch", result_batch)
         # print("emodels:", emodels)
         # print("single:", single)
         for i, row in enumerate(result_batch):
-            # Extract cp_values if present (added for caching)
-            if len(row) >= 5:
-                curve_id, indentation_result, elspectra_result, cp_values, hertz_result = row[0], row[1], row[2], row[3] if len(row) > 3 else None, row[4] if len(row) > 4 else None
-                if len(row) > 5:
-                    elastic_result = row[5]
-                else:
-                    elastic_result = None
-            else:
-                curve_id, indentation_result, elspectra_result, hertz_result, elastic_result = row[0], row[1], row[2], row[3] if len(row) > 3 else None, row[4] if len(row) > 4 else None
-                cp_values = None
+            curve_id, indentation_result, cp_values, elspectra_result, hertz_result, elastic_result = row
             # print("indentation_result",indentation_result)
             # print("elspectra_result", elspectra_result)
             # print("elastic_result", elastic_result)
+            # --- Cache contact point, if present ---
+            if cp_values is not None and cp_method is not None and cp_params_hash is not None:
+                cp_cache_rows.append(
+                    (
+                        int(curve_id),
+                        cp_method,
+                        cp_params_hash,
+                        cp_values,
+                        metadata.get("spring_constant") if metadata else None,
+                        metadata.get("tip_radius") if metadata else None,
+                        metadata.get("tip_geometry") if metadata else None,
+                    )
+                )
+
             if indentation_result is not None:
                 zi, fi = indentation_result
+
+                # --- Cache indentation: indentations(curve_id, cp_hash, zi, fi) ---
+                # Prevent cache hashing failures from crashing batch processing
+                try:
+                    cp_hash = _json_hash(cp_values) if cp_values is not None else None
+                except Exception:
+                    cp_hash = None
+
+                if cp_hash is not None:
+                    indent_cache_rows.append(
+                        (int(curve_id), cp_hash, zi, fi)
+                    )
+
                 curves_cp.append({
                     "curve_id": f"curve{curve_id}",
                     "x": zi,
                     "y": fi
                 })
                 
-                # Cache indentation result using cp_hash
-                try:
-                    # Compute cp_hash from cp_values for this curve
-                    if cp_values is not None:
-                        cp_hash = _json_hash(cp_values)
-                        # Insert into cache (ON CONFLICT DO NOTHING for DuckDB compatibility)
-                        # DuckDB doesn't support ON CONFLICT, so we check first
-                        existing = conn.execute("""
-                            SELECT curve_id FROM indentations 
-                            WHERE curve_id = ? AND cp_hash = ?
-                        """, [int(curve_id), cp_hash]).fetchone()
-                        
-                        if not existing:
-                            conn.execute("""
-                                INSERT INTO indentations (curve_id, cp_hash, zi, fi)
-                                VALUES (?, ?, ?, ?)
-                            """, [int(curve_id), cp_hash, zi, fi])
-                except Exception as cache_err:
-                    # Log but don't fail the main query if cache insert fails
-                    print(f"Warning: Failed to cache indentation for curve {curve_id}: {cache_err}")
                 if hertz_result is not None and fmodels and single:
                     # print("hertz_result", len(hertz_result))
                     x, y, fparam = hertz_result
@@ -520,8 +536,10 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                     })
                     # 👉 Append fparam with curve index - return all parameters
                     curves_fparam.append({
+                        "curve_id": f"{curve_id}_hertz",
+                        "params": fparam,
                         "curve_index": i,
-                        "fparam": fparam  # Return all parameters, not just fparam[0]
+                        "fparam": fparam  # Preserve legacy fields for frontend compatibility
                     })
             
             
@@ -581,6 +599,27 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                         "elasticity_param": elasticity_param
                     })
         
+        # --- Persist caches (ignore duplicates) ---
+        if cp_cache_rows:
+            conn.executemany(
+                """
+                INSERT INTO contact_points (curve_id, method, params_hash, cp_values, spring_constant, tip_radius, tip_geometry)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (curve_id, method, params_hash) DO NOTHING
+                """,
+                cp_cache_rows,
+            )
+
+        if indent_cache_rows:
+            conn.executemany(
+                """
+                INSERT INTO indentations (curve_id, cp_hash, zi, fi)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT (curve_id, cp_hash) DO NOTHING
+                """,
+                indent_cache_rows,
+            )
+
         print("cp filters applied, batch indentation and elspectra calculated")
         print("curves_elasticity_param count:", len(curves_elasticity_param))
         all_curves_data = {

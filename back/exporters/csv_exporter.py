@@ -1,3 +1,4 @@
+# Coordinates CSV export responsibilities across raw dumps, averaged curves, and scatter datasets for SoftMech-compatible tooling.
 import csv
 from typing import Dict, Any, List, Optional, Tuple
 import logging
@@ -18,7 +19,9 @@ class CSVExporter(Exporter):
         
         export_type = data.get("export_type", "raw")
         if export_type == "raw":
-            if "metadata" not in data or not isinstance(data["metadata"], dict):
+            # Captures provided export metadata supporting legacy `metadata` and new `softmech_metadata` payloads.
+            metadata_payload = data.get("metadata") or data.get("softmech_metadata")
+            if not isinstance(metadata_payload, dict):
                 raise ValueError("metadata must be provided as a dictionary for raw exports")
         
         if export_type not in ["raw", "average", "scatter"]:
@@ -42,6 +45,8 @@ class CSVExporter(Exporter):
 
     def _export_raw_data(self, db_path: str, output_path: str, curve_ids: Optional[List[int]] = None, **kwargs) -> int:
         """Export raw curve data (original functionality)"""
+        # Prevent exporter crash if underlying DuckDB access or file IO fails during raw dump.
+        # Prevent exporter crash if curve aggregation or downstream file handling encounters invalid data.
         try:
             with duckdb.connect(db_path) as conn:
                 query = """
@@ -63,9 +68,9 @@ class CSVExporter(Exporter):
             with open(output_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 
-                # Write metadata
-                metadata = kwargs.get("metadata", {})
-                for key, value in metadata.items():
+                # Represents request-level metadata combining legacy `metadata` and new `softmech_metadata`.
+                metadata_payload = kwargs.get("metadata") or kwargs.get("softmech_metadata") or {}
+                for key, value in metadata_payload.items():
                     writer.writerow([key, value])
                 
                 num_exported = 0
@@ -114,6 +119,7 @@ class CSVExporter(Exporter):
 
     def _export_average_curves(self, db_path: str, output_path: str, curve_ids: Optional[List[int]] = None, **kwargs) -> int:
         """Export averaged curves with statistical analysis (SoftMech average exporter)"""
+        # Prevent exporter crash if averaged curve aggregation or file IO encounters unexpected issues.
         try:
             dataset_type = kwargs.get("dataset_type", "Force")
             direction = kwargs.get("direction", "V")
@@ -379,6 +385,7 @@ class CSVExporter(Exporter):
         - sorts by x increasing and removes duplicate x (keeps first)
         - returns (x, y) or None if not enough valid points
         """
+        # Prevent sanitization from crashing when inputs contain unexpected types or shapes.
         try:
             x_arr = np.asarray(x_raw, dtype=np.float64)
             y_arr = np.asarray(y_raw, dtype=np.float64)
@@ -386,6 +393,7 @@ class CSVExporter(Exporter):
             # fallback path for object arrays with mixed types
             x_list, y_list = [], []
             for xi, yi in zip(x_raw, y_raw):
+                # Skip values that cannot be coerced to float while preserving valid pairs.
                 try:
                     xf = float(xi)
                     yf = float(yi)
@@ -554,7 +562,8 @@ class CSVExporter(Exporter):
         """Safely convert data to float64 array, handling mixed types and None values"""
         if data is None:
             return None
-        
+
+        # Prevent data conversion helper from crashing when unexpected or mixed input types arrive.
         try:
             # Convert to numpy array first
             arr = np.asarray(data)
@@ -573,6 +582,7 @@ class CSVExporter(Exporter):
                 numeric_data = []
                 for item in arr:
                     if item is not None:
+                        # Skip entries that fail float conversion to continue processing remaining values.
                         try:
                             numeric_data.append(float(item))
                         except (ValueError, TypeError):

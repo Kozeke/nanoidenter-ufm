@@ -81,8 +81,8 @@ def create_contact_point_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
             if result is not None and len(result) > 0 and len(result[0]) >= 2:
                 xcp = result[0][0]
                 ycp = result[0][1]
-                print(f"[DEBUG] CP raw values: xcp={xcp}, ycp={ycp}")
-                print(f"[DEBUG] Z range: {np.min(x_values)} to {np.max(x_values)}")
+                # print(f"[DEBUG] CP raw values: xcp={xcp}, ycp={ycp}")
+                # print(f"[DEBUG] Z range: {np.min(x_values)} to {np.max(x_values)}")
             
             if result is None:
                 # print(f"  ❌ Result is None - no contact point found")

@@ -1,0 +1,33 @@
+# Root ignore rules for backend artifacts and generated experiment data
+back/__pycache__/
+back/__pycache__/main.cpython-310.pyc
+back/file_types/__pycache__/json.cpython-310.pyc
+back/file_types/__pycache__/hdf5.cpython-310.pyc
+back/file_types/__pycache__/csv.cpython-310.pyc
+back/file_types/__pycache__/__init__.cpython-310.pyc
+back/hdf5_processing.log
+back/__pycache__/db.cpython-310.pyc
+back/__pycache__/main.cpython-310.pyc
+back/data/experiment.db
+back/data/experiment.db.wal
+back/exporters/__pycache__/__init__.cpython-310.pyc
+back/exporters/__pycache__/base.cpython-310.pyc
+back/exporters/__pycache__/csv_exporter.cpython-310.pyc
+back/exporters/__pycache__/hdf5_exporter.cpython-310.pyc
+back/exporters/__pycache__/json_exporter.cpython-310.pyc
+back/exporters/__pycache__/txt_exporter.cpython-310.pyc
+back/__pycache__/db.cpython-310.pyc
+back/__pycache__/main.cpython-310.pyc
+back/data/experiment.db
+
+# Broad patterns to cover new generated artifacts
+__pycache__/
+*.py[cod]
+*.db
+*.hdf5
+*.log
+back/exports/*.csv
+back/exports/*.h5
+back/exports/*.hdf5
+back/exports/
+back/uploads/
