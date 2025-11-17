@@ -4,6 +4,7 @@ import {
   Button,
   Collapse,
   FormControl,
+  FormHelperText,
   Grid,
   InputLabel,
   MenuItem,
@@ -129,10 +130,12 @@ const SingleSelectFilter = ({
   onChange,
   capitalizeFilterName,
   size = "small",
-  sx = fieldFontSx
+  sx = fieldFontSx,
+  disabled = false,
+  helperText = null
 }) => (
   <Grid item xs={3}>
-    <FormControl fullWidth size={size}>
+    <FormControl fullWidth size={size} disabled={disabled}>
       <InputLabel id={`${label.toLowerCase()}-label`} sx={sx}>
         {label}
       </InputLabel>
@@ -174,9 +177,15 @@ const SingleSelectFilter = ({
             onChange(syntheticEvent);
           }
         }}
-        renderValue={(selected) => selected ? capitalizeFilterName(selected) : "Select..."}
+        renderValue={(selected) => selected ? capitalizeFilterName(selected) : (disabled ? "Enter Curve ID first" : "Select...")}
         sx={sx}
+        disabled={disabled}
       >
+        {!disabled && (
+          <MenuItem value="">
+            <em>None</em>
+          </MenuItem>
+        )}
         {options.map((name) => (
           <MenuItem key={name} value={name}>
             <ListItemText
@@ -186,6 +195,11 @@ const SingleSelectFilter = ({
           </MenuItem>
         ))}
       </Select>
+      {helperText && (
+        <FormHelperText sx={{ fontSize: 11, mt: 0.5 }}>
+          {helperText}
+        </FormHelperText>
+      )}
     </FormControl>
   </Grid>
 );
@@ -213,6 +227,7 @@ const FiltersComponent = ({
   handleFilterChange,
   sendCurveRequest,
   activeTab,
+  canUseModels,
   onForceModelChange,
   selectedForceModel,
   selectedParameters,
@@ -236,8 +251,13 @@ const FiltersComponent = ({
   open,
   onToggle,
   fparamsProgress,
-  eparamsProgress
+  eparamsProgress,
+  // Disable filters when socket is down
+  isSocketConnected,
 }) => {
+  // Derives a flag indicating whether controls should be disabled.
+  const isDisabled = !isSocketConnected;
+
   // Remove local "isOpen" as the source of truth; rely on `open` from props
   // Toggle handler that calls parent's onToggle function
   const toggleFilters = () => {
@@ -326,7 +346,13 @@ const FiltersComponent = ({
     >
 
       {/* Filters Toolbar Card */}
-      <Box sx={headerCardSx}>
+      <Box
+        sx={{
+          ...headerCardSx,
+          opacity: isDisabled ? 0.6 : 1,
+          pointerEvents: isDisabled ? "none" : "auto",
+        }}
+      >
         <Typography variant="h6" sx={sectionTitleSx}>Filters</Typography>
 
         {/* Multi/Single selects row (wrap on small screens) */}
@@ -351,27 +377,41 @@ const FiltersComponent = ({
             sx={fieldFontSx}
           />
 
+          {/* Always show Force model select, disabled when not in single-curve mode */}
           {activeTab === "forceIndentation" && (
             <SingleSelectFilter
               label="Force"
               options={Object.keys(forceModelDefaults || {})}
               value={safeForceModels}
-              onChange={handleForceChange}
+              onChange={canUseModels ? handleForceChange : () => {}}
               capitalizeFilterName={capitalizeFilterName}
               size="small"
               sx={fieldFontSx}
+              disabled={!canUseModels}
+              helperText={
+                !canUseModels
+                  ? "Enter a Curve ID to enable models."
+                  : ""
+              }
             />
           )}
 
+          {/* Always show Elasticity model select, disabled when not in single-curve mode */}
           {activeTab === "elasticitySpectra" && (
             <SingleSelectFilter
               label="Elasticity"
               options={Object.keys(elasticityModelDefaults || {})}
               value={safeElasticityModels}
-              onChange={handleElasticityChange}
+              onChange={canUseModels ? handleElasticityChange : () => {}}
               capitalizeFilterName={capitalizeFilterName}
               size="small"
               sx={fieldFontSx}
+              disabled={!canUseModels}
+              helperText={
+                !canUseModels
+                  ? "Enter a Curve ID to enable models."
+                  : ""
+              }
             />
           )}
         </Grid>
@@ -423,6 +463,7 @@ const FiltersComponent = ({
         setZeroForce={setZeroForce}
         onSetZeroForceChange={onSetZeroForceChange}
         activeTab={activeTab}
+        canUseModels={canUseModels}
         elasticityParams={elasticityParams}
         onElasticityParamsChange={onElasticityParamsChange}
         forceModelParams={forceModelParams}

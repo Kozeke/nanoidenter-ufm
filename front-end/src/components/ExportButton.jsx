@@ -1,5 +1,5 @@
-// Manages export dialog workflow and validation for data export operations.
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+// Renders the export button UI and dialog workflow using the useExportDialog hook.
+import React from 'react';
 import {
   Button,
   Dialog,
@@ -22,8 +22,7 @@ import {
   Tooltip,
   Divider,
 } from '@mui/material';
-import { saveAs } from 'file-saver';
-import { useMetadata } from './Dashboard'; // Adjust import path
+import { useExportDialog } from '../hooks/useExportDialog';
 
 // --- Unified action button styles (same as other toolbars) ---
 const actionBtnStyle = (variant = "primary", disabled = false) => {
@@ -72,606 +71,85 @@ const pressable = {
 };
 
 const ExportButton = ({ 
-  curveIds = [], 
-  numCurves = 10, 
-  isMetadataReady,
-  // Add filter props from Dashboard
-  regularFilters = {},
-  cpFilters = {},
-  forceModels = {},
-  elasticityModels = {},
-  renderTrigger
+  // Optional custom trigger renderer; defaults to a simple button.
+  renderTrigger,
 }) => {
-  
-  const { metadataObject } = useMetadata();
-  const initialMetadata = useMemo(() => ({
-    file_id: String(metadataObject.sample_row?.file_id ?? ''),
-    date: String(metadataObject.sample_row?.date ?? ''),
-    spring_constant: String(metadataObject.sample_row?.spring_constant ?? ''),
-    tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
-    tip_radius: String(metadataObject.sample_row?.tip_radius ?? ''),
-  }), [metadataObject.sample_row]);
-  const [open, setOpen] = useState(false);
-  const [step, setStep] = useState(0);
-  const [selectedFormat, setSelectedFormat] = useState('');
-  const [exportPath, setExportPath] = useState('');
-  const [levelNames, setLevelNames] = useState(['curve0', 'segment0']); // Default level names
-  const [metadataPath, setMetadataPath] = useState('curve0/segment0/tip');
-  const [metadata, setMetadata] = useState(initialMetadata);
-  // console.log(metadata)
-  const [errors, setErrors] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [anchorEl, setAnchorEl] = useState(null);
-  const [datasetPath, setDatasetPath] = useState('curve0/segment0/dataset'); // New field
-
-  // SoftMech-style export options
-  const [exportType, setExportType] = useState('raw');
-  const [datasetType, setDatasetType] = useState('Force');
-  const [direction, setDirection] = useState('V');
-  const [loose, setLoose] = useState(100);
-
-  // Calculated SoftMech metadata
-  const [calculatedMetadata, setCalculatedMetadata] = useState(null);
-  const [loadingMetadata, setLoadingMetadata] = useState(false);
-  
-  // Editable SoftMech metadata (for step 3) - Essential fields only
-  // Initialize with existing database values
-  const [editableSoftMechMetadata, setEditableSoftMechMetadata] = useState({
-    file_id: String(metadataObject.sample_row?.file_id ?? ''),
-    date: String(metadataObject.sample_row?.date ?? ''),
-    spring_constant: parseFloat(metadataObject.sample_row?.spring_constant) || 0,
-    tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
-    tip_radius: parseFloat(metadataObject.sample_row?.tip_radius) || 0
-  });
-
-  // Provides a reusable helper to clear any error messages containing a specific token.
-  const clearErrorContains = useCallback((token) => {
-    if (!token) return;
-    setErrors((prev) =>
-      prev.filter((error) =>
-        typeof error === 'string' ? !error.toLowerCase().includes(token.toLowerCase()) : true
-      )
-    );
-  }, []);
-
-  // Update editable metadata when database metadata changes
-  useEffect(() => {
-    // console.log('Metadata object:', metadataObject);
-    // console.log('Sample row:', metadataObject.sample_row);
-    if (metadataObject.sample_row) {
-      const newMetadata = {
-        file_id: String(metadataObject.sample_row?.file_id ?? ''),
-        date: String(metadataObject.sample_row?.date ?? ''),
-        spring_constant: parseFloat(metadataObject.sample_row?.spring_constant) || 0,
-        tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
-        tip_radius: parseFloat(metadataObject.sample_row?.tip_radius) || 0
-      };
-      // console.log('Setting editable metadata from database:', newMetadata);
-      setEditableSoftMechMetadata(newMetadata);
-    } else {
-      // Fallback to initial metadata if no database values
-      // console.log('No database metadata, using initial metadata:', initialMetadata);
-      setEditableSoftMechMetadata({
-        file_id: String(initialMetadata.file_id ?? ''),
-        date: String(initialMetadata.date ?? ''),
-        spring_constant: parseFloat(initialMetadata.spring_constant) || 0,
-        tip_geometry: String(initialMetadata.tip_geometry ?? 'sphere'),
-        tip_radius: parseFloat(initialMetadata.tip_radius) || 0
-      });
-    }
-  }, [metadataObject.sample_row, initialMetadata]);
-
-  // Revalidates current step inputs whenever dependencies change to keep the wizard responsive.
-  useEffect(() => {
-    if (!open) return;
-
-    if (exportPath && selectedFormat) {
-      clearErrorContains('export path');
-    }
-
-    if (Array.isArray(levelNames) && levelNames.every((name) => name?.trim())) {
-      clearErrorContains('level names');
-    }
-
-    if (datasetPath?.trim()) {
-      clearErrorContains('dataset path');
-    }
-
-    if (metadataPath?.trim()) {
-      clearErrorContains('metadata path');
-    }
-
-    const d = editableSoftMechMetadata || {};
-    if (d.file_id?.trim()) {
-      clearErrorContains('file id');
-    }
-    if (d.date?.trim()) {
-      clearErrorContains('date is required');
-    }
-    if (/^\d{4}-\d{2}-\d{2}$/.test(d.date || '')) {
-      clearErrorContains('date must be');
-    }
-    if (Number.isFinite(+d.spring_constant) && +d.spring_constant > 0) {
-      clearErrorContains('spring constant');
-    }
-    if ((d.tip_geometry || '').trim()) {
-      clearErrorContains('tip geometry');
-    }
-    if (Number.isFinite(+d.tip_radius) && +d.tip_radius >= 0) {
-      clearErrorContains('tip radius');
-    }
-  }, [
+  const {
+    isMetadataReady,
+    isExporting,
     open,
-    exportPath,
+    step,
     selectedFormat,
+    exportPath,
     levelNames,
-    datasetPath,
     metadataPath,
+    datasetPath,
+    metadata,
+    errors,
+    loading,
+    exportType,
+    datasetType,
+    direction,
+    loose,
+    calculatedMetadata,
+    loadingMetadata,
     editableSoftMechMetadata,
+    curveIds,
+    numCurves,
+    regularFilters,
+    cpFilters,
+    forceModels,
+    elasticityModels,
+    setOpen,
+    setExportPath,
+    setLevelNames,
+    setMetadataPath,
+    setDatasetPath,
     clearErrorContains,
-  ]);
+    setExportType,
+    setDatasetType,
+    setDirection,
+    setLoose,
+    setEditableSoftMechMetadata,
+    handleExportStart: hookHandleExportStart,
+    handleNext,
+    handleBack,
+    handleSubmit,
+    getSteps,
+    getStepDescription,
+    generateHdf5Preview,
+    handleMetadataChange,
+    handleStepClick,
+    metadataValidationRules,
+  } = useExportDialog();
 
-  const getSteps = () => {
-    if (selectedFormat === 'hdf5') {
-      return [
-        'Name Dataset Levels',
-        'Select Dataset Save Location',
-        'Select Metadata Save Location',
-        'Enter Metadata',
-        'Confirm Export',
-      ];
-    } else if (selectedFormat === 'csv') {
-      return [
-        'Select Export Type',
-        'Select Save Location',
-        'Edit SoftMech Metadata',
-        'Confirm Export',
-      ];
-    } else {
-      return [
-        'Select Save Location',
-        'Enter Metadata',
-        'Confirm Export',
-      ];
-    }
-  };
+  // Controls the menu anchor element for the format selection dropdown.
+  const [anchorEl, setAnchorEl] = React.useState(null);
 
-  const getStepDescription = () => {
-    const isHdf5 = selectedFormat === 'hdf5';
-    const isCsv = selectedFormat === 'csv';
-    if (isHdf5) {
-      return [
-        'Define names for the dataset levels (e.g., groups like curve0, segment0).',
-        'Enter the file path and dataset path where the HDF5 datasets will be saved.',
-        'Specify the group or dataset path where metadata will be saved.',
-        'Enter or verify the metadata fields for the exported file.',
-        'Review the export details before saving the file.',
-      ][step];
-    } else if (isCsv) {
-      return [
-        'Choose the type of CSV export: Raw data, Average curves, or Scatter data.',
-        `Enter the file path where the ${selectedFormat.toUpperCase()} file will be saved.`,
-        'Edit the calculated SoftMech metadata fields before export.',
-        'Review the export details before saving the file.',
-      ][step];
-    } else {
-      return [
-        `Enter the file path where the ${selectedFormat.toUpperCase()} file will be saved.`,
-        'Enter or verify the metadata fields for the exported file.',
-        'Review the export details before saving the file.',
-      ][step];
-    }
-  };
+  // Opens the format selection menu.
+  const handleMenuOpen = (e) => setAnchorEl(e.currentTarget);
 
-  // Metadata validation rules - Essential fields only
-  const metadataValidationRules = {
-    file_id: { required: true, label: 'File ID', type: 'text' },
-    date: { required: true, label: 'Date', type: 'text', regex: /^\d{4}-\d{2}-\d{2}$/, regexError: 'Date must be in YYYY-MM-DD format' },
-    spring_constant: { required: true, label: 'Spring Constant (N/m)', type: 'number', min: 0 },
-    tip_geometry: { required: true, label: 'Tip Geometry', type: 'select', options: ['sphere', 'cylinder', 'cone', 'pyramid'] },
-    tip_radius: { required: true, label: 'Tip Radius (nm)', type: 'number', min: 0 },
-  };
+  // Closes the format selection menu.
+  const handleMenuClose = () => setAnchorEl(null);
 
-  const validateExportPath = () => {
-    if (!exportPath || !exportPath.endsWith(`.${selectedFormat}`)) {
-      setErrors([`Export path must be a valid ${selectedFormat.toUpperCase()} file path (e.g., exports/processed_data.${selectedFormat})`]);
-      return false;
-    }
-    setErrors([]);
-    return true;
-  };
-
-  const validateLevelNames = () => {
-    if (levelNames.some(name => !name.trim())) {
-      setErrors(['All level names must be non-empty']);
-      return false;
-    }
-    setErrors([]);
-    return true;
-  };
-  const validateDatasetPath = () => {
-    if (!datasetPath.trim()) {
-      setErrors(['Dataset path is required']);
-      return false;
-    }
-    setErrors([]);
-    return true;
-  };
-  const validateMetadataPath = () => {
-    if (!metadataPath.trim()) {
-      setErrors(['Metadata path is required']);
-      return false;
-    }
-    setErrors([]);
-    return true;
-  };
-
-  const validateMetadata = () => {
-    const newErrors = [];
-    
-    // For CSV exports (both raw and non-raw), validate the editable metadata
-    if (selectedFormat === 'csv') {
-      const softmechData = editableSoftMechMetadata;
-      
-      // Validate file ID
-      if (!softmechData.file_id || softmechData.file_id.trim() === '') {
-        newErrors.push('File ID is required');
-      }
-      
-      // Validate date
-      if (!softmechData.date || softmechData.date.trim() === '') {
-        newErrors.push('Date is required');
-      } else {
-        // Validate date format (YYYY-MM-DD)
-        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-        if (!dateRegex.test(softmechData.date)) {
-          newErrors.push('Date must be in YYYY-MM-DD format');
-        }
-      }
-      
-      // Validate spring constant
-      if (softmechData.spring_constant <= 0 || softmechData.spring_constant > 1000) {
-        newErrors.push('Spring constant must be greater than 0 and less than 1000 N/m');
-      }
-      
-      // Validate tip geometry
-      if (!softmechData.tip_geometry || !['sphere', 'cylinder', 'cone', 'pyramid'].includes(softmechData.tip_geometry)) {
-        newErrors.push('Tip geometry must be sphere, cylinder, cone, or pyramid');
-      }
-      
-      // Validate tip radius
-      if (softmechData.tip_radius <= 0 || softmechData.tip_radius > 1e6) {
-        newErrors.push('Tip radius must be greater than 0 and less than 1,000,000 nm');
-      }
-    } else {
-      // Original validation for other formats (HDF5, JSON, TXT, etc.)
-      Object.entries(metadata).forEach(([key, value]) => {
-        const rule = metadataValidationRules[key] || { required: false, label: key };
-        if (rule.required && (!value || value.toString().trim() === '')) {
-          newErrors.push(`${rule.label} is required`);
-        }
-        if (rule.type === 'number' && value) {
-          const numValue = parseFloat(value);
-          if (isNaN(numValue)) {
-            newErrors.push(`${rule.label} must be a valid number`);
-          } else if (rule.min !== undefined && numValue <= rule.min) {
-            newErrors.push(`${rule.label} must be greater than ${rule.min}`);
-          }
-        }
-        if (rule.regex && value && !rule.regex.test(value)) {
-          newErrors.push(rule.regexError || `${rule.label} is invalid`);
-        }
-      });
-    }
-    
-    setErrors(newErrors);
-    return newErrors.length === 0;
-  };
-
-  const handleMenuOpen = (event) => {
-    setAnchorEl(event.currentTarget);
-  };
-
-  const handleMenuClose = () => {
-    setAnchorEl(null);
-  };
-
+  // Wraps the hook's handleExportStart to also close the menu.
   const handleExportStart = (format) => {
     handleMenuClose();
-    setSelectedFormat(format);
-    setExportPath(`exports/processed_data.${format}`);
-    setOpen(true);
-    setStep(0);
-    setErrors([]);
-    // Reset SoftMech options for CSV
-    if (format === 'csv') {
-      setExportType('raw');
-      setDatasetType('Force');
-      setDirection('V');
-      setLoose(100);
-      setCalculatedMetadata(null);
-    }
-  };
-
-  const fetchCalculatedMetadata = useCallback(async () => {
-    if (selectedFormat !== 'csv' || exportType === 'raw') {
-      return;
-    }
-
-    setLoadingMetadata(true);
-    // Prevent crash if SoftMech metadata calculation temporarily fails.
-    try {
-      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/calculate-softmech-metadata`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          curve_ids: curveIds.length > 0 ? curveIds : undefined,
-          num_curves: curveIds.length > 0 ? undefined : numCurves,
-          export_type: exportType,
-          dataset_type: datasetType,
-          direction: direction,
-          loose: loose,
-          filters: {
-            regular: regularFilters,
-            cp_filters: cpFilters,
-            f_models: forceModels,
-            e_models: elasticityModels
-          }
-        }),
-      });
-
-      if (response.ok) {
-        const result = await response.json();
-        if (result.status === 'success') {
-          const metadata = result.calculated_metadata;
-          // console.log('Calculated metadata received:', metadata);
-          setCalculatedMetadata(metadata);
-          // Also set the editable metadata for step 3 with proper type conversion
-          // Use calculated metadata as fallback if database values are not available
-          const newEditableMetadata = {
-            file_id: metadata.file_id || '',
-            date: metadata.date || '',
-            spring_constant: parseFloat(metadata.elastic_constant_nm) || 0,
-            tip_geometry: metadata.tip_shape || 'sphere',
-            tip_radius: parseFloat(metadata.tip_radius_nm) > 1e6 ? 10000 : parseFloat(metadata.tip_radius_nm) || 0
-          };
-          // console.log('Setting editable metadata from calculated:', newEditableMetadata);
-          setEditableSoftMechMetadata(newEditableMetadata);
-        }
-      }
-    } catch (error) {
-      // console.error('Failed to fetch calculated metadata:', error);
-    } finally {
-      setLoadingMetadata(false);
-    }
-  }, [selectedFormat, exportType, datasetType, direction, loose, curveIds, numCurves, regularFilters, cpFilters, forceModels, elasticityModels]);
-
-  const handleNext = () => {
-    const isHdf5 = selectedFormat === 'hdf5';
-    const isCsv = selectedFormat === 'csv';
-    if (isHdf5) {
-      if (step === 0 && !validateLevelNames()) return;
-      if (step === 1 && (!validateExportPath() || !validateDatasetPath())) return;
-      if (step === 2 && !validateMetadataPath()) return;
-      if (step === 3 && !validateMetadata()) {
-        alert('Please fix the metadata errors before submitting.');
-        return;
-      }
-    } else if (isCsv) {
-      if (step === 0) {
-        // For CSV, after step 0 (export type selection), fetch metadata immediately
-        setStep(step + 1);
-        if (exportType !== 'raw') {
-          fetchCalculatedMetadata();
-        }
-        return;
-      }
-      if (step === 1 && !validateExportPath()) return;
-      if (step === 2) {
-        // Step 2: SoftMech metadata editing - no validation needed, user can edit
-        setStep(step + 1);
-        return;
-      }
-      if (step === 3 && !validateMetadata()) {
-        alert('Please fix the metadata errors before submitting.');
-        return;
-      }
-    } else {
-      if (step === 0 && !validateExportPath()) return;
-      if (step === 1 && !validateMetadata()) {
-        alert('Please fix the metadata errors before submitting.');
-        return;
-      }
-    }
-    const currentSteps = getSteps();
-    if (step < currentSteps.length - 1) {
-      setStep(step + 1);
-    } else {
-      handleSubmit();
-    }
-  };
-
-  const handleBack = () => {
-    if (step > 0) {
-      setStep(step - 1);
-      setErrors([]);
-    }
-  };
-
-  const handleSubmit = async () => {
-    setLoading(true);
-    setErrors([]); // Clear any previous errors
-    // Prevent crash if backend export fails or network issues occur.
-    try {
-      console.log("Export request - curveIds:", curveIds);
-      console.log("Export request - numCurves:", numCurves);
-      
-      // Prepare payload with level names and metadata
-        const payload = {
-          [`export_path`]: exportPath,
-          curve_ids: curveIds.length > 0 ? curveIds : undefined,
-          num_curves: curveIds.length > 0 ? undefined : numCurves,
-          ...(selectedFormat === 'hdf5' && {
-            level_names: levelNames,
-            metadata_path: metadataPath,
-            dataset_path: datasetPath,
-          }),
-          // Add SoftMech-style export parameters for CSV
-          ...(selectedFormat === 'csv' && {
-            export_type: exportType,
-            dataset_type: datasetType,
-            direction: exportType !== 'raw' ? editableSoftMechMetadata.direction : direction,
-            loose: exportType !== 'raw' ? editableSoftMechMetadata.loose : loose,
-            // Pass the actual filters from the frontend
-            filters: {
-              regular: regularFilters,
-              cp_filters: cpFilters,
-              f_models: forceModels,
-              e_models: elasticityModels
-            },
-            // Pass editable metadata for all CSV exports (both raw and non-raw)
-              softmech_metadata: editableSoftMechMetadata
-          }),
-          // Only include metadata for non-CSV exports (HDF5, JSON, TXT, etc.)
-          ...(selectedFormat !== 'csv') && {
-            metadata: Object.fromEntries(
-              Object.entries(metadata).map(([key, value]) => [
-                key,
-                metadataValidationRules[key]?.type === 'number' ? parseFloat(value) || 0 : value,
-              ])
-            ),
-          },
-        };
-
-      // Call backend export endpoint
-      const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/export/${selectedFormat}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      if (!response.ok) {
-        try {
-          const errorData = await response.json();
-          console.error('Backend export error:', errorData);
-          
-          // Handle different error response formats
-          let errorMessages = [];
-          
-          if (errorData.detail) {
-            if (typeof errorData.detail === 'object') {
-              // Backend returns error details in the 'detail' field
-              errorMessages = errorData.detail.errors || [errorData.detail.message];
-            } else if (typeof errorData.detail === 'string') {
-              // Direct error message in detail field
-              errorMessages = [errorData.detail];
-            }
-          } else if (errorData.message) {
-            // Direct error message
-            errorMessages = [errorData.message];
-          } else if (errorData.error) {
-            // Error in 'error' field
-            errorMessages = [errorData.error];
-          } else {
-            // Generic error based on status code
-            errorMessages = [`Export failed with status ${response.status}`];
-          }
-          
-          // Add user-friendly explanations for common errors
-          errorMessages = errorMessages.map(error => {
-            if (error.includes('No valid Force data found')) {
-              return 'No valid force data found. Please check that your data contains valid force curves and try applying different filters.';
-            } else if (error.includes('No valid data found')) {
-              return 'No valid data found for export. Please check your data and filter settings.';
-            } else if (error.includes('Internal Server Error')) {
-              return 'An internal server error occurred. Please check the console for details and try again.';
-            }
-            return error;
-          });
-          
-          // Ensure we have at least one error message
-          if (errorMessages.length === 0) {
-            errorMessages = [`Export failed with status ${response.status}`];
-          }
-          
-          setErrors(errorMessages);
-          return;
-        } catch (parseError) {
-          console.error('Failed to parse error response:', parseError);
-          // If we can't parse the error response, show a generic error
-          setErrors([`Export failed with status ${response.status}. Please check the console for details.`]);
-          return;
-        }
-      }
-
-      const result = await response.json();
-      if (result.status === 'error') {
-        const errorMessages = result.errors || [result.message];
-        setErrors(errorMessages);
-        // console.error('Export error:', errorMessages);
-        // Don't show alert here, let the error display in the UI
-        return;
-      }
-
-      // Fetch the exported file as a blob
-      const fileResponse = await fetch(`${process.env.REACT_APP_BACKEND_URL}/exports/${encodeURIComponent(exportPath)}`);
-      if (!fileResponse.ok) {
-        throw new Error('Failed to download exported file');
-      }
-
-      const blob = await fileResponse.blob();
-      saveAs(blob, exportPath.split('/').pop()); // Use file name from path
-      setErrors([]);
-      alert(`Successfully exported ${result.exported_curves} curves to ${selectedFormat.toUpperCase()}`);
-      setOpen(false);
-      setStep(0);
-    } catch (err) {
-      const errorMessage = err.message.includes('HTTP error')
-        ? 'Failed to communicate with server'
-        : err.message;
-      setErrors([errorMessage]);
-              // console.error('Export error:', errorMessage);
-      // Don't show alert here, let the error display in the UI
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleStepClick = (stepIndex) => {
-    if (stepIndex >= step) return; // Prevent navigating to future steps
-    setStep(stepIndex);
-    setErrors([]);
-  };
-
-  const handleMetadataChange = (e) => {
-    const { name, value } = e.target;
-    setMetadata({ ...metadata, [name]: value });
-    const token = metadataValidationRules[name]?.label || name;
-    clearErrorContains(token);
-  };
-
-  // Function to generate a simple textual preview of HDF5 structure
-  const generateHdf5Preview = () => {
-    const levels = levelNames.join(' / ');
-    return `Root
-  - Group: ${levelNames[0]} (and similar for other curves)
-    ${levelNames.slice(1).map((name, index) => `    ${'  '.repeat(index + 1)}- Group: ${name}`).join('\n')}
-    ${'  '.repeat(levelNames.length)}- Dataset: ${datasetPath.split('/').pop()} (at ${datasetPath})
-    ${'  '.repeat(levelNames.length)}- Metadata at: ${metadataPath}`;
+    hookHandleExportStart(format);
   };
 
   return (
     <Box display="inline-block">
       {renderTrigger ? (
-        renderTrigger(handleMenuOpen, !isMetadataReady)
+        renderTrigger(handleMenuOpen, !isMetadataReady || isExporting)
       ) : (
         <button
-        onClick={handleMenuOpen}
-          disabled={!isMetadataReady}
-          style={actionBtnStyle("primary", !isMetadataReady)}
+          onClick={handleMenuOpen}
+          disabled={!isMetadataReady || isExporting}
+          style={actionBtnStyle("primary", !isMetadataReady || isExporting)}
           {...pressable}
-      >
-        Export
+        >
+          Export
         </button>
       )}
       <Menu
@@ -709,69 +187,9 @@ const ExportButton = ({
               background: "#f5f7ff",
             },
           }}
-          onClick={() => handleExportStart('json')}
-        >
-          JSON
-        </MenuItem>
-        <MenuItem
-          sx={{
-            fontSize: 14,
-            fontWeight: 600,
-            "&:hover": {
-              background: "#f5f7ff",
-            },
-          }}
           onClick={() => handleExportStart('csv')}
         >
           CSV (with SoftMech options)
-        </MenuItem>
-        <MenuItem
-          sx={{
-            fontSize: 14,
-            fontWeight: 600,
-            "&:hover": {
-              background: "#f5f7ff",
-            },
-          }}
-          onClick={() => handleExportStart('txt')}
-        >
-          TXT
-        </MenuItem>
-        <MenuItem
-          sx={{
-            fontSize: 14,
-            fontWeight: 600,
-            "&:hover": {
-              background: "#f5f7ff",
-            },
-          }}
-          onClick={() => handleExportStart('jpk')}
-        >
-          JPK
-        </MenuItem>
-        <MenuItem
-          sx={{
-            fontSize: 14,
-            fontWeight: 600,
-            "&:hover": {
-              background: "#f5f7ff",
-            },
-          }}
-          onClick={() => handleExportStart('ibw')}
-        >
-          IBW
-        </MenuItem>
-        <MenuItem
-          sx={{
-            fontSize: 14,
-            fontWeight: 600,
-            "&:hover": {
-              background: "#f5f7ff",
-            },
-          }}
-          onClick={() => handleExportStart('gwy')}
-        >
-          GWY
         </MenuItem>
       </Menu>
       <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
@@ -1026,15 +444,32 @@ const ExportButton = ({
                   </Typography>
                   <Box sx={{ backgroundColor: '#f5f5f5', p: 2, borderRadius: 1, mt: 1 }}>
                     <Typography variant="body2">
-                      <strong>Contact Point Filters:</strong> {Object.keys(cpFilters).length > 0 ? Object.keys(cpFilters).join(', ') : 'None'}
+                      <strong>Contact Point Filters:</strong>{' '}
+                      {Object.keys(cpFilters).length > 0
+                        ? Object.keys(cpFilters).join(', ')
+                        : 'None'}
                     </Typography>
                     <Typography variant="body2">
-                      <strong>Force Models:</strong> {Object.keys(forceModels).length > 0 ? Object.keys(forceModels).join(', ') : 'None'}
+                      <strong>Force Models:</strong>{' '}
+                      {Object.keys(forceModels).length > 0
+                        ? Object.keys(forceModels).join(', ')
+                        : 'None'}
                     </Typography>
                     <Typography variant="body2">
-                      <strong>Elasticity Models:</strong> {Object.keys(elasticityModels).length > 0 ? Object.keys(elasticityModels).join(', ') : 'None'}
+                      <strong>Elasticity Models:</strong>{' '}
+                      {Object.keys(elasticityModels).length > 0
+                        ? Object.keys(elasticityModels).join(', ')
+                        : 'None'}
                     </Typography>
                   </Box>
+
+                  {/* Extra warning for average export without CP filters */}
+                  {exportType === 'average' && Object.keys(cpFilters).length === 0 && (
+                    <Alert severity="warning" sx={{ mt: 2 }}>
+                      Average CSV export requires contact-point filters. Please go to the sidebar
+                      and configure at least one CP filter before continuing.
+                    </Alert>
+                  )}
                 </Box>
               )}
               {step === 1 && (
@@ -1119,7 +554,7 @@ const ExportButton = ({
                         These values are pre-filled from your imported file metadata. You can modify them as needed for this export.
                       </Alert>
                       
-                      <TextField
+                      {/* <TextField
                         label="File ID"
                         value={editableSoftMechMetadata.file_id}
                         onChange={(e) => {
@@ -1162,7 +597,7 @@ const ExportButton = ({
                         InputLabelProps={{ shrink: true }}
                         helperText="Date of the measurement (YYYY-MM-DD)"
                         disabled={loading}
-                      />
+                      /> */}
                       
                       <TextField
                         label="Spring Constant [N/m]"
@@ -1250,7 +685,7 @@ const ExportButton = ({
                     These values are pre-filled from your imported file metadata. You can modify them as needed for this export.
                   </Alert>
                   
-                  <TextField
+                  {/* <TextField
                     label="File ID"
                     value={editableSoftMechMetadata.file_id}
                     onChange={(e) => {
@@ -1291,7 +726,7 @@ const ExportButton = ({
                     required
                     InputLabelProps={{ shrink: true }}
                     helperText="Date of the measurement (YYYY-MM-DD)"
-                  />
+                  /> */}
                   
                   <TextField
                     label="Spring Constant [N/m]"

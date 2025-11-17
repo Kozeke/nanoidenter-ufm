@@ -1,20 +1,20 @@
+// Renders the main dashboard experience coordinating datasets, filters, and controls.
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
-import ForceDisplacementDataSet from "./graphs/ForceDisplacementDataSet";
-import ForceIndentationDataSet from "./graphs/ForceIndentationDataSet";
-import ElasticitySpectra from "./graphs/SpectraElasticity";
-import ParametersGraph from "./graphs/ParametersGraph";
+import ForceDisplacementPanel from "./ForceDisplacementPanel";
+import ForceIndentationPanel from "./ForceIndentationPanel";
+import ElasticitySpectraPanel from "./ElasticitySpectraPanel";
 import FiltersComponent from "./FiltersComponent";
 import CurveControlsComponent from "./CurveControlsComponent";
 import FileOpener from "./FileOpener";
 import ExportButton from "./ExportButton";
 import { debounce } from 'lodash';
 import { Box, CircularProgress } from '@mui/material';
+import { useDashboardStore } from "../state/useDashboardStore";
+import { useDashboardWebSocket } from "../hooks/useDashboardWebSocket";
 
 // Keep this in sync with FilterStatusSidebar / FiltersComponent drawer width
 const DRAWER_WIDTH = 300;
 
-const WEBSOCKET_URL =
-  process.env.REACT_APP_WEBSOCKET_URL || "ws://localhost:8000/ws/data";
 // Create MetadataContext
 const MetadataContext = createContext({
   metadataObject: { columns: [], sample_row: {} },
@@ -22,57 +22,144 @@ const MetadataContext = createContext({
 });// Hook to use MetadataContext
 export const useMetadata = () => useContext(MetadataContext);
 const Dashboard = () => {
-  const [forceData, setForceData] = useState([]); // For DataSet graph
-  const [indentationData, setIndentationData] = useState({ curves_cp: [], curves_fparam: [] }); // For DataSet indentation graph
-  const [elspectraData, setElspectraData] = useState({ curves: [], curves_elasticity_param: [] }); // For DataSet elspectra graph
-  const [filterDefaults, setFilterDefaults] = useState([]);
-  const [cpDefaults, setCpDefaults] = useState({
-    autotresh: { range_to_set_zero: 500 },
-  });
-  const [forceModelDefaults, setForceModelDefaults] = useState([]);
-  const [elasticityModelDefaults, setElasticityModelDefaults] = useState([]);
-  const [selectedCurveIds, setSelectedCurveIds] = useState([]);
-  const [graphType, setGraphType] = useState("line"); // Default to line
-  const [filename, setFilename] = useState("");   const [domainRange, setDomainRange] = useState({
-    xMin: null,
-    xMax: null,
-    yMin: null,
-    yMax: null,
-  }); const [indentationDomain, setIndentationDomain] = useState({
-    xMin: null,
-    xMax: null,
-    yMin: null,
-    yMax: null,
-  }); const [elspectraDomain, setElspectraDomain] = useState({
-    xMin: null,
-    xMax: null,
-    yMin: null,
-    yMax: null,
-  }); const [metadataObject, setMetadataObject] = useState({ columns: [], sample_row: {} });
-  // Default value for number of curves - set to 10 and keep it at 10 even after loading data
-  const [numCurves, setNumCurves] = useState(10);
-  const socketRef = useRef(null);
-  const initialRequestSent = useRef(false);
-  const [regularFilters, setRegularFilters] = useState({});
-  const [cpFilters, setCpFilters] = useState({});
-  const [forceModels, setForceModels] = useState({});
+  // Pulls shared dashboard state values and mutators from the central store.
+  const {
+    // Tracks whether the filter sidebar is visible to the user.
+    sidebarOpen,
+    // Toggles the sidebar visibility state.
+    toggleSidebar,
+    // Identifies the currently selected curve across charts.
+    selectedCurveId,
+    // Updates the active curve identifier for shared components.
+    setSelectedCurveId,
+    // Stores the active filter configuration propagated to the backend.
+    filters,
+    // Merges filter updates from UI interactions.
+    setFilters,
+    // Indicates if zero force correction should be applied.
+    setZeroForce,
+    // Updates the zero force correction toggle.
+    updateZeroForce,
+    // Provides the elasticity smoothing configuration.
+    elasticityParams,
+    // Merges incoming elasticity parameter tweaks.
+    setElasticityParams,
+    // Provides the elastic model configuration sent to the backend.
+    elasticModelParams,
+    // Merges elastic model parameter updates.
+    setElasticModelParams,
+    // Provides the force model configuration sent to the backend.
+    forceModelParams,
+    // Merges force model parameter updates.
+    setForceModelParams,
+    // Controls how many curves to request from the backend.
+    numCurves,
+    // Updates the curve count while respecting valid bounds.
+    setNumCurves,
+    // Tracks which dashboard tab is currently active.
+    activeTab,
+    // Updates the active tab selection.
+    setActiveTab,
+    // Stores the graph visualization style for charts.
+    graphType,
+    // Updates the graph visualization style.
+    setGraphType,
+    // Stores the list of curves currently highlighted in charts.
+    selectedCurveIds,
+    // Updates the highlighted curves array.
+    setSelectedCurveIds,
+    // Stores the curves selected for exporting.
+    selectedExportCurveIds,
+    // Updates the export curve selection.
+    setSelectedExportCurveIds,
+    // Tracks parallel loading indicators for key workflows.
+    loadingMulti,
+    // Merges loading indicator updates.
+    setLoadingMulti,
+    // Indicates whether the dashboard is performing a generic loading workflow.
+    isLoading,
+    // Updates the generic loading indicator so dialogs stay responsive.
+    setIsLoading,
+    // Indicates whether curve data is currently loading.
+    isLoadingCurves,
+    // Updates the curve loading indicator shared across charts.
+    setIsLoadingCurves,
+    // Indicates whether an import job is underway.
+    isLoadingImport,
+    // Updates the import loading indicator so overlays can render.
+    setIsLoadingImport,
+    // Indicates whether an export job is underway.
+    isLoadingExport,
+    // Updates the export loading indicator so overlays can render.
+    setIsLoadingExport,
+    // WebSocket connection status for UX.
+    connectionStatus,
+  } = useDashboardStore();
+  
+  // Centralizes WebSocket lifecycle + curve fetching for the dashboard
+  const {
+    forceData,
+    indentationData,
+    elspectraData,
+    domainRange,
+    indentationDomain,
+    elspectraDomain,
+    metadataObject,
+    setMetadataObject,
+    sendCurveRequest,
+    resetAndReload,
+    filterDefaults,
+    cpDefaults,
+    forceModelDefaults,
+    elasticityModelDefaults,
+  } = useDashboardWebSocket();
+
+  // Derives a simple boolean indicating WebSocket connection state.
+  const isWebSocketConnected = connectionStatus === 'connected';
+
+  // Maps connection status to user-friendly labels for display.
+  const connectionLabel =
+    connectionStatus === 'connected'
+      ? 'Connected'
+      : connectionStatus === 'connecting'
+      ? 'Connecting…'
+      : connectionStatus === 'error'
+      ? 'Error'
+      : 'Disconnected';
+  const [filename, setFilename] = useState("");
+  // Exposes regular filter configurations tracked in the shared store.
+  const regularFilters = filters.regular;
+  // Exposes contact point filter configurations tracked in the shared store.
+  const cpFilters = filters.cp_filters;
+  // Exposes force model configurations tracked in the shared store.
+  const forceModels = filters.f_models;
   const [selectedForceModels, setSelectedForceModels] = useState([]);
-  const [elasticityModels, setElasticityModels] = useState({});
+  // Exposes elasticity model configurations tracked in the shared store.
+  const elasticityModels = filters.e_models;
   const [selectedElasticityModels, setSelectedElasticityModels] = useState([]);
   const [selectedRegularFilters, setSelectedRegularFilters] = useState([]);
   const [selectedCpFilters, setSelectedCpFilters] = useState([]);
-  const [activeTab, setActiveTab] = useState("forceDisplacement");
-  const [curveId, setCurveId] = useState("");
-  const prevFiltersRef = useRef({ regular: null, cp: null });
-  // Initialize with default numCurves (10)
-  const prevNumCurvesRef = useRef(10);
-  const [forceRequest, setForceRequest] = useState(false);
-  const [selectedExportCurveIds, setSelectedForExportCurveIds] = useState([]);
+  // Applies incoming changes to regular filters while preserving unrelated groups.
+  const updateRegularFilters = (updater) => {
+    const nextValue = typeof updater === "function" ? updater(regularFilters) : updater;
+    setFilters({ regular: nextValue });
+  };
+  // Applies incoming changes to contact point filters while preserving unrelated groups.
+  const updateCpFilters = (updater) => {
+    const nextValue = typeof updater === "function" ? updater(cpFilters) : updater;
+    setFilters({ cp_filters: nextValue });
+  };
+  // Applies incoming changes to force model filters while preserving unrelated groups.
+  const updateForceModels = (updater) => {
+    const nextValue = typeof updater === "function" ? updater(forceModels) : updater;
+    setFilters({ f_models: nextValue });
+  };
+  // Applies incoming changes to elasticity model filters while preserving unrelated groups.
+  const updateElasticityModels = (updater) => {
+    const nextValue = typeof updater === "function" ? updater(elasticityModels) : updater;
+    setFilters({ e_models: nextValue });
+  };
   const isMetadataReady = metadataObject.columns.length > 0 || Object.keys(metadataObject.sample_row).length > 0;
-  const [isLoading, setIsLoading] = useState(false);
-  const [isLoadingCurves, setIsLoadingCurves] = useState(false);
-  const [isLoadingImport, setIsLoadingImport] = useState(false);
-  const [isLoadingExport, setIsLoadingExport] = useState(false);
   const [showParameters, setShowParameters] = useState(false);
   const [allFparams, setAllFparams] = useState([]);
   const [lastFparamsKey, setLastFparamsKey] = useState(null);
@@ -103,21 +190,6 @@ const Dashboard = () => {
     totalBatches: 0,
     isLoading: false,
   });
-  const [setZeroForce, setSetZeroForce] = useState(true); // Default to True as requested
-  const [elasticityParams, setElasticityParams] = useState({
-    interpolate: true,  // Default to True as requested
-    order: 2,          // Default order
-    window: 61        // Default window size
-  });
-  const [forceModelParams, setForceModelParams] = useState({
-    maxInd: 800,       // Default max indentation in nm
-    minInd: 0,         // Default min indentation in nm
-    poisson: 0.5       // Default Poisson's ratio
-  });
-  const [elasticModelParams, setElasticModelParams] = useState({
-    maxInd: 800,       // Default max indentation in nm
-    minInd: 0          // Default min indentation in nm
-  });
   // Auto-show sidebar when filters are selected
   const hasFilters = Object.keys(regularFilters).length > 0 || 
                      Object.keys(cpFilters).length > 0 || 
@@ -145,86 +217,9 @@ const Dashboard = () => {
   useEffect(() => {
     // console.log("metadataObject updated:", metadataObject);
   }, [metadataObject]);
-  const sendCurveRequest = useCallback(() => {
-    // console.log("sendcurve", forceRequest);
-    if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      setIsLoadingCurves(true); // Start loading when sending request
-      
-      // Add a timeout to prevent loading from getting stuck
-      const loadingTimeout = setTimeout(() => {
-        // console.log("Loading timeout reached, stopping loading state");
-        setIsLoadingCurves(false);
-      }, 30000); // 30 second timeout
-      
-      // Store the timeout ID to clear it when we get a response
-      socketRef.current.loadingTimeout = loadingTimeout;
-      const areFiltersEqual = (prev, current) => {
-        return JSON.stringify(prev) === JSON.stringify(current);
-      }; const filtersChanged = !areFiltersEqual(
-        {
-          regular: prevFiltersRef.current.regular,
-          cp: prevFiltersRef.current.cp,
-          f_models: prevFiltersRef.current.f_models,
-          e_models: prevFiltersRef.current.e_models,
-        },
-        {
-          regular: regularFilters,
-          cp: cpFilters,
-          f_models: forceModels,
-          e_models: elasticityModels,
-        }
-      );
-
-      const numCurvesChanged = prevNumCurvesRef.current !== numCurves;
-
-      const resetState = {
-        xMin: null,
-        xMax: null,
-        yMin: null,
-        yMax: null,
-      };
-
-      // if (filtersChanged || numCurvesChanged || forceRequest) {
-      // console.log("Request triggered: filtersChanged:", filtersChanged, "numCurvesChanged:", numCurvesChanged, "forceRequest:", forceRequest);
-      setForceData([]);
-      setIndentationData({ curves_cp: [], curves_fparam: [] });
-      setElspectraData({ curves: [], curves_elasticity_param: [] });
-      setDomainRange(resetState);
-      setIndentationDomain(resetState);
-      setElspectraDomain(resetState);
-
-      const requestData = {
-        action: 'get_metadata',
-        num_curves: numCurves,
-        filters: {
-          regular: regularFilters,
-          cp_filters: cpFilters,
-          f_models: forceModels,
-          e_models: elasticityModels,
-        },
-        set_zero_force: setZeroForce,
-        elasticity_params: elasticityParams,
-        force_model_params: forceModelParams,
-        elastic_model_params: elasticModelParams,
-        ...(curveId && { curve_id: curveId }),
-        filters_changed: true,
-      };
-      socketRef.current.send(JSON.stringify(requestData));
-
-      prevFiltersRef.current = {
-        regular: regularFilters,
-        cp: cpFilters,
-        f_models: forceModels,
-        e_models: elasticityModels,
-      };
-      prevNumCurvesRef.current = numCurves;
-      setForceRequest(false); // Reset after sending
-      // }
-    }
-  }, [curveId, numCurves, regularFilters, cpFilters, forceModels, elasticityModels, forceRequest, setZeroForce, elasticityParams, forceModelParams, elasticModelParams]);
   useEffect(() => {
     const allCurveIds = forceData.map((curve) => curve.curve_id);
-    setSelectedForExportCurveIds((prev) => {
+    setSelectedExportCurveIds((prev) => {
       // Only update if the curve IDs have changed to avoid redundant updates
       if (JSON.stringify(prev) !== JSON.stringify(allCurveIds)) {
         // console.log("Initializing export curve IDs:", allCurveIds);
@@ -241,230 +236,88 @@ const Dashboard = () => {
       return prev;
     });
   }, [forceData]);
-  const initializeWebSocket = useCallback(() => {
-    // console.log("initializeWebSocket: Initializing WebSocket");
-    // Close existing connection if open
-    if (socketRef.current) {
-      socketRef.current.close();
-    }// socketRef.current = new WebSocket(WEBSOCKET_URL);
-    socketRef.current = new WebSocket(`${process.env.REACT_APP_BACKEND_URL.replace("https", "wss")}/ws/data`);
-    socketRef.current.onopen = () => {
-      // console.log("WebSocket connected.");
-      if (!initialRequestSent.current) {
-        sendCurveRequest();
-        initialRequestSent.current = true;
-      }
-    };
 
-    socketRef.current.onmessage = (event) => {
-      const response = JSON.parse(event.data);
-      // console.log("WebSocket response:", JSON.stringify(response, null, 2));
+  // Determine if we're in single-curve mode based on selectedCurveId
+  const hasSingleCurve = Boolean(selectedCurveId && String(selectedCurveId).trim() !== "");
+  const isSingleCurveMode = hasSingleCurve;
 
-      if (response.status === "batch" && response.data) {
-        const { graphForcevsZ, graphForceIndentation, graphElspectra, graphForcevsZSingle, graphForceIndentationSingle, graphElspectraSingle } = response.data;
+  // Handler to set curve ID and optionally sync visual selection
+  const handleSetCurveId = (curveId) => {
+    setSelectedCurveId(curveId);
 
-        // console.log("graphForcevsZ:", JSON.stringify(graphForcevsZ, null, 2));
-        // console.log("graphForceIndentationSingle:", JSON.stringify(graphForceIndentation, null, 2));
-        // console.log("graphElspectra:", JSON.stringify(graphElspectra, null, 2));
-
-        const forceGraph = (graphForcevsZSingle?.curves?.length > 0 ? graphForcevsZSingle : graphForcevsZ) || { curves: [], domain: {} };
-        const indentationGraph = (graphForceIndentationSingle?.curves?.curves_cp?.length > 0 ? graphForceIndentationSingle : graphForceIndentation) || { curves: { curves_cp: [], curves_fparam: [] }, domain: {} };
-        const elspectraGraph = (graphElspectraSingle?.curves?.length > 0 ? graphElspectraSingle : graphElspectra) || { curves: [], domain: {} };
-        // Debug: Log elspectra data right after computing elspectraGraph
-        console.log("ELS single?", !!graphElspectraSingle?.curves?.length, "len:", (elspectraGraph.curves||[])[0]?.x?.length, "domain:", elspectraGraph.domain);
-        // const elspectraGraph =  (graphElspectraSingle?.curves?.length > 0 ? graphElspectraSingle : { curves: [], domain: {} });
-        //         // console.log("elspectraGraph", elspectraGraph)
-
-        // Handle multi-curve data - accumulate data from batches instead of replacing
-        setForceData((prevData) => {
-          // If this is a single curve request, replace the data
-          if (graphForcevsZSingle?.curves?.length > 0) {
-            return forceGraph.curves || [];
-          }
-          // Otherwise, accumulate with existing data
-          const newCurves = forceGraph.curves || [];
-          return [...prevData, ...newCurves];
-        });
-
-        setIndentationData((prevData) => {
-          // If this is a single curve request, replace the data
-          if (graphForceIndentationSingle?.curves?.curves_cp?.length > 0) {
-            return indentationGraph.curves || { curves_cp: [], curves_fparam: [] };
-          }
-          // Otherwise, accumulate with existing data
-          const newCurves = indentationGraph.curves || { curves_cp: [], curves_fparam: [] };
-          return {
-            curves_cp: [...(prevData.curves_cp || []), ...(newCurves.curves_cp || [])],
-            curves_fparam: [...(prevData.curves_fparam || []), ...(newCurves.curves_fparam || [])]
-          };
-        });
-
-        // Reset selectedCurveIds to the current curve when a single curve arrives
-        // This keeps the charts consistent across tabs
-        if (graphForceIndentationSingle?.curves?.curves_cp?.length === 1) {
-          const singleCurveId = graphForceIndentationSingle.curves.curves_cp[0].curve_id;
-          setSelectedCurveIds([singleCurveId]);
-        }
-
-        setElspectraData((prevData) => {
-          // If this is a single curve request, replace the data
-          if (graphElspectraSingle?.curves?.length > 0) {
-            return {
-              curves: elspectraGraph.curves || [],
-              curves_elasticity_param: elspectraGraph.curves_elasticity_param || []
-            };
-          }
-          // Otherwise, accumulate with existing data
-          const newCurves = elspectraGraph.curves || [];
-          const newElasticityParams = elspectraGraph.curves_elasticity_param || [];
-          return {
-            curves: [...(prevData.curves || []), ...newCurves],
-            curves_elasticity_param: [...(prevData.curves_elasticity_param || []), ...newElasticityParams]
-          };
-        });
-
-        // Update domain ranges
-        setDomainRange((prev) => ({
-          xMin: prev.xMin === null ? forceGraph.domain.xMin : Math.min(prev.xMin, forceGraph.domain.xMin ?? prev.xMin),
-          xMax: prev.xMax === null ? forceGraph.domain.xMax : Math.max(prev.xMax, forceGraph.domain.xMax ?? prev.xMax),
-          yMin: prev.yMin === null ? forceGraph.domain.yMin : Math.min(prev.yMin, forceGraph.domain.yMin ?? prev.yMin),
-          yMax: prev.yMax === null ? forceGraph.domain.yMax : Math.max(prev.yMax, forceGraph.domain.yMax ?? prev.yMax),
-        }));
-
-        setIndentationDomain((prev) => ({
-          xMin: prev.xMin === null ? indentationGraph.domain.xMin : Math.min(prev.xMin, indentationGraph.domain.xMin ?? prev.xMin),
-          xMax: prev.xMax === null ? indentationGraph.domain.xMax : Math.max(prev.xMax, indentationGraph.domain.xMax ?? prev.xMax),
-          yMin: prev.yMin === null ? indentationGraph.domain.yMin : Math.min(prev.yMin, indentationGraph.domain.yMin ?? prev.yMin),
-          yMax: prev.yMax === null ? indentationGraph.domain.yMax : Math.max(prev.yMax, indentationGraph.domain.yMax ?? prev.yMax),
-        }));
-
-        setElspectraDomain((prev) => ({
-          xMin: prev.xMin === null ? elspectraGraph.domain.xMin : Math.min(prev.xMin, elspectraGraph.domain.xMin ?? prev.xMin),
-          xMax: prev.xMax === null ? elspectraGraph.domain.xMax : Math.max(prev.xMax, elspectraGraph.domain.xMax ?? prev.xMax),
-          yMin: prev.yMin === null ? elspectraGraph.domain.yMin : Math.min(prev.yMin, elspectraGraph.domain.yMin ?? prev.yMin),
-          yMax: prev.yMax === null ? elspectraGraph.domain.yMax : Math.max(prev.yMax, elspectraGraph.domain.yMax ?? prev.yMax),
-        }));
-      }
-
-      if (response.status === "filter_defaults") {
-        const { regular_filters, cp_filters, fmodels, emodels } = response.data;
-        const cleanedRegularFilters = Object.fromEntries(
-          Object.entries(regular_filters).map(([key, value]) => [
-            key.replace("_filter_array", ""),
-            value,
-          ])
-        );
-        const cleanedCpFilters = Object.fromEntries(
-          Object.entries(cp_filters).map(([key, value]) => [
-            key.replace("_filter_array", ""),
-            value,
-          ])
-        );
-        const cleanedFmodels = Object.fromEntries(
-          Object.entries(fmodels).map(([key, value]) => [
-            key.replace("_filter_array", ""),
-            value,
-          ])
-        );
-        const cleanedEmodels = Object.fromEntries(
-          Object.entries(emodels).map(([key, value]) => [
-            key.replace("_filter_array", ""),
-            value,
-          ])
-        );
-        setFilterDefaults(cleanedRegularFilters);
-        setCpDefaults(cleanedCpFilters);
-        setForceModelDefaults(cleanedFmodels);
-        setElasticityModelDefaults(cleanedEmodels);
-
-        // console.log("Received filter defaults:", cleanedRegularFilters);
-        // console.log("Received CP filter defaults:", cleanedCpFilters);
-      }
-      if (response.status === "metadata") {
-        // console.log("metadata", response.metadata)
-        setMetadataObject(response.metadata);
-      }
-      
-      if (response.status === "complete") {
-        // console.log("WebSocket request completed");
-        setIsLoadingCurves(false); // Stop loading when all batches are complete
-        // Clear the loading timeout
-        if (socketRef.current.loadingTimeout) {
-          clearTimeout(socketRef.current.loadingTimeout);
-          socketRef.current.loadingTimeout = null;
-        }
-      }
-      
-      if (response.status === "error") {
-        // console.error("WebSocket error:", response.message);
-        setIsLoadingCurves(false); // Stop loading on error
-        // Clear the loading timeout
-        if (socketRef.current.loadingTimeout) {
-          clearTimeout(socketRef.current.loadingTimeout);
-          socketRef.current.loadingTimeout = null;
-        }
-      }
-      
-      if (response.status === "batch_empty" || response.status === "batch_error") {
-        // console.log(`WebSocket ${response.status}:`, response.message);
-        // Don't stop loading here as we might get more batches
-        // Only stop on "complete" message
-      }
-    };
-
-    socketRef.current.onclose = () => {
-      // console.log("WebSocket disconnected.");
-      setIsLoadingCurves(false); // Stop loading when connection is lost
-      // Clear the loading timeout
-      if (socketRef.current.loadingTimeout) {
-        clearTimeout(socketRef.current.loadingTimeout);
-        socketRef.current.loadingTimeout = null;
-      }
-      initialRequestSent.current = false; // Allow reinitialization
-    };
-  }, []);  // Send request when curveId changes
-  useEffect(() => {
-    if (curveId) {
-      // console.log("changed curveId")
-      sendCurveRequest();
+    // If this curve exists in the loaded data, auto-select it visually
+    if (curveId && forceData.some(c => c.curve_id === curveId)) {
+      setSelectedCurveIds([curveId]);
     }
-  }, [curveId, sendCurveRequest]); const filterTypes = {
+  };
+
+  // Auto-clear models when leaving single-curve mode
+  useEffect(() => {
+    if (!isSingleCurveMode) {
+      // Clear models and parameter selections
+      setFilters({ f_models: {}, e_models: {} });
+      setSelectedForceModel("");
+      setSelectedElasticityModel("");
+      setSelectedParameters([]);
+      setSelectedElasticityParameters([]);
+    }
+  }, [isSingleCurveMode, setFilters]); const filterTypes = {
     regular: {
       filters: regularFilters,
-      setFilters: setRegularFilters,
+      setFilters: updateRegularFilters,
       selected: selectedRegularFilters,
       setSelected: setSelectedRegularFilters,
       defaults: filterDefaults,
     },
     cp: {
       filters: cpFilters,
-      setFilters: setCpFilters,
+      setFilters: updateCpFilters,
       selected: selectedCpFilters,
       setSelected: setSelectedCpFilters,
       defaults: cpDefaults,
     },
     force: {
       filters: forceModels,
-      setFilters: setForceModels,
+      setFilters: updateForceModels,
       selected: selectedForceModels,
       setSelected: setSelectedForceModels,
       defaults: forceModelDefaults,
     },
     elasticity: {
       filters: elasticityModels,
-      setFilters: setElasticityModels,
+      setFilters: updateElasticityModels,
       selected: selectedElasticityModels,
       setSelected: setSelectedElasticityModels,
       defaults: elasticityModelDefaults,
     },
   }; const handleAddFilter = (filterName, type) => {
     const config = filterTypes[type];
-    if (filterName && !config.filters[filterName]) {
-      const defaultParams = config.defaults[filterName] || {};
-      config.setFilters((prev) => ({
-        ...prev,
+    if (!filterName) return;
+
+    const defaultParams = config.defaults[filterName] || {};
+
+    config.setFilters(() => {
+      // For CP, Force model and Elasticity model we want **exactly one** active:
+      // when a new one is chosen, drop all old ones for that family.
+      if (type === "cp" || type === "force" || type === "elasticity") {
+        return {
+          [filterName]: defaultParams,
+        };
+      }
+
+      // For other filter types (regular) keep multi-select behaviour
+      return {
         [filterName]: defaultParams,
-      }));
+      };
+    });
+
+    // Keep the "selected" list in sync so the toolbar + sidebar reflect a single choice
+    if (type === "cp") {
+      setSelectedCpFilters([filterName]);
+    } else if (type === "force") {
+      setSelectedForceModels([filterName]);
+    } else if (type === "elasticity") {
+      setSelectedElasticityModels([filterName]);
     }
   }; const handleRemoveFilter = (filterName, type) => {
     const config = filterTypes[type];
@@ -488,43 +341,53 @@ const Dashboard = () => {
     });
   };   const handleProcessSuccess = (result) => {
     // console.log('File processed successfully:', result);
-    setForceData([]);
-    setIndentationData({ curves_cp: [], curves_fparam: [] });
-    setElspectraData({ curves: [], curves_elasticity_param: [] });
-    setDomainRange({ xMin: null, xMax: null, yMin: null, yMax: null });
-    setIndentationDomain({ xMin: null, xMax: null, yMin: null, yMax: null });
-    setElspectraDomain({ xMin: null, xMax: null, yMin: null, yMax: null });
     // Set numCurves: if loaded data has fewer than 10 curves, use that value; otherwise use 10
     if (result.curves) {
       setNumCurves(Math.min(result.curves, 10));
     }
     setFilename(result.filename || ""); // Set filename from result
-    setForceRequest(true);
-    initialRequestSent.current = false;
-    initializeWebSocket();
+    // Force a fresh WebSocket request after import
+    resetAndReload();
   };
 
   const handleImportStart = () => {
+    setLoadingMulti({ import: true });
     setIsLoadingImport(true);
   };
 
   const handleImportEnd = () => {
+    setLoadingMulti({ import: false });
     setIsLoadingImport(false);
   };
 
+  // Bridges FileOpener loading updates into the centralized loading tracker.
+  const setImportLoadingFlag = (value) => {
+    const nextValue = Boolean(value);
+    setLoadingMulti({ import: nextValue });
+    setIsLoadingImport(nextValue);
+  };
+
   const handleExportStart = () => {
+    setLoadingMulti({ export: true });
     setIsLoadingExport(true);
   };
 
   const handleExportEnd = () => {
+    setLoadingMulti({ export: false });
     setIsLoadingExport(false);
-  };   const handleNumCurvesChange = (value) => {
+  };
+
+  // Bridges ExportButton loading updates into the centralized loading tracker.
+  const setExportLoadingFlag = (value) => {
+    const nextValue = Boolean(value);
+    setLoadingMulti({ export: nextValue });
+    setIsLoadingExport(nextValue);
+  };
+
+  const handleNumCurvesChange = (value) => {
     // console.log("new");
-    const newValue = Math.max(1, Math.min(100, parseInt(value, 10)));
-    setNumCurves(newValue);
+    setNumCurves(value);
   }; const [windowWidth, setWindowWidth] = useState(window.innerWidth);  // Update window width on resize
-  // Single source of truth for sidebar open state
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handleResize);
@@ -532,7 +395,7 @@ const Dashboard = () => {
   }, []);
   const handleExportCurveIdsChange = debounce((curveIds) => {
     console.log("Selected export curve IDs:", curveIds);
-    setSelectedForExportCurveIds(curveIds);
+    setSelectedExportCurveIds(curveIds);
   }, 300);
 
   // Helper: stable stringify that sorts keys deterministically
@@ -920,11 +783,11 @@ const Dashboard = () => {
 
   // If the viewport shrinks to mobile, auto-close so content doesn't stay shifted
   useEffect(() => {
-    if (!isDesktop && sidebarOpen) setSidebarOpen(false);
-  }, [isDesktop, sidebarOpen]);
+    if (!isDesktop && sidebarOpen) toggleSidebar();
+  }, [isDesktop, sidebarOpen, toggleSidebar]);
 
   // Handler to toggle sidebar state - single source of truth
-  const handleToggleSidebar = () => setSidebarOpen((v) => !v); 
+  const handleToggleSidebar = () => toggleSidebar(); 
 
   // --- New/updated header styles ---
   const headerBarStyle = {
@@ -1011,6 +874,86 @@ const Dashboard = () => {
     };
   };
 
+  // Wrapper style for the WebSocket connection status pill.
+  const statusPillWrapperStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: '0 12px',
+    fontSize: 12,
+    fontWeight: 600,
+  };
+
+  // Generates status-specific styling for the WebSocket connection indicator pill.
+  const statusPillStyle = (status) => {
+    const base = {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '2px 10px',
+      borderRadius: 999,
+      border: '1px solid #ddd',
+    };
+    switch (status) {
+      case 'connected':
+        return {
+          ...base,
+          background: '#e6f4ea',
+        };
+      case 'connecting':
+        return {
+          ...base,
+          background: '#fff7e6',
+        };
+      case 'error':
+        return {
+          ...base,
+          background: '#fdecea',
+        };
+      case 'disconnected':
+      default:
+        return {
+          ...base,
+          background: '#f3f4f6',
+        };
+    }
+  };
+
+  // Generates status-specific dot color for the WebSocket connection indicator.
+  const statusDotStyle = (status) => {
+    switch (status) {
+      case 'connected':
+        return {
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: '#34a853',
+        };
+      case 'connecting':
+        return {
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: '#fbbc04',
+        };
+      case 'error':
+        return {
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: '#ea4335',
+        };
+      case 'disconnected':
+      default:
+        return {
+          width: 8,
+          height: 8,
+          borderRadius: '50%',
+          background: '#9ca3af',
+        };
+    }
+  };
+
   // Add subtle pressed effect to all clickable buttons via inline events
   const pressable = {
     onMouseDown: (e) => (e.currentTarget.style.transform = "translateY(1px)"),
@@ -1064,10 +1007,7 @@ const Dashboard = () => {
   //       alert(Failed to open file: ${err.message});
   //     }
   //   };  //   input.click();
-  // }; 
-  useEffect(() => {
-    initializeWebSocket();
-  }, [initializeWebSocket]);
+  // };
 
   return (
     <MetadataContext.Provider value={{ metadataObject, setMetadataObject }}><div style={containerStyle}>
@@ -1135,18 +1075,34 @@ const Dashboard = () => {
             </button>
           </div>
 
+          {/* Middle: WebSocket status */}
+          <div style={statusPillWrapperStyle}>
+            <span style={statusPillStyle(connectionStatus)}>
+              <span style={statusDotStyle(connectionStatus)} />
+              {connectionStatus === "connected" && "Connected"}
+              {connectionStatus === "connecting" && "Connecting..."}
+              {connectionStatus === "error" && "Error"}
+              {connectionStatus === "disconnected" && "Disconnected"}
+            </span>
+          </div>
+
           {/* Right: Actions */}
           <div style={actionsWrapStyle}>
             {/* File Open as "secondary" style to match */}
             <div {...pressable}>
               <FileOpener
+                disabled={!isWebSocketConnected || isLoadingImport}
                 onProcessSuccess={handleProcessSuccess}
                 onProcessStart={handleImportStart}
                 onProcessEnd={handleImportEnd}
-                setIsLoading={setIsLoadingImport}
+                setIsLoading={setImportLoadingFlag}
                 // render prop: force consistent button look
                 renderTrigger={(open) => (
-                  <button style={actionBtnStyle("secondary")} onClick={open}>
+                  <button 
+                    style={(!isWebSocketConnected || isLoadingImport) ? actionBtnStyle("disabled") : actionBtnStyle("secondary")} 
+                    onClick={open}
+                    disabled={!isWebSocketConnected || isLoadingImport}
+                  >
                     Open file
                   </button>
                 )}
@@ -1157,22 +1113,13 @@ const Dashboard = () => {
             {isMetadataReady ? (
               <div {...pressable}>
                 <ExportButton
-                  curveIds={selectedExportCurveIds}
-                  numCurves={numCurves}
-                  isMetadataReady={isMetadataReady}
-                  onExportStart={handleExportStart}
-                  onExportEnd={handleExportEnd}
-                  setIsLoading={setIsLoadingExport}
-                  regularFilters={regularFilters}
-                  cpFilters={cpFilters}
-                  forceModels={forceModels}
-                  elasticityModels={elasticityModels}
+                  disabled={!isWebSocketConnected || isLoadingExport}
                   // render prop: consistent primary button look
                   renderTrigger={(doExport, disabled) => (
                     <button
                       onClick={doExport}
-                      disabled={disabled}
-                      style={disabled ? actionBtnStyle("disabled") : actionBtnStyle("primary")}
+                      disabled={disabled || !isWebSocketConnected || isLoadingExport}
+                      style={(disabled || !isWebSocketConnected || isLoadingExport) ? actionBtnStyle("disabled") : actionBtnStyle("primary")}
                     >
                       Export
                     </button>
@@ -1181,6 +1128,17 @@ const Dashboard = () => {
               </div>
             ) : (
               <button disabled style={actionBtnStyle("disabled")}>Export</button>
+            )}
+
+            {/* Reconnect only when socket is not connected */}
+            {connectionStatus !== 'connected' && (
+              <button
+                onClick={resetAndReload}
+                style={actionBtnStyle("secondary")}
+                {...pressable}
+              >
+                Reconnect
+              </button>
             )}
           </div>
         </div>
@@ -1209,6 +1167,7 @@ const Dashboard = () => {
              handleFilterChange={handleFilterChange}
              sendCurveRequest={sendCurveRequest}
              activeTab={activeTab}
+             canUseModels={isSingleCurveMode}
              onForceModelChange={(model) => {
                if (model) {
                  setSelectedForceModel(model);
@@ -1238,7 +1197,7 @@ const Dashboard = () => {
                }
              }}
              setZeroForce={setZeroForce}
-             onSetZeroForceChange={setSetZeroForce}
+             onSetZeroForceChange={updateZeroForce}
              elasticityParams={elasticityParams}
              onElasticityParamsChange={setElasticityParams}
              forceModelParams={forceModelParams}
@@ -1249,88 +1208,69 @@ const Dashboard = () => {
              onToggle={handleToggleSidebar}
              fparamsProgress={fparamsProgress}
              eparamsProgress={eparamsProgress}
+             // Disable filters when socket is down
+             isSocketConnected={isWebSocketConnected}
            />
         </div>
 
         {/* Tab Content */}
         <div style={tabContentStyle}>
           {activeTab === "forceDisplacement" && (
-            <div style={chartContainerStyle}>
-              <ForceDisplacementDataSet
-                forceData={forceData}
-                domainRange={domainRange}
-                onCurveSelect={handleForceDisplacementCurveSelect}
-                setSelectedCurveIds={setSelectedCurveIds}
-                selectedCurveIds={selectedCurveIds}
-                graphType={graphType}
-              />
-            </div>
+            <ForceDisplacementPanel
+              chartContainerStyle={chartContainerStyle}
+              forceData={forceData}
+              domainRange={domainRange}
+              graphType={graphType}
+              onGraphTypeChange={setGraphType}
+              selectedCurveIds={selectedCurveIds}
+              setSelectedCurveIds={setSelectedCurveIds}
+              onCurveSelect={handleForceDisplacementCurveSelect}
+            />
           )}
 
-                     {activeTab === "forceIndentation" && (
-             <div style={showParameters ? { display: "flex", gap: "10px", height: "100%" } : chartContainerStyle}>
-               <div style={showParameters ? { flex: 1, ...chartContainerStyle } : {}}>
-                 <ForceIndentationDataSet
-                   forceData={indentationData}
-                   domainRange={indentationDomain}
-                   setSelectedCurveIds={setSelectedCurveIds}
-                   onCurveSelect={handleForceDisplacementCurveSelect}
-                   selectedCurveIds={selectedCurveIds}
-                   graphType={graphType}
-                   activeTab={activeTab}
-                 />
-               </div>
-               {activeTab === "forceIndentation" && selectedForceModel && showParameters && (
-                 <div style={{ flex: 1, ...chartContainerStyle }}>
-                   <ParametersGraph
-                     forceData={indentationData}
-                     domainRange={indentationDomain}
-                     setSelectedCurveIds={setSelectedCurveIds}
-                     onCurveSelect={handleForceDisplacementCurveSelect}
-                     selectedCurveIds={selectedCurveIds}
-                     allFparams={allFparams}
-                     selectedParameters={selectedParameters}
-                     selectedForceModel={selectedForceModel}
-                   />
-                 </div>
-               )}
-             </div>
-           )}
+          {activeTab === "forceIndentation" && (
+            <ForceIndentationPanel
+              chartContainerStyle={chartContainerStyle}
+              indentationData={indentationData}
+              indentationDomain={indentationDomain}
+              graphType={graphType}
+              onGraphTypeChange={setGraphType}
+              selectedCurveIds={selectedCurveIds}
+              setSelectedCurveIds={setSelectedCurveIds}
+              onCurveSelect={handleForceDisplacementCurveSelect}
+              showParameters={showParameters}
+              selectedForceModel={selectedForceModel}
+              allFparams={allFparams}
+              selectedParameters={selectedParameters}
+              onParameterChange={setSelectedParameters}
+              isSingleCurveMode={isSingleCurveMode}
+            />
+          )}
 
           {activeTab === "elasticitySpectra" && (
-            <div style={showElasticityParameters ? { display: "flex", gap: "10px", height: "100%" } : chartContainerStyle}>
-              <div style={showElasticityParameters ? { flex: 1, ...chartContainerStyle } : {}}>
-                <ElasticitySpectra
-                  forceData={elspectraData.curves || []}
-                  domainRange={elspectraDomain}
-                  setSelectedCurveIds={setSelectedCurveIds}
-                  onCurveSelect={handleForceDisplacementCurveSelect}
-                  selectedCurveIds={selectedCurveIds}
-                  graphType={graphType}
-                />
-              </div>
-              {activeTab === "elasticitySpectra" && selectedElasticityModel && showElasticityParameters && (
-                <div style={{ flex: 1, ...chartContainerStyle }}>
-                                     <ParametersGraph
-                     forceData={elspectraData.curves || []}
-                     domainRange={elspectraDomain}
-                     setSelectedCurveIds={setSelectedCurveIds}
-                     onCurveSelect={handleForceDisplacementCurveSelect}
-                     selectedCurveIds={selectedCurveIds}
-                     allFparams={allElasticityParams}
-                     selectedParameters={selectedElasticityParameters}
-                     selectedForceModel={selectedElasticityModel}
-                   />
-                </div>
-              )}
-            </div>
+            <ElasticitySpectraPanel
+              chartContainerStyle={chartContainerStyle}
+              elspectraData={elspectraData}
+              elspectraDomain={elspectraDomain}
+              graphType={graphType}
+              onGraphTypeChange={setGraphType}
+              selectedCurveIds={selectedCurveIds}
+              setSelectedCurveIds={setSelectedCurveIds}
+              onCurveSelect={handleForceDisplacementCurveSelect}
+              showElasticityParameters={showElasticityParameters}
+              selectedElasticityModel={selectedElasticityModel}
+              allElasticityParams={allElasticityParams}
+              selectedElasticityParameters={selectedElasticityParameters}
+              onElasticityParameterChange={setSelectedElasticityParameters}
+              isSingleCurveMode={isSingleCurveMode}
+            />
           )}
         </div>
         <CurveControlsComponent
           numCurves={numCurves}
           handleNumCurvesChange={handleNumCurvesChange}
-          curveId={curveId}
-          setCurveId={setCurveId}
+          curveId={selectedCurveId}
+          setCurveId={handleSetCurveId}
           forceData={forceData}
           selectedCurveIds={selectedCurveIds}
           setSelectedCurveIds={setSelectedCurveIds}
@@ -1345,6 +1285,8 @@ const Dashboard = () => {
              onParameterChange={setSelectedParameters}
              showParameters={showParameters}
              setShowParameters={setShowParameters}
+             // Disable curve controls when socket is down
+             isSocketConnected={isWebSocketConnected}
         />
       </div>
     </div>

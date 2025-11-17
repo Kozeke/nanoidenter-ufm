@@ -241,8 +241,8 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     # Guarantee cache tables exist before applying hash-based lookups
     ensure_cache_tables(conn)
 
-    # Align zero-force flag with cached indentation rows
-    set_zero_force = True
+    # DO NOT override set_zero_force here – use the value passed from the caller
+    # set_zero_force stays whatever fetch_curves_batch(...) received
 
     # Auto-enable single when exactly one curve and at least one model is requested
     if not single:

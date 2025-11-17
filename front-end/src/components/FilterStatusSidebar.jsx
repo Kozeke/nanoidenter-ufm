@@ -161,6 +161,7 @@ const FilterStatusSidebar = ({
   setZeroForce,
   onSetZeroForceChange,
   activeTab,
+  canUseModels,
   elasticityParams,
   onElasticityParamsChange,
   forceModelParams,
@@ -275,8 +276,8 @@ const FilterStatusSidebar = ({
       {/* Elasticity Spectra Tab - Show elastic model params and elasticity params */}
       {activeTab === "elasticitySpectra" && (
         <>
-          {/* Elastic Model Parameters - Show when elastic model is chosen */}
-          {selectedElasticityModel && (
+          {/* Elastic Model Parameters - Show when elastic model is chosen AND in single-curve mode */}
+          {canUseModels && selectedElasticityModel && (
             <Card sx={cardSx}>
               <CardContent sx={{ p: 1, "&:last-child": { pb: 1 } }}>
                 <Typography variant="subtitle2" sx={sectionLabelSx("#3DA58A")}>
@@ -370,8 +371,8 @@ const FilterStatusSidebar = ({
         </>
       )}
         
-        {/* Force Model Parameters - Show when force model is chosen (not on elasticity spectra tab) */}
-        {activeTab !== "elasticitySpectra" && selectedForceModel && (
+        {/* Force Model Parameters - Show when force model is chosen (not on elasticity spectra tab) AND in single-curve mode */}
+        {activeTab !== "elasticitySpectra" && canUseModels && selectedForceModel && (
           <Card sx={cardSx}>
             <CardContent sx={{ p: 1, "&:last-child": { pb: 1 } }}>
               <Typography variant="subtitle2" sx={sectionLabelSx("#3DA58A")}>
@@ -470,8 +471,8 @@ const FilterStatusSidebar = ({
         )}
         
         <Stack direction="column" spacing={1}>
-          {/* View Force Parameters - Only show on forceIndentation tab */}
-          {activeTab === "forceIndentation" && selectedForceModel && (
+          {/* View Force Parameters - Only show on forceIndentation tab AND in single-curve mode */}
+          {activeTab === "forceIndentation" && canUseModels && selectedForceModel && (
             <Card sx={cardSx}>
               <CardContent sx={{ p: 1 }}>
                 <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
@@ -562,8 +563,8 @@ const FilterStatusSidebar = ({
             </Card>
           )}
 
-          {/* View Elasticity Parameters - Only show on elasticitySpectra tab */}
-          {activeTab === "elasticitySpectra" && selectedElasticityModel && (
+          {/* View Elasticity Parameters - Only show on elasticitySpectra tab AND in single-curve mode */}
+          {activeTab === "elasticitySpectra" && canUseModels && selectedElasticityModel && (
             <Card sx={cardSx}>
               <CardContent sx={{ p: 1 }}>
                 <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", mb: 0.5 }}>
@@ -679,32 +680,47 @@ const FilterStatusSidebar = ({
             />
           ))}
 
-          {/* Force Models */}
-          {Object.keys(forceModels || {}).map((filterName) => (
-            <FilterCard
-              key={filterName}
-              filterName={filterName}
-              filterData={forceModels[filterName]}
-              capitalizeFilterName={capitalizeFilterName}
-              handleRemoveFilter={handleRemoveFilter}
-              handleFilterChange={handleFilterChange}
-              type="force"
-            />
-          ))}
+          {/* Force Models – only on Force–Indentation tab */}
+          {activeTab === "forceIndentation" &&
+            Object.keys(forceModels || {}).map((filterName) => (
+              <FilterCard
+                key={filterName}
+                filterName={filterName}
+                filterData={forceModels[filterName]}
+                capitalizeFilterName={capitalizeFilterName}
+                handleRemoveFilter={handleRemoveFilter}
+                handleFilterChange={handleFilterChange}
+                type="force"
+              />
+            ))
+          }
 
-          {/* Elasticity Models */}
-          {Object.keys(elasticityModels || {}).map((filterName) => (
-            <FilterCard
-              key={filterName}
-              filterName={filterName}
-              filterData={elasticityModels[filterName]}
-              capitalizeFilterName={capitalizeFilterName}
-              handleRemoveFilter={handleRemoveFilter}
-              handleFilterChange={handleFilterChange}
-              type="elasticity"
-            />
-          ))}
+          {/* Elasticity Models – only on Elasticity Spectra tab */}
+          {activeTab === "elasticitySpectra" &&
+            Object.keys(elasticityModels || {}).map((filterName) => (
+              <FilterCard
+                key={filterName}
+                filterName={filterName}
+                filterData={elasticityModels[filterName]}
+                capitalizeFilterName={capitalizeFilterName}
+                handleRemoveFilter={handleRemoveFilter}
+                handleFilterChange={handleFilterChange}
+                type="elasticity"
+              />
+            ))
+          }
         </Stack>
+
+        {/* Info card when models are disabled */}
+        {!canUseModels && (
+          <Card sx={cardSx}>
+            <CardContent sx={{ p: 1 }}>
+              <Typography variant="caption" sx={{ fontSize: 11, color: "#777" }}>
+                To view model parameters, enter a Curve ID in the controls bar and select a model.
+              </Typography>
+            </CardContent>
+          </Card>
+        )}
         </Box>
       </Drawer>
     </Fade>

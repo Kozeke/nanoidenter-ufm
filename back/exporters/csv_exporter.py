@@ -187,20 +187,57 @@ class CSVExporter(Exporter):
                 if tip_geometry not in ['sphere', 'cylinder', 'cone', 'pyramid']:
                     tip_geometry = 'sphere'
 
+                # --- OVERRIDE: payload metadata wins over DB values ---
+                # Extract metadata from request payload (supports both legacy 'metadata' and new 'softmech_metadata' keys)
+                payload_meta = kwargs.get("softmech_metadata") or kwargs.get("metadata") or {}
+                if isinstance(payload_meta, dict):
+                    # Override spring constant from payload if provided
+                    if payload_meta.get("spring_constant") is not None:
+                        try:
+                            spring_constant = float(payload_meta["spring_constant"])
+                            logger.info(f"Spring constant overridden from payload: {spring_constant}")
+                        except (TypeError, ValueError):
+                            pass
+
+                    # Override tip radius from payload if provided (⚠️ if you send nm here, convert to meters)
+                    if payload_meta.get("tip_radius") is not None:
+                        try:
+                            # If payload is in nm, use *1e-9; if already in meters, drop the factor.
+                            tip_radius = float(payload_meta["tip_radius"]) * 1e-9
+                        except (TypeError, ValueError):
+                            pass
+
+                    # Override tip angle from payload if provided (for cones/pyramids)
+                    if payload_meta.get("tip_angle") is not None:
+                        try:
+                            tip_angle = float(payload_meta["tip_angle"])
+                        except (TypeError, ValueError):
+                            pass
+
+                    # Override tip geometry from payload if provided
+                    if payload_meta.get("tip_geometry"):
+                        tip_geometry = str(payload_meta["tip_geometry"])
+
+                # Final geometry sanity check to ensure valid value
+                if tip_geometry not in ['sphere', 'cylinder', 'cone', 'pyramid']:
+                    tip_geometry = 'sphere'
+
             # ---- Extract per dataset type ----
             xall, yall = [], []
             if dataset_type == "Force":
                 curves_data = (graph_force_indentation or {}).get("curves", {})
                 for curve in curves_data.get("curves_cp", []):
                     if "x" in curve and "y" in curve:
-                        pair = self._sanitize_xy_pair(curve["x"], curve["y"])
-                        if pair is not None:
-                            x_data, y_data = pair
-                            xall.append(x_data)
-                            yall.append(y_data)
+                        x = np.asarray(curve["x"], dtype=np.float64)
+                        y = np.asarray(curve["y"], dtype=np.float64)
+                        if x.size >= 2 and x.size == y.size:
+                            xall.append(x)
+                            yall.append(y)
 
                 if not xall:
                     raise ValueError("No valid Force data found")
+
+                # now uses the "exact clone" of averageall above
                 x, y, std = self._average_all(xall, yall, direction, loose, grid_points)
 
             elif dataset_type == "Elasticity":
@@ -240,14 +277,81 @@ class CSVExporter(Exporter):
             else:
                 raise ValueError(f"Unsupported dataset_type: {dataset_type}")
 
-            # ---- SoftMech-style metadata ----
-            softmech_metadata_from_request = kwargs.get("softmech_metadata")
-            if softmech_metadata_from_request:
-                softmech_metadata = softmech_metadata_from_request
+            # ---- SoftMech-style metadata (REQUEST-ONLY, no DB) ----
+
+            raw_soft = kwargs.get("softmech_metadata")
+            raw_meta = kwargs.get("metadata")
+
+            logger.info(
+                "Average export – raw metadata payloads: "
+                f"softmech_metadata={raw_soft}, metadata={raw_meta}, "
+                f"kwargs_keys={list(kwargs.keys())}"
+            )
+
+            payload_meta = raw_soft or raw_meta or {}
+            if not isinstance(payload_meta, dict):
+                logger.warning(f"Average export – payload_meta is not a dict: {type(payload_meta)} -> resetting to {{}}")
+                payload_meta = {}
             else:
-                softmech_metadata = self._calculate_softmech_metadata(
-                    x, y, tip_geometry, tip_radius, tip_angle, spring_constant, direction, loose
-                )
+                logger.info(f"Average export – merged payload_meta keys: {list(payload_meta.keys())}")
+
+            # direction / loose: prefer explicit kwargs, then payload, then defaults
+            direction = kwargs.get("direction", payload_meta.get("direction", "V"))
+            loose = kwargs.get("loose", payload_meta.get("loose", 100))
+
+            # tip geometry
+            tip_shape = str(payload_meta.get("tip_geometry") or "sphere")
+            if tip_shape not in ["sphere", "cylinder", "cone", "pyramid"]:
+                tip_shape = "sphere"
+
+            # tip radius is expected in [nm] in the payload (as you send 10000 for 10 µm)
+            tip_radius_nm = None
+            if payload_meta.get("tip_radius") is not None:
+                try:
+                    tip_radius_nm = float(payload_meta["tip_radius"])
+                except (TypeError, ValueError):
+                    tip_radius_nm = None
+
+            # tip angle [deg] – only meaningful for cone / pyramid
+            tip_angle_deg = None
+            if payload_meta.get("tip_angle") is not None:
+                try:
+                    tip_angle_deg = float(payload_meta["tip_angle"])
+                except (TypeError, ValueError):
+                    tip_angle_deg = None
+
+            # spring constant / elastic constant [N/m]
+            elastic_constant_nm = None
+            for key in ["spring_constant", "elastic_constant_nm", "elastic_constant"]:
+                value = payload_meta.get(key)
+                logger.info(f"Average export – checking key '{key}' in payload_meta: {value!r}")
+                if value is not None:
+                    try:
+                        elastic_constant_nm = float(value)
+                        logger.info(
+                            "Average export – parsed elastic_constant_nm from "
+                            f"{key}={value!r} -> {elastic_constant_nm}"
+                        )
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            f"Average export – failed to parse {key}={value!r} as float; ignoring"
+                        )
+                    break  # stop after the first non-None candidate
+
+            softmech_metadata = {
+                "direction": direction,
+                "loose": loose,
+                "tip_shape": tip_shape,
+                "tip_radius_nm": tip_radius_nm,
+                "tip_angle_deg": tip_angle_deg,
+                "elastic_constant_nm": elastic_constant_nm,
+            }
+
+            logger.info(
+                "Export metadata (request-only): "
+                f"tip_shape={tip_shape}, tip_radius_nm={tip_radius_nm}, "
+                f"tip_angle_deg={tip_angle_deg}, elastic_constant_nm={elastic_constant_nm}"
+            )
 
             # ---- Write CSV (fast block write) ----
             with open(output_path, "w", newline="", encoding="utf-8") as f:
@@ -263,6 +367,41 @@ class CSVExporter(Exporter):
                 if softmech_metadata['tip_angle_deg'] is not None:
                     header += f"#Tip angle [deg]: {softmech_metadata['tip_angle_deg']}\n"
                 header += f"#Elastic constant [N/m]: {softmech_metadata['elastic_constant_nm']}\n"
+
+                # --- Hertz metadata: only if force model params exist (like SoftMech exp.fdata) ---
+                if dataset_type == "Force":
+                    try:
+                        curves_dict = (graph_force_indentation or {}).get("curves") or {}
+                        fparams = curves_dict.get("curves_fparam") or []
+
+                        # Use the same key as in scatter exporter: "fparam"
+                        E_values = [
+                            fp["fparam"][0]
+                            for fp in fparams
+                            if fp.get("fparam")
+                        ]
+
+                        if E_values:
+                            # Average Hertz modulus
+                            avg_E = float(np.average(E_values))
+                            header += f"#Average Hertz modulus [Pa]: {avg_E}\n"
+
+                            # Hertz max indentation only if a Hertz fit actually exists
+                            force_model_params = kwargs.get("force_model_params") or {}
+                            max_ind_param = force_model_params.get("maxInd")
+
+                            if max_ind_param is not None:
+                                hertz_max_nm = float(max_ind_param)
+                            elif x is not None and len(x) > 0:
+                                hertz_max_nm = float(np.max(x)) * 1e9
+                            else:
+                                hertz_max_nm = 0.0
+
+                            header += f"#Hertz max indentation [nm]: {hertz_max_nm}\n"
+
+                    except Exception:
+                        # match SoftMech: silently skip both lines if anything goes wrong
+                        pass
 
                 if dataset_type == "Force":
                     header += "#Columns: Indentation <F> SigmaF\n" if direction == 'V' else "#Columns: <Indentation> F SigmaZ\n"
@@ -433,16 +572,14 @@ class CSVExporter(Exporter):
         yall: List[np.ndarray],
         direction: str,
         loose: int = 100,
-        grid_points: Optional[int] = None
+        grid_points: Optional[int] = None,  # kept for API compatibility, but ignored
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Calculate average curves with interpolation (SoftMech-like, but bounded grid)"""
+        """Exact SoftMech averageall behaviour (no extra guards / caps)."""
         if not xall:
             raise ValueError("Empty input to _average_all")
 
-        N_raw = int(np.max([len(x) for x in xall]))
-        if grid_points is None:
-            grid_points = 4096
-        N = max(2, min(N_raw, int(grid_points)))
+        # 1:1 with SoftMech averageall
+        N = np.max([len(x) for x in xall])
 
         if direction == 'H':
             dset = yall
@@ -451,36 +588,21 @@ class CSVExporter(Exporter):
             dset = xall
             ddep = yall
 
-        # overlap
-        mins = [np.min(d) for d in dset if d is not None and len(d)]
-        maxs = [np.max(d) for d in dset if d is not None and len(d)]
-        if not mins or not maxs:
-            raise ValueError("Invalid data ranges for averaging")
-
-        inf = np.max(mins)
+        inf = np.max([np.min(d) for d in dset if d is not None])
         if loose >= 100:
-            sup = np.min(maxs)
+            sup = np.min([np.max(d) for d in dset if d is not None])
         else:
-            sup = np.percentile(maxs, 100 - loose)
-
-        if not np.isfinite(inf) or not np.isfinite(sup) or sup <= inf:
-            raise ValueError("Non-overlapping ranges for averaging")
+            sups = [np.max(d) for d in dset if d is not None]
+            sup = np.percentile(sups, 100 - loose)
 
         newax = np.linspace(inf, sup, N)
         neway = []
         for x, y in zip(dset, ddep):
-            if len(x) < 2 or len(y) < 2 or len(x) != len(y):
-                continue  # skip malformed series
-            # only curves spanning the upper bound contribute (like SoftMech guard)
             if np.max(x) >= sup:
                 neway.append(np.interp(newax, x, y))
 
-        if not neway:
-            raise ValueError("No curves contribute to averaged range")
-
-        neway = np.asarray(neway)
-        newyavg = np.mean(neway, axis=0)
-        newstd = np.std(neway, axis=0)
+        newyavg = np.average(np.array(neway), axis=0)
+        newstd = np.std(np.array(neway), axis=0)
 
         if direction == 'H':
             return newyavg, newax, newstd

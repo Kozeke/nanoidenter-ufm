@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import ReactECharts from "echarts-for-react";
 
 const ForceIndentationDataSet = ({
@@ -10,6 +10,8 @@ const ForceIndentationDataSet = ({
   graphType = "line",
   onGraphTypeChange = () => {}, // optional; safe if parent doesn't pass
   activeTab = "", // Track active tab to trigger resize when tab becomes visible
+  isSingleCurveMode = false,
+  selectedForceModel = "",
 }) => {
   const chartRef = useRef(null);      // ReactECharts component
   const echartsRef = useRef(null);    // ECharts instance
@@ -107,46 +109,100 @@ const ForceIndentationDataSet = ({
     const magnitude = Math.floor(Math.log10(absMin));
     return Math.pow(10, -magnitude);
   }
+
+  // Downsample data when there are many curves to improve rendering performance
+  const MAX_POINTS_PER_CURVE = 700;
+  function downsampleXY(xArr, yArr, maxPoints = MAX_POINTS_PER_CURVE) {
+    if (!xArr || !yArr || xArr.length !== yArr.length) return [[], []];
+    const n = xArr.length;
+    if (n <= maxPoints) return [xArr, yArr];
+    const step = Math.ceil(n / maxPoints);
+    const xs = [];
+    const ys = [];
+    for (let i = 0; i < n; i += step) {
+      xs.push(xArr[i]);
+      ys.push(yArr[i]);
+    }
+    return [xs, ys];
+  }
   // console.log("forceData", forceData)
   
   // Normalize: accept either the full graph {curves:{...}, domain:{...}} or just the curves object
-  const graphObj = (forceData && forceData.curves) ? forceData.curves : (forceData || {});
+  const graphObj = useMemo(() => {
+    return (forceData && forceData.curves) ? forceData.curves : (forceData || {});
+  }, [forceData]);
+  
   const validForceData = graphObj;   // keep old naming if used elsewhere
   const curvesData = graphObj;
   
-  // Extract curves_cp and curves_fparam from the curves object with proper array checks
-  const curvesCpData = Array.isArray(curvesData.curves_cp) ? curvesData.curves_cp : [];
-  const curvesFparamData = Array.isArray(curvesData.curves_fparam) ? curvesData.curves_fparam : [];
+  // Extract curves_cp and curves_fparam from the curves object with proper array checks - memoized
+  const curvesCpData = useMemo(() => {
+    return Array.isArray(curvesData.curves_cp) ? curvesData.curves_cp : [];
+  }, [curvesData]);
+  
+  const curvesFparamData = useMemo(() => {
+    return Array.isArray(curvesData.curves_fparam) ? curvesData.curves_fparam : [];
+  }, [curvesData]);
+  
+  // Determine if we should show model overlays (only in single-curve mode with a model selected)
+  const showForceModelOverlay = isSingleCurveMode && selectedForceModel;
   
   // Safe filtering: Only filter if there *is* a selection; otherwise keep all
   // This prevents blank charts when selectedCurveIds from another tab don't match current curves
-  const filteredCp = (selectedCurveIds?.length > 0)
-    ? curvesCpData.filter(c => {
-        // Also check for _hertz variants
-        if (selectedCurveIds.includes(c.curve_id)) return true;
+  // Always filter out _hertz model overlays unless in single-curve mode - memoized
+  const filteredCp = useMemo(() => {
+    if (selectedCurveIds?.length > 0) {
+      return curvesCpData.filter(c => {
+        // Filter out _hertz model overlays unless in single-curve mode
         if (c.curve_id.includes('_hertz')) {
+          if (!showForceModelOverlay) return false;
           const base = c.curve_id.replace('_hertz', '');
           const mainId = `curve${base}`;
           return selectedCurveIds.includes(mainId);
         }
+        if (selectedCurveIds.includes(c.curve_id)) return true;
         return false;
-      })
-    : curvesCpData;
+      });
+    } else {
+      // When no selection, still filter out _hertz overlays unless in single-curve mode
+      return curvesCpData.filter(c => {
+        if (c.curve_id.includes('_hertz')) {
+          return showForceModelOverlay;
+        }
+        return true;
+      });
+    }
+  }, [curvesCpData, selectedCurveIds, showForceModelOverlay]);
 
-  const filteredFparam = (selectedCurveIds?.length > 0)
-    ? curvesFparamData.filter(fparam => {
+  const filteredFparam = useMemo(() => {
+    if (!showForceModelOverlay) return [];
+    
+    if (selectedCurveIds?.length > 0) {
+      return curvesFparamData.filter(fparam => {
         const curveIndex = fparam.curve_index;
         const correspondingCurve = curvesCpData[curveIndex];
         return correspondingCurve && selectedCurveIds.includes(correspondingCurve.curve_id);
-      })
-    : curvesFparamData;
+      });
+    }
+    return curvesFparamData;
+  }, [showForceModelOverlay, selectedCurveIds, curvesFparamData, curvesCpData]);
 
-  // If filtering produced 0 visible series, fall back to all to avoid a blank chart
-  const finalCp = filteredCp.length > 0 ? filteredCp : curvesCpData;
-  const finalFp = filteredFparam.length > 0 ? filteredFparam : curvesFparamData;
+  // If filtering produced 0 visible series, fall back to non-model curves to avoid a blank chart
+  // But don't re-add model overlays that were intentionally filtered out - memoized
+  const fallbackCp = useMemo(() => {
+    return curvesCpData.filter(c => !c.curve_id.includes('_hertz'));
+  }, [curvesCpData]);
   
-  // Combine both types of curves for processing (using filtered data)
-  const allCurves = [...finalCp, ...finalFp];
+  const finalCp = useMemo(() => {
+    return filteredCp.length > 0 ? filteredCp : fallbackCp;
+  }, [filteredCp, fallbackCp]);
+  
+  const finalFp = filteredFparam;
+  
+  // Combine both types of curves for processing (using filtered data) - memoized
+  const allCurves = useMemo(() => {
+    return [...finalCp, ...finalFp];
+  }, [finalCp, finalFp]);
   
   // console.log("forceData (Indentation):", validForceData);
   // console.log("curves_cp:", curvesCpData);
@@ -154,30 +210,128 @@ const ForceIndentationDataSet = ({
 
   // If the first curve is invalid, fall back to the first valid curve for scaling
   const firstValid = (arr) => arr.find(c => Array.isArray(c?.x) && c.x.length && Array.isArray(c?.y) && c.y.length);
-  const xData = allCurves.length > 0 ? (firstValid(allCurves)?.x || []) : [];
-  const xScaleFactor = getScaleFactor(domainRange.xMin, xData);
+  
+  const xData = useMemo(() => {
+    return allCurves.length > 0 ? (firstValid(allCurves)?.x || []) : [];
+  }, [allCurves]);
+  
+  const xScaleFactor = useMemo(() => getScaleFactor(domainRange.xMin, xData), [domainRange.xMin, xData]);
   
   // Normalize y-axis scaling to avoid edge-cases when yMin is 0
-  const yFirst = firstValid(allCurves)?.y || [];
-  const yScaleFactor = getScaleFactor(domainRange.yMin, yFirst);
+  const yFirst = useMemo(() => {
+    return firstValid(allCurves)?.y || [];
+  }, [allCurves]);
+  
+  const yScaleFactor = useMemo(() => getScaleFactor(domainRange.yMin, yFirst), [domainRange.yMin, yFirst]);
 
-  const xScaledRange = (domainRange.xMax - domainRange.xMin) * xScaleFactor;
-  const xDecimals = xScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10))) : 0;
+  const xScaledRange = useMemo(() => (domainRange.xMax - domainRange.xMin) * xScaleFactor, [domainRange.xMax, domainRange.xMin, xScaleFactor]);
+  const xDecimals = useMemo(() => xScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10))) : 0, [xScaledRange]);
 
-  const yScaledRange = (domainRange.yMax - domainRange.yMin) * yScaleFactor;
-  const yDecimals = yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0;
+  const yScaledRange = useMemo(() => (domainRange.yMax - domainRange.yMin) * yScaleFactor, [domainRange.yMax, domainRange.yMin, yScaleFactor]);
+  const yDecimals = useMemo(() => yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0, [yScaledRange]);
 
-  const xExponent = Math.log10(xScaleFactor);
-  const xUnit = xExponent === 0 ? 'm' : `×10^{-${Math.round(xExponent)}} m`;
+  const xExponent = useMemo(() => Math.log10(xScaleFactor), [xScaleFactor]);
+  const xUnit = useMemo(() => xExponent === 0 ? 'm' : `×10^{-${Math.round(xExponent)}} m`, [xExponent]);
 
-  const yExponent = Math.log10(yScaleFactor);
-  const yUnit = yExponent === 0 ? 'N' : `×10^{-${Math.round(yExponent)}} N`;
+  const yExponent = useMemo(() => Math.log10(yScaleFactor), [yScaleFactor]);
+  const yUnit = useMemo(() => yExponent === 0 ? 'N' : `×10^{-${Math.round(yExponent)}} N`, [yExponent]);
 
   // Debug: Log curve data before building chartOptions
   console.log("FI curves_cp len:", curvesCpData[0]?.x?.length, "fparams len:", curvesFparamData.length, "domain:", domainRange);
 
-  const chartOptions = {
-    tooltip: { trigger: "axis" },
+  // Generate series data - memoized to avoid recomputing point mappings on every render
+  // Downsample when there are many curves to improve rendering performance
+  const series = useMemo(() => {
+    const manySeries = finalCp.length > 40; // Threshold for downsampling
+
+    return [
+      // curves_cp as line/scatter depending on toolbar
+      ...finalCp
+        .filter(c => Array.isArray(c?.x) && Array.isArray(c?.y) && c.x.length === c.y.length && c.x.length > 1)
+        .map((curve) => {
+          let x = curve.x;
+          let y = curve.y;
+
+          // Downsample when there are many series to improve performance
+          if (manySeries) {
+            [x, y] = downsampleXY(x, y);
+          }
+
+          const isValid = Array.isArray(x) && Array.isArray(y) && x.length === y.length;
+          
+          return {
+            name: curve.curve_id,
+            type: graphType === "scatter" ? "scatter" : "line",
+            smooth: false,
+            showSymbol: false, // Keep symbols off for cp curves (fparam uses scatter with symbols)
+            connectNulls: true,
+            large: true,
+            sampling: "lttb", // Extra safety for large data
+            triggerEvent: true,
+            itemStyle: {
+              color: curve.curve_id.includes('_hertz') ? 'yellow' : undefined,
+            },
+            lineStyle: {
+              width: curve.curve_id.includes('_hertz') ? 5 : 1.5,
+            },
+            data: isValid ? x.map((vx, i) => [vx * xScaleFactor, (y[i] ?? 0) * yScaleFactor]) : [],
+          };
+        }),
+      // curves_fparam as scatter series (using filtered finalFp)
+      ...finalFp.map((fparamObj) => {
+        const curveIndex = fparamObj.curve_index;
+        const correspondingCurve = curvesCpData[curveIndex];
+        if (!correspondingCurve) return null;
+        const xIndex = Math.floor(correspondingCurve.x.length / 2);
+        const xValue = correspondingCurve.x[xIndex] || 0;
+        const yValue = fparamObj.fparam;
+        return {
+          name: `fparam_${curveIndex}`,
+          type: "scatter",
+          showSymbol: true,
+          symbolSize: 8,
+          large: true,
+          triggerEvent: true,
+          itemStyle: { color: '#ff6b6b' },
+          data: [[xValue * xScaleFactor, yValue * yScaleFactor]],
+        };
+      }).filter(Boolean), // Remove null entries
+    ];
+  }, [finalCp, finalFp, graphType, xScaleFactor, yScaleFactor, curvesCpData]);
+
+  // Determine if there are too many series for tooltips (performance optimization)
+  const tooManySeries = finalCp.length > 40;
+
+  // Chart options - memoized to avoid recreating the entire config object on every render
+  const chartOptions = useMemo(() => ({
+    tooltip: tooManySeries
+      ? { show: false } // Disable tooltips when there are many curves to improve performance
+      : {
+          trigger: "axis",
+          // Format tooltip to show each series cleanly with curve ID, x, and y values
+          formatter: (params) => {
+            const list = Array.isArray(params) ? params : [params];
+
+            return list
+              .map(p => {
+                // Extract curve ID from series name or data
+                const curveId = p.seriesName || p.name || (p.data && p.data.curve_id);
+
+                // Handle value as array or single value
+                const value = Array.isArray(p.value) ? p.value : [p.value];
+
+                const x = value[0];
+                const y = value[1];
+
+                return [
+                  `<b>${curveId}</b>`,
+                  `x: ${x}`,
+                  `y: ${y}`,
+                ].join('<br/>');
+              })
+              .join('<br/><br/>');
+          },
+        },
     xAxis: {
       type: "value",
       name: `Indentation (${xUnit})`,
@@ -205,49 +359,7 @@ const ForceIndentationDataSet = ({
         },
       },
     },
-    series: [
-      // curves_cp as line/scatter depending on toolbar
-      ...finalCp
-        .filter(c => Array.isArray(c?.x) && Array.isArray(c?.y) && c.x.length === c.y.length && c.x.length > 1)
-        .map((curve) => ({
-        name: curve.curve_id,
-        type: graphType === "scatter" ? "scatter" : "line",
-        smooth: false,
-        showSymbol: false,
-        connectNulls: true,
-        large: true,
-        triggerEvent: true,
-        itemStyle: {
-          color: curve.curve_id.includes('_hertz') ? 'yellow' : undefined,
-        },
-        lineStyle: {
-          width: curve.curve_id.includes('_hertz') ? 5 : 1.5,
-        },
-        data: (() => {
-          const isValid = Array.isArray(curve.x) && Array.isArray(curve.y) && curve.x.length === curve.y.length;
-          return isValid ? curve.x.map((x, i) => [x * xScaleFactor, (curve.y[i] ?? 0) * yScaleFactor]) : [];
-        })(),
-      })),
-      // curves_fparam as scatter series (using filtered finalFp)
-      ...finalFp.map((fparamObj) => {
-        const curveIndex = fparamObj.curve_index;
-        const correspondingCurve = curvesCpData[curveIndex];
-        if (!correspondingCurve) return null;
-        const xIndex = Math.floor(correspondingCurve.x.length / 2);
-        const xValue = correspondingCurve.x[xIndex] || 0;
-        const yValue = fparamObj.fparam;
-        return {
-          name: `fparam_${curveIndex}`,
-          type: "scatter",
-          showSymbol: true,
-          symbolSize: 8,
-          large: true,
-          triggerEvent: true,
-          itemStyle: { color: '#ff6b6b' },
-          data: [[xValue * xScaleFactor, yValue * yScaleFactor]],
-        };
-      }).filter(Boolean), // Remove null entries
-    ],
+    series,
 
     legend: { show: false },
     grid: { left: "12%", right: "10%", bottom: "15%", top: "8%" },
@@ -283,7 +395,7 @@ const ForceIndentationDataSet = ({
     ],
     animation: false,
     progressive: 5000,
-  };
+  }), [tooManySeries, series, xScaleFactor, yScaleFactor, xDecimals, yDecimals, xUnit, yUnit, domainRange]);
 
   const onChartEvents = {
     click: (params) => {

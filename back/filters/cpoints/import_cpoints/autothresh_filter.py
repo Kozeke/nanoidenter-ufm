@@ -1,75 +1,152 @@
 from ..cpoint_base import CpointBase
 import numpy as np
+from scipy.signal import savgol_filter
+
 
 class AutothreshFilter(CpointBase):
     NAME = "Autothresh"
-    DESCRIPTION = "Automatic threshold filter to find contact point"
+    DESCRIPTION = "Identify the CP by thresholding it over different degrees"
     DOI = ""
-    
+
     def create(self):
-        """Define the filter's parameters for the UI."""
-        # Add zeroRange as a parameter for user control
-        self.add_parameter("zeroRange", "float", "Zero range offset [nm]", 500)
+        # Same semantics as original:
+        # "Range to set the zero [nm]" with default 500
+        self.add_parameter(
+            "zeroRange",
+            "float",
+            "Range to set the zero [nm]",
+            500.0,
+        )
 
     def calculate(self, x, y, metadata=None):
         """
-        Apply autothresh filter to find contact point.
-        Returns [[z_cp, f_cp]] or None.
+        Port of SoftMech AutoThreshold CP finder.
+
+        x: Z (meters)
+        y: Force (Newtons)
+        Returns: [[z_cp, f_cp]] or None
         """
-        zeroRange = self.get_value("zeroRange")  # same name, same units (nm)
-
-        if len(x) < 2 or len(y) < 2:
+        if x is None or y is None:
             return None
 
-        # --- cast & copy
+
+
         x = np.asarray(x, dtype=np.float64)
-        worky = np.copy(np.asarray(y, dtype=np.float64))
+        y = np.asarray(y, dtype=np.float64)
 
-        # --- pick zero-range target (x is in meters; zeroRange is nm)
-        xtarget = np.min(x) + zeroRange * 1e-9
-        jtarget = np.argmin(np.abs(x - xtarget))
-        if jtarget == 0 or jtarget >= len(x):
+
+
+        if x.size < 4 or y.size < 4 or x.size != y.size:
             return None
 
-        # --- baseline: linear fit on the pre-contact side (depends on x direction)
-        if x[0] < x[-1]:
-            xlin, ylin = x[:jtarget], worky[:jtarget]
-        else:
-            xlin, ylin = x[jtarget:], worky[jtarget:]
 
-        if len(xlin) < 2:
+
+        # Ensure increasing X order (SoftMech assumes this)
+        if x[0] > x[-1]:
+            x = x[::-1]
+            y = y[::-1]
+
+
+
+        # ZeroRange in nm from *start* of curve
+        zero_range_nm = float(self.get_value("zeroRange"))
+        zero_range_m = zero_range_nm * 1e-9
+
+
+
+        # Target x for baseline window
+        xtarget = x[0] + zero_range_m
+        jtarget = int(np.argmin(np.abs(x - xtarget)))
+
+
+
+        if jtarget <= 1 or jtarget >= len(x) - 1:
+            # Can't form a sensible baseline region
             return None
+
+
+
+        # Baseline: linear fit on the pre-contact region [0 : jtarget]
+        xlin = x[:jtarget]
+        ylin = y[:jtarget]
+        if xlin.size < 2:
+            return None
+
+
 
         m, q = np.polyfit(xlin, ylin, 1)
-        worky -= (m * x + q)
+        worky = y - (m * x + q)
 
-        # --- midpoints of adjacent samples (original logic)
-        differences = (worky[1:] + worky[:-1]) / 2.0
-        # use set() then sort() to mirror the original behavior
+
+
+        # Smooth to reduce noise (typical Savitzky–Golay settings)
+        # Use an odd window length, limited by data length
+        n = worky.size
+        # choose a moderate window; soften near boundaries
+        win = min(61, n - (1 - (n % 2)))  # nearest odd <= n
+        if win < 5:  # fallback minimum
+            win = min(5, n - (1 - (n % 2)))
+        if win < 5:
+            return None
+
+
+
+        smoothed = savgol_filter(worky, win, 2, mode="interp")
+
+
+
+        # Differences and midpoints (same structure as original)
+        differences = (smoothed[1:] + smoothed[:-1]) / 2.0
         midpoints = np.array(list(set(differences)), dtype=np.float64)
         midpoints.sort()
 
-        # only positive midpoints
+
+
         positive_midpoints = midpoints[midpoints > 0.0]
         if positive_midpoints.size == 0:
             return None
 
-        # --- scan thresholds in order; pick the FIRST with exactly ONE crossing
-        #     crossing definition: y[k] < th and y[k+1] > th
-        inflection = None
+
+
+        # Now build a "crossings" logic similar to original:
+        # for each candidate threshold, record how many transitions we get
+        crossings = []
         for th in positive_midpoints:
-            cross = np.logical_and(worky[:-1] < th, worky[1:] > th)
-            if np.count_nonzero(cross) == 1:
-                inflection = th
-                break
+            # 1 where (>th), 0 otherwise
+            mask = (differences > th).astype(int)
+            # transitions from 0 -> 1
+            trans = (mask[1:] - mask[:-1]) == 1
+            crossings.append(np.count_nonzero(trans))
 
-        if inflection is None:
+
+
+        crossings = np.asarray(crossings, dtype=int)
+
+
+
+        # candidates where we have exactly one crossing
+        candidates = np.where(crossings == 1)
+        if candidates[0].size == 0:
             return None
 
-        # closest midpoint index (+1 to map midpoint to the right sample index)
+
+
+        # Pick first candidate threshold
+        inflection = positive_midpoints[candidates[0][0]]
+
+
+
+        # Contact-point index: closest midpoint to that inflection
         jcpguess = int(np.argmin(np.abs(differences - inflection)) + 1)
-        if jcpguess >= len(x):
+        if jcpguess < 0 or jcpguess >= x.size:
             return None
 
-        # return z_cp, f_cp from the ORIGINAL (un-detrended) signal
-        return [[float(x[jcpguess]), float(y[jcpguess])]]
+
+
+        # Return z_cp, f_cp from *original* signal
+        xcp = float(x[jcpguess])
+        ycp = float(y[jcpguess])
+
+
+
+        return [[xcp, ycp]]

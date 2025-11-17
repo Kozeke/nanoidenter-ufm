@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import ReactECharts from "echarts-for-react";
 
 const ElasticitySpectra = ({
@@ -9,6 +9,8 @@ const ElasticitySpectra = ({
   selectedCurveIds = [],
   graphType = "line",
   onGraphTypeChange = () => {}, // optional, safe default
+  isSingleCurveMode = false,
+  selectedElasticityModel = "",
 }) => {
   const chartRef = useRef(null);
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
@@ -48,11 +50,30 @@ const ElasticitySpectra = ({
     return Math.pow(10, -magnitude);
   }
 
+  // Downsample data when there are many curves to improve rendering performance
+  const MAX_POINTS_PER_CURVE = 700;
+  function downsampleXY(xArr, yArr, maxPoints = MAX_POINTS_PER_CURVE) {
+    if (!xArr || !yArr || xArr.length !== yArr.length) return [[], []];
+    const n = xArr.length;
+    if (n <= maxPoints) return [xArr, yArr];
+    const step = Math.ceil(n / maxPoints);
+    const xs = [];
+    const ys = [];
+    for (let i = 0; i < n; i += step) {
+      xs.push(xArr[i]);
+      ys.push(yArr[i]);
+    }
+    return [xs, ys];
+  }
+
   // Normalize the render data (use last non-empty to avoid blink)
   const renderForceData = Array.isArray(forceData) && forceData.length > 0
     ? forceData
     : lastNonEmptyDataRef.current;
 
+  // Determine if we should show model overlays (only in single-curve mode with a model selected)
+  const showElasticModelOverlay = isSingleCurveMode && selectedElasticityModel;
+  
   // Helper: treat "curve1" and "1" as same base; add pairing with "_elastic"
   const isElasticId = (id) => /_elastic$/i.test(id);
   // strip any suffix after first underscore (e.g., _elastic, _hertz, _whatever)
@@ -71,43 +92,57 @@ const ElasticitySpectra = ({
     return selectedBases.has(base);
   };
 
-  const validForceData = Array.isArray(renderForceData)
-    ? renderForceData.map((curve) => ({
-        ...curve,
-        curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
-        x: Array.isArray(curve?.x) ? curve.x : [],
-        y: Array.isArray(curve?.y) ? curve.y : [],
-      }))
-    : [];
+  // Process and normalize force data - memoized to avoid recomputing on every render
+  const processedCurves = useMemo(() => {
+    if (!Array.isArray(renderForceData)) return [];
+
+    return renderForceData.map((curve) => ({
+      ...curve,
+      curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
+      x: Array.isArray(curve?.x) ? curve.x : [],
+      y: Array.isArray(curve?.y) ? curve.y : [],
+    }));
+  }, [renderForceData]);
+
+  // Keep validForceData for backward compatibility with existing code
+  const validForceData = processedCurves;
 
   // Debug: Log the data to see what we're getting
   // console.log("SpectraElasticity - forceData:", forceData);
   // console.log("SpectraElasticity - validForceData:", validForceData);
 
-  const xData =
-    validForceData.length > 0 && validForceData[0]?.x.length > 0
+  // Calculate scale factors - memoized based on domainRange and first curve's x data
+  const xData = useMemo(() => {
+    return validForceData.length > 0 && validForceData[0]?.x.length > 0
       ? validForceData[0].x
       : [];
-  const xScaleFactor = getScaleFactor(domainRange.xMin, xData);
-  const yScaleFactor = getScaleFactor(domainRange.yMin);
+  }, [validForceData]);
+  
+  const xScaleFactor = useMemo(() => getScaleFactor(domainRange.xMin, xData), [domainRange.xMin, xData]);
+  const yScaleFactor = useMemo(() => getScaleFactor(domainRange.yMin), [domainRange.yMin]);
 
-  const xScaledRange = (domainRange.xMax - domainRange.xMin) * xScaleFactor;
-  const yScaledRange = (domainRange.yMax - domainRange.yMin) * yScaleFactor;
+  const xScaledRange = useMemo(() => (domainRange.xMax - domainRange.xMin) * xScaleFactor, [domainRange.xMax, domainRange.xMin, xScaleFactor]);
+  const yScaledRange = useMemo(() => (domainRange.yMax - domainRange.yMin) * yScaleFactor, [domainRange.yMax, domainRange.yMin, yScaleFactor]);
 
-  const xDecimals =
+  const xDecimals = useMemo(() =>
     xScaledRange > 0
       ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10)))
-      : 0;
-  const yDecimals =
+      : 0,
+    [xScaledRange]
+  );
+  
+  const yDecimals = useMemo(() =>
     yScaledRange > 0
       ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10)))
-      : 0;
+      : 0,
+    [yScaledRange]
+  );
 
-  const xExponent = Math.log10(xScaleFactor);
-  const yExponent = Math.log10(yScaleFactor);
+  const xExponent = useMemo(() => Math.log10(xScaleFactor), [xScaleFactor]);
+  const yExponent = useMemo(() => Math.log10(yScaleFactor), [yScaleFactor]);
 
-  const xUnit = xExponent === 0 ? "m" : `×10^{-${Math.round(xExponent)}} m`;
-  const yUnit = yExponent === 0 ? "Pa" : `×10^{-${Math.round(yExponent)}} Pa`;
+  const xUnit = useMemo(() => xExponent === 0 ? "m" : `×10^{-${Math.round(xExponent)}} m`, [xExponent]);
+  const yUnit = useMemo(() => yExponent === 0 ? "Pa" : `×10^{-${Math.round(yExponent)}} Pa`, [yExponent]);
 
   // ---------- Toolbar styles ----------
   const toolbarCardStyle = {
@@ -186,8 +221,98 @@ const ElasticitySpectra = ({
 
   // ---------- Chart config ----------
   const safeMin = (v) => (Number.isFinite(v) ? v : undefined);
-  const chartOptions = {
-    tooltip: { trigger: "axis" },
+  
+  // Generate series data - memoized to avoid recomputing point mappings on every render
+  // Downsample when there are many curves to improve rendering performance
+  const series = useMemo(() => {
+    const manySeries = processedCurves.length > 40; // Threshold for downsampling
+
+    return processedCurves.map((curve) => {
+      const id = curve.curve_id;
+      const elastic = isElasticId(id);
+      
+      // Only show elastic model overlays when in single-curve mode
+      if (elastic && !showElasticModelOverlay) {
+        return null;
+      }
+      
+      let x = curve.x;
+      let y = curve.y;
+
+      // Downsample when there are many series to improve performance
+      if (manySeries) {
+        [x, y] = downsampleXY(x, y);
+      }
+      
+      const color = elastic ? "yellow" : "#5470C6";
+      const showCurve =
+        isShownWithPartner(id, selectedCurveIds) &&
+        Array.isArray(x) &&
+        Array.isArray(y) &&
+        x.length === y.length;
+
+      // Debug: Log each curve being processed
+      // console.log(`SpectraElasticity - Processing curve: ${id}, elastic: ${elastic}, showCurve: ${showCurve}, color: ${color}`);
+
+      return {
+        name: id,
+        type: graphType,
+        smooth: graphType === "line" ? false : undefined,
+        showSymbol: !manySeries && graphType === "scatter",
+        symbolSize: !manySeries && graphType === "scatter" ? 4 : undefined,
+        large: true,
+        sampling: "lttb", // Extra safety for large data
+        triggerEvent: true,
+        // keep elastic on top
+        z: elastic ? 3 : 2,
+        lineStyle:
+          graphType === "line"
+            ? { color, width: elastic ? 4 : 2, opacity: 1 }
+            : undefined,
+        itemStyle: graphType === "scatter" ? { color } : undefined,
+        data: showCurve
+          ? x.map((vx, i) => [
+              vx * xScaleFactor,
+              (y[i] ?? 0) * yScaleFactor,
+            ])
+          : [],
+      };
+    }).filter(Boolean); // Remove null entries
+  }, [processedCurves, graphType, selectedCurveIds, xScaleFactor, yScaleFactor, showElasticModelOverlay]);
+  
+  // Determine if there are too many series for tooltips (performance optimization)
+  const tooManySeries = processedCurves.length > 40;
+
+  // Chart options - memoized to avoid recreating the entire config object on every render
+  const chartOptions = useMemo(() => ({
+    tooltip: tooManySeries
+      ? { show: false } // Disable tooltips when there are many curves to improve performance
+      : {
+          trigger: "axis",
+          // Format tooltip to show each series cleanly with curve ID, x, and y values
+          formatter: (params) => {
+            const list = Array.isArray(params) ? params : [params];
+
+            return list
+              .map(p => {
+                // Extract curve ID from series name or data
+                const curveId = p.seriesName || p.name || (p.data && p.data.curve_id);
+
+                // Handle value as array or single value
+                const value = Array.isArray(p.value) ? p.value : [p.value];
+
+                const x = value[0];
+                const y = value[1];
+
+                return [
+                  `<b>${curveId}</b>`,
+                  `x: ${x}`,
+                  `y: ${y}`,
+                ].join('<br/>');
+              })
+              .join('<br/><br/>');
+          },
+        },
     xAxis: {
       type: "value",
       name: `Z (${xUnit})`,
@@ -211,42 +336,7 @@ const ElasticitySpectra = ({
         formatter: (value) => value.toFixed(yDecimals),
       },
     },
-    series: validForceData.map((curve) => {
-      const id = curve.curve_id;
-      const elastic = isElasticId(id);
-      const color = elastic ? "yellow" : "#5470C6";
-      const showCurve =
-        isShownWithPartner(id, selectedCurveIds) &&
-        Array.isArray(curve.x) &&
-        Array.isArray(curve.y) &&
-        curve.x.length === curve.y.length;
-
-      // Debug: Log each curve being processed
-      // console.log(`SpectraElasticity - Processing curve: ${id}, elastic: ${elastic}, showCurve: ${showCurve}, color: ${color}`);
-
-      return {
-        name: id,
-        type: graphType,
-        smooth: graphType === "line" ? false : undefined,
-        showSymbol: graphType === "scatter",
-        symbolSize: graphType === "scatter" ? 4 : undefined,
-        large: true,
-        triggerEvent: true,
-        // keep elastic on top
-        z: elastic ? 3 : 2,
-        lineStyle:
-          graphType === "line"
-            ? { color, width: elastic ? 4 : 2, opacity: 1 }
-            : undefined,
-        itemStyle: graphType === "scatter" ? { color } : undefined,
-        data: showCurve
-          ? curve.x.map((x, i) => [
-              x * xScaleFactor,
-              curve.y[i] !== undefined ? curve.y[i] * yScaleFactor : 0,
-            ])
-          : [],
-      };
-    }),
+    series,
     legend: { show: false },
     grid: { left: "12%", right: "10%", bottom: "15%", top: "8%" },
     dataZoom: [
@@ -257,7 +347,7 @@ const ElasticitySpectra = ({
     ],
     animation: false,
     progressive: 5000,
-  };
+  }), [tooManySeries, series, xScaleFactor, yScaleFactor, xDecimals, yDecimals, xUnit, yUnit, domainRange]);
 
   const onChartEvents = {
     click: (params) => {

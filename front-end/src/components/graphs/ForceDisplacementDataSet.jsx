@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import ReactECharts from "echarts-for-react";
 
 const ForceDisplacementDataSet = ({
@@ -125,31 +125,93 @@ const ForceDisplacementDataSet = ({
     return Math.pow(10, -magnitude);
   }
 
-  const validForceData = Array.isArray(forceData)
-    ? forceData.map((curve) => ({
-        ...curve,
-        curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
-        x: Array.isArray(curve?.x) ? curve.x : [],
-        y: Array.isArray(curve?.y) ? curve.y : [],
-      }))
-    : [];
+  // Downsample data when there are many curves to improve rendering performance
+  const MAX_POINTS_PER_CURVE = 700;
+  function downsampleXY(xArr, yArr, maxPoints = MAX_POINTS_PER_CURVE) {
+    if (!xArr || !yArr || xArr.length !== yArr.length) return [[], []];
+    const n = xArr.length;
+    if (n <= maxPoints) return [xArr, yArr];
+    const step = Math.ceil(n / maxPoints);
+    const xs = [];
+    const ys = [];
+    for (let i = 0; i < n; i += step) {
+      xs.push(xArr[i]);
+      ys.push(yArr[i]);
+    }
+    return [xs, ys];
+  }
+
+  // Process and normalize force data - memoized to avoid recomputing on every render
+  const processedCurves = useMemo(() => {
+    if (!Array.isArray(forceData)) return [];
+
+    return forceData.map((curve) => ({
+      ...curve,
+      curve_id: curve?.curve_id ? String(curve.curve_id) : "Unknown Curve",
+      x: Array.isArray(curve?.x) ? curve.x : [],
+      y: Array.isArray(curve?.y) ? curve.y : [],
+    }));
+  }, [forceData]);
+
+  // Keep validForceData for backward compatibility with existing code
+  const validForceData = processedCurves;
   // console.log("forceData (Displacement):", JSON.stringify(validForceData, null, 2));
 
-  const xData = validForceData.length > 0 && validForceData[0]?.x.length > 0 ? validForceData[0].x : [];
-  const xScaleFactor = getScaleFactor(domainRange.xMin, xData);
-  const yScaleFactor = getScaleFactor(domainRange.yMin);
+  // Calculate scale factors - memoized based on domainRange and first curve's x data
+  const xData = useMemo(() => {
+    return validForceData.length > 0 && validForceData[0]?.x.length > 0 ? validForceData[0].x : [];
+  }, [validForceData]);
 
-  const xScaledRange = (domainRange.xMax - domainRange.xMin) * xScaleFactor;
-  const xDecimals = xScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10))) : 0;
+  const xScaleFactor = useMemo(() => getScaleFactor(domainRange.xMin, xData), [domainRange.xMin, xData]);
+  const yScaleFactor = useMemo(() => getScaleFactor(domainRange.yMin), [domainRange.yMin]);
 
-  const yScaledRange = (domainRange.yMax - domainRange.yMin) * yScaleFactor;
-  const yDecimals = yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0;
+  const xScaledRange = useMemo(() => (domainRange.xMax - domainRange.xMin) * xScaleFactor, [domainRange.xMax, domainRange.xMin, xScaleFactor]);
+  const xDecimals = useMemo(() => xScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10))) : 0, [xScaledRange]);
 
-  const xExponent = Math.log10(xScaleFactor);
-  const xUnit = xExponent === 0 ? 'm' : `×10^{-${Math.round(xExponent)}} m`;
+  const yScaledRange = useMemo(() => (domainRange.yMax - domainRange.yMin) * yScaleFactor, [domainRange.yMax, domainRange.yMin, yScaleFactor]);
+  const yDecimals = useMemo(() => yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0, [yScaledRange]);
 
-  const yExponent = Math.log10(yScaleFactor);
-  const yUnit = yExponent === 0 ? 'N' : `×10^{-${Math.round(yExponent)}} N`;
+  const xExponent = useMemo(() => Math.log10(xScaleFactor), [xScaleFactor]);
+  const xUnit = useMemo(() => xExponent === 0 ? 'm' : `×10^{-${Math.round(xExponent)}} m`, [xExponent]);
+
+  const yExponent = useMemo(() => Math.log10(yScaleFactor), [yScaleFactor]);
+  const yUnit = useMemo(() => yExponent === 0 ? 'N' : `×10^{-${Math.round(yExponent)}} N`, [yExponent]);
+
+  // Generate series data - memoized to avoid recomputing point mappings on every render
+  // Downsample when there are many curves to improve rendering performance
+  const series = useMemo(() => {
+    const manySeries = processedCurves.length > 40; // Threshold for downsampling
+
+    return processedCurves.map((curve) => {
+      let x = curve.x;
+      let y = curve.y;
+
+      // Downsample when there are many series to improve performance
+      if (manySeries) {
+        [x, y] = downsampleXY(x, y);
+      }
+
+      const isShown =
+        (selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
+        Array.isArray(x) &&
+        Array.isArray(y) &&
+        x.length === y.length;
+
+      return {
+        name: curve.curve_id,
+        type: graphType,
+        smooth: graphType === "line" ? false : undefined,
+        showSymbol: !manySeries && graphType === "scatter",
+        symbolSize: !manySeries && graphType === "scatter" ? 4 : undefined,
+        large: true,
+        sampling: "lttb", // Extra safety for large data
+        triggerEvent: true,
+        data: isShown
+          ? x.map((vx, i) => [vx * xScaleFactor, (y[i] ?? 0) * yScaleFactor])
+          : [],
+      };
+    });
+  }, [processedCurves, graphType, selectedCurveIds, xScaleFactor, yScaleFactor]);
 
   const onChartEvents = {
     click: (params) => {
@@ -181,8 +243,39 @@ const ForceDisplacementDataSet = ({
     },
   };
 
-  const chartOptions = {
-    tooltip: { trigger: "axis" },
+  // Determine if there are too many series for tooltips (performance optimization)
+  const tooManySeries = processedCurves.length > 40;
+
+  // Chart options - memoized to avoid recreating the entire config object on every render
+  const chartOptions = useMemo(() => ({
+    tooltip: tooManySeries
+      ? { show: false } // Disable tooltips when there are many curves to improve performance
+      : {
+          trigger: "axis",
+          // Format tooltip to show each series cleanly with curve ID, x, and y values
+          formatter: (params) => {
+            const list = Array.isArray(params) ? params : [params];
+
+            return list
+              .map(p => {
+                // Extract curve ID from series name or data
+                const curveId = p.seriesName || p.name || (p.data && p.data.curve_id);
+
+                // Handle value as array or single value
+                const value = Array.isArray(p.value) ? p.value : [p.value];
+
+                const x = value[0];
+                const y = value[1];
+
+                return [
+                  `<b>${curveId}</b>`,
+                  `x: ${x}`,
+                  `y: ${y}`,
+                ].join('<br/>');
+              })
+              .join('<br/><br/>');
+          },
+        },
     xAxis: {
       type: "value",
       name: `Z (${xUnit})`,
@@ -210,25 +303,7 @@ const ForceDisplacementDataSet = ({
         },
       },
     },
-    series: validForceData.map((curve) => ({
-      name: curve.curve_id,
-      type: graphType, // Dynamic graph type
-      smooth: graphType === "line" ? false : undefined,
-      showSymbol: graphType === "scatter" ? true : false,
-      symbolSize: graphType === "scatter" ? 4 : undefined,
-      large: true,
-      triggerEvent: true,
-      data:
-        (selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
-        Array.isArray(curve.x) &&
-        Array.isArray(curve.y) &&
-        curve.x.length === curve.y.length
-          ? curve.x.map((x, i) => [
-              x * xScaleFactor,
-              curve.y[i] !== undefined ? curve.y[i] * yScaleFactor : 0,
-            ])
-          : [],
-    })),
+    series,
     legend: {
       show: false,
     },
@@ -270,7 +345,7 @@ const ForceDisplacementDataSet = ({
     ],
     animation: false,
     progressive: 5000,
-  };
+  }), [tooManySeries, series, xScaleFactor, yScaleFactor, xDecimals, yDecimals, xUnit, yUnit, domainRange]);
 
   return (
     <div style={{ flex: 1, height: "100%" }}>

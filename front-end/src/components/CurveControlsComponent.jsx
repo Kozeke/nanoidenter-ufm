@@ -27,10 +27,17 @@ const CurveControlsComponent = ({
   onParameterChange,
   showParameters,
   setShowParameters,
+  // Disable curve controls when socket is down
+  isSocketConnected,
 }) => {
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
-  const [curveIdInput, setCurveIdInput] = useState(curveId);  useEffect(() => {
-    setCurveIdInput(curveId);
+
+  // Ensure we never store `null` in local state – always use a string.
+  const [curveIdInput, setCurveIdInput] = useState(curveId ?? "");
+
+  // Derives a flag indicating whether controls should be disabled.
+  const isDisabled = !isSocketConnected;  useEffect(() => {
+    setCurveIdInput(curveId ?? "");
   }, [curveId]);  useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handleResize);
@@ -52,6 +59,9 @@ const CurveControlsComponent = ({
     position: "sticky",
     top: isMobile ? 0 : 56, // tweak if your top header height differs
     zIndex: 4,
+    // Disable when socket is down
+    opacity: isDisabled ? 0.6 : 1,
+    pointerEvents: isDisabled ? "none" : "auto",
   };
 
   const dividerStyle = {
@@ -157,11 +167,7 @@ setSelectedCurveIds((prev) => {
   }
 });  },
   [selectedExportCurveIds, onExportCurveIdsChange, setSelectedCurveIds]
-);  const handleGraphTypeChange = useCallback((event) => {
-    const value = event.target.value;
-    setGraphType(value);
-    console.log("Graph type changed to:", value);
-  }, [setGraphType]);  return (
+);  return (
     <div style={toolbarCardStyle}>
       {/* File name */}
       <div style={fileLabelStyle}>
@@ -281,25 +287,6 @@ setSelectedCurveIds((prev) => {
       {/* Divider */}
       {!isMobile && <div style={dividerStyle} />}
 
-      {/* Graph type */}
-      <FormControl style={formControlStyle}>
-        <InputLabel id="graph-type-label" style={inputLabelStyle}>
-          Graph Type
-        </InputLabel>
-        <Select
-          labelId="graph-type-label"
-          value={graphType}
-          onChange={handleGraphTypeChange}
-          style={selectStyle}
-        >
-          <MenuItem value="line" style={menuItemStyle}>Line</MenuItem>
-          <MenuItem value="scatter" style={menuItemStyle}>Scatter</MenuItem>
-        </Select>
-      </FormControl>
-
-      {/* Divider */}
-      {!isMobile && <div style={dividerStyle} />}
-
       {/* Number of curves + Curve ID */}
       <div style={numberRowStyle}>
         <label style={numberLabelStyle}>Number of Curves:</label>
@@ -314,7 +301,7 @@ setSelectedCurveIds((prev) => {
         <label style={numberLabelStyle}>Curve ID:</label>
         <input
           type="text"
-          value={curveIdInput}
+          value={curveIdInput ?? ""}
           onChange={(e) => setCurveIdInput(e.target.value)}
           onBlur={() => setCurveId(curveIdInput)}
           style={numberInputStyle}

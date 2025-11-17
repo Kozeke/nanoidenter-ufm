@@ -44,6 +44,8 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
     
     # Get filters from request
     filters = data.get("filters", {})
+    # Stores force model parameters (maxInd, minInd, poisson) used for Hertz fit calculations.
+    force_model_params = data.get("force_model_params")
     
     db_path = "data/experiment.db"
     errors = []
@@ -135,11 +137,14 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
             "level_names": level_names if level_names else None,
             "metadata_path": data.get("metadata_path", ""),
             "metadata": metadata,
+            "softmech_metadata": data.get("softmech_metadata") or {},  # ✅ ADD THIS
             "export_type": export_type,
             "dataset_type": dataset_type,
             "direction": direction,
             "loose": loose,
-            "filters": filters  # Pass filters to the exporter
+            "filters": filters,  # Pass filters to the exporter
+            "force_model_params": force_model_params,  # Pass force model parameters for Hertz fit calculations
+            "elasticity_params": data.get("elasticity_params") or {},  # optional, but add
         }
         
         num_exported = exporter.export(
