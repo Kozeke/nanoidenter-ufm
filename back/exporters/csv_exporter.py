@@ -228,16 +228,14 @@ class CSVExporter(Exporter):
                 curves_data = (graph_force_indentation or {}).get("curves", {})
                 for curve in curves_data.get("curves_cp", []):
                     if "x" in curve and "y" in curve:
-                        x = np.asarray(curve["x"], dtype=np.float64)
-                        y = np.asarray(curve["y"], dtype=np.float64)
-                        if x.size >= 2 and x.size == y.size:
-                            xall.append(x)
-                            yall.append(y)
+                        pair = self._sanitize_xy_pair(curve["x"], curve["y"])
+                        if pair is not None:
+                            x_data, y_data = pair
+                            xall.append(x_data)
+                            yall.append(y_data)
 
                 if not xall:
                     raise ValueError("No valid Force data found")
-
-                # now uses the "exact clone" of averageall above
                 x, y, std = self._average_all(xall, yall, direction, loose, grid_points)
 
             elif dataset_type == "Elasticity":
@@ -368,39 +366,35 @@ class CSVExporter(Exporter):
                     header += f"#Tip angle [deg]: {softmech_metadata['tip_angle_deg']}\n"
                 header += f"#Elastic constant [N/m]: {softmech_metadata['elastic_constant_nm']}\n"
 
-                # --- Hertz metadata: only if force model params exist (like SoftMech exp.fdata) ---
+                # --- Hertz metadata (unchanged, still computed from curves & force_model_params) ---
                 if dataset_type == "Force":
                     try:
                         curves_dict = (graph_force_indentation or {}).get("curves") or {}
-                        fparams = curves_dict.get("curves_fparam") or []
+                        if "curves_fparam" in curves_dict:
+                            fparams = curves_dict["curves_fparam"]
+                            if fparams:
+                                E_values = [
+                                    fp["params"][0]
+                                    for fp in fparams
+                                    if fp.get("params")
+                                ]
+                                if E_values:
+                                    avg_E = float(np.average(E_values))
+                                    header += f"#Average Hertz modulus [Pa]: {avg_E}\n"
 
-                        # Use the same key as in scatter exporter: "fparam"
-                        E_values = [
-                            fp["fparam"][0]
-                            for fp in fparams
-                            if fp.get("fparam")
-                        ]
+                        force_model_params = kwargs.get("force_model_params") or {}
+                        max_ind_param = force_model_params.get("maxInd")
 
-                        if E_values:
-                            # Average Hertz modulus
-                            avg_E = float(np.average(E_values))
-                            header += f"#Average Hertz modulus [Pa]: {avg_E}\n"
+                        if max_ind_param is not None:
+                            hertz_max_nm = float(max_ind_param)
+                        elif x is not None and len(x) > 0:
+                            hertz_max_nm = float(np.max(x)) * 1e9
+                        else:
+                            hertz_max_nm = 0.0
 
-                            # Hertz max indentation only if a Hertz fit actually exists
-                            force_model_params = kwargs.get("force_model_params") or {}
-                            max_ind_param = force_model_params.get("maxInd")
-
-                            if max_ind_param is not None:
-                                hertz_max_nm = float(max_ind_param)
-                            elif x is not None and len(x) > 0:
-                                hertz_max_nm = float(np.max(x)) * 1e9
-                            else:
-                                hertz_max_nm = 0.0
-
-                            header += f"#Hertz max indentation [nm]: {hertz_max_nm}\n"
+                        header += f"#Hertz max indentation [nm]: {hertz_max_nm}\n"
 
                     except Exception:
-                        # match SoftMech: silently skip both lines if anything goes wrong
                         pass
 
                 if dataset_type == "Force":
@@ -572,14 +566,16 @@ class CSVExporter(Exporter):
         yall: List[np.ndarray],
         direction: str,
         loose: int = 100,
-        grid_points: Optional[int] = None,  # kept for API compatibility, but ignored
+        grid_points: Optional[int] = None
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Exact SoftMech averageall behaviour (no extra guards / caps)."""
+        """Calculate average curves with interpolation (SoftMech-like, but bounded grid)"""
         if not xall:
             raise ValueError("Empty input to _average_all")
 
-        # 1:1 with SoftMech averageall
-        N = np.max([len(x) for x in xall])
+        N_raw = int(np.max([len(x) for x in xall]))
+        if grid_points is None:
+            grid_points = 4096
+        N = max(2, min(N_raw, int(grid_points)))
 
         if direction == 'H':
             dset = yall
@@ -588,21 +584,36 @@ class CSVExporter(Exporter):
             dset = xall
             ddep = yall
 
-        inf = np.max([np.min(d) for d in dset if d is not None])
+        # overlap
+        mins = [np.min(d) for d in dset if d is not None and len(d)]
+        maxs = [np.max(d) for d in dset if d is not None and len(d)]
+        if not mins or not maxs:
+            raise ValueError("Invalid data ranges for averaging")
+
+        inf = np.max(mins)
         if loose >= 100:
-            sup = np.min([np.max(d) for d in dset if d is not None])
+            sup = np.min(maxs)
         else:
-            sups = [np.max(d) for d in dset if d is not None]
-            sup = np.percentile(sups, 100 - loose)
+            sup = np.percentile(maxs, 100 - loose)
+
+        if not np.isfinite(inf) or not np.isfinite(sup) or sup <= inf:
+            raise ValueError("Non-overlapping ranges for averaging")
 
         newax = np.linspace(inf, sup, N)
         neway = []
         for x, y in zip(dset, ddep):
+            if len(x) < 2 or len(y) < 2 or len(x) != len(y):
+                continue  # skip malformed series
+            # only curves spanning the upper bound contribute (like SoftMech guard)
             if np.max(x) >= sup:
                 neway.append(np.interp(newax, x, y))
 
-        newyavg = np.average(np.array(neway), axis=0)
-        newstd = np.std(np.array(neway), axis=0)
+        if not neway:
+            raise ValueError("No curves contribute to averaged range")
+
+        neway = np.asarray(neway)
+        newyavg = np.mean(neway, axis=0)
+        newstd = np.std(neway, axis=0)
 
         if direction == 'H':
             return newyavg, newax, newstd
