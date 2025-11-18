@@ -90,13 +90,15 @@ export const useDashboardWebSocket = () => {
   // Reports whether zero-force correction should be applied server-side.
   const { setZeroForce } = dashboardStore;
   // Exposes the multi-loading indicator dispatcher.
-  const { setLoadingMulti } = dashboardStore;
+  const { setLoadingMulti, loadingMulti } = dashboardStore;
   // Exposes the flag that toggles curve-level loading indicators.
-  const { setIsLoadingCurves } = dashboardStore;
+  const { setIsLoadingCurves, isLoadingCurves } = dashboardStore;
   // Exposes the setter for maintaining highlighted curve identifiers.
   const { setSelectedCurveIds } = dashboardStore;
   // Updates connection status used for UX.
-  const { setConnectionStatus, setLastSocketError } = dashboardStore;
+  const { setConnectionStatus, setLastSocketError, connectionStatus, lastSocketError } = dashboardStore;
+  // Provides setters for selected curve ID and number of curves.
+  const { setSelectedCurveId, setNumCurves } = dashboardStore;
 
   // Simplifies access to regular filter groups.
   const regularFilters = filters.regular;
@@ -518,14 +520,10 @@ export const useDashboardWebSocket = () => {
         s.close();
       }
     };
-  }, [initializeWebSocket]);
-
-  // Sends a curve request when the selected curve ID changes.
-  useEffect(() => {
-    if (selectedCurveId) {
-      sendCurveRequest();
-    }
-  }, [selectedCurveId, sendCurveRequest]);
+    // We only want this to run once on mount/unmount,
+    // not every time initializeWebSocket (and thus numCurves) changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Forces a fresh WebSocket connection when the caller requests a hard reload.
   const resetAndReload = useCallback(() => {
@@ -538,6 +536,14 @@ export const useDashboardWebSocket = () => {
     forceData,
     indentationData,
     elspectraData,
+    loadingMulti,
+    isLoadingCurves,
+    connectionStatus,
+    lastSocketError,
+    selectedCurveId,
+    setSelectedCurveId,
+    numCurves,
+    setNumCurves,
     domainRange,
     indentationDomain,
     elspectraDomain,
