@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import ReactECharts from "echarts-for-react";
+import echarts from "../../utils/echartsConfig";
 
 const ForceIndentationDataSet = ({
   forceData = [],
@@ -505,6 +506,7 @@ const ForceIndentationDataSet = ({
 
       {/* Chart */}
       <ReactECharts
+        echarts={echarts}
         ref={chartRef}
         option={chartOptions}
         style={{ height: chartHeight, width: "100%" }}

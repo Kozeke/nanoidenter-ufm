@@ -1,16 +1,17 @@
 // Renders the main dashboard experience coordinating datasets, filters, and controls.
-import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from "react";
-import ForceDisplacementPanel from "./ForceDisplacementPanel";
-import ForceIndentationPanel from "./ForceIndentationPanel";
-import ElasticitySpectraPanel from "./ElasticitySpectraPanel";
+import React, { useState, useEffect, useRef, useCallback, createContext, useContext, Suspense, lazy } from "react";
+import debounce from 'lodash/debounce';
+import { Box, CircularProgress } from '@mui/material';
 import FiltersComponent from "./FiltersComponent";
 import CurveControlsComponent from "./CurveControlsComponent";
-import FileOpener from "./FileOpener";
-import ExportButton from "./ExportButton";
-import { debounce } from 'lodash';
-import { Box, CircularProgress } from '@mui/material';
 import { useDashboardStore } from "../state/useDashboardStore";
 import { useDashboardWebSocket } from "../hooks/useDashboardWebSocket";
+// Lazy-load panel components to improve initial load performance
+const ForceDisplacementPanel = lazy(() => import("./ForceDisplacementPanel"));
+const ForceIndentationPanel = lazy(() => import("./ForceIndentationPanel"));
+const ElasticitySpectraPanel = lazy(() => import("./ElasticitySpectraPanel"));
+const FileOpener = lazy(() => import("./FileOpener"));
+const ExportButton = lazy(() => import("./ExportButton"));
 
 // Keep this in sync with FilterStatusSidebar / FiltersComponent drawer width
 const DRAWER_WIDTH = 300;
@@ -1010,38 +1011,46 @@ const Dashboard = () => {
   // };
 
   return (
-    <MetadataContext.Provider value={{ metadataObject, setMetadataObject }}><div style={containerStyle}>
-      {(isLoadingCurves || isLoadingImport || isLoadingExport) && (
-        <Box
-          sx={{
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            backgroundColor: 'rgba(255, 255, 255, 0.8)',
-            zIndex: 1000,
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'center',
-            alignItems: 'center',
-            gap: 2,
-          }}
-        >
-          <CircularProgress size={60} />
-          <div style={{ 
-            fontSize: '16px', 
-            fontWeight: 'bold', 
-            color: '#333',
-            textAlign: 'center'
-          }}>
-            {isLoadingCurves && 'Loading curves...'}
-            {isLoadingImport && 'Importing file...'}
-            {isLoadingExport && 'Exporting data...'}
-          </div>
-        </Box>
-      )}
-      <div style={{ ...mainContentStyle, ...mainShiftStyle }}>
+    <MetadataContext.Provider value={{ metadataObject, setMetadataObject }}>
+      <Suspense
+        fallback={
+          <Box display="flex" justifyContent="center" mt={4}>
+            <CircularProgress />
+          </Box>
+        }
+      >
+        <div style={containerStyle}>
+          {(isLoadingCurves || isLoadingImport || isLoadingExport) && (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                backgroundColor: 'rgba(255, 255, 255, 0.8)',
+                zIndex: 1000,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                alignItems: 'center',
+                gap: 2,
+              }}
+            >
+              <CircularProgress size={60} />
+              <div style={{ 
+                fontSize: '16px', 
+                fontWeight: 'bold', 
+                color: '#333',
+                textAlign: 'center'
+              }}>
+                {isLoadingCurves && 'Loading curves...'}
+                {isLoadingImport && 'Importing file...'}
+                {isLoadingExport && 'Exporting data...'}
+              </div>
+            </Box>
+          )}
+          <div style={{ ...mainContentStyle, ...mainShiftStyle }}>
         {/* Header Toolbar */}
         <div style={headerBarStyle}>
           {/* Left: Segmented Tabs */}
@@ -1089,43 +1098,47 @@ const Dashboard = () => {
           {/* Right: Actions */}
           <div style={actionsWrapStyle}>
             {/* File Open as "secondary" style to match */}
-            <div {...pressable}>
-              <FileOpener
-                disabled={!isWebSocketConnected || isLoadingImport}
-                onProcessSuccess={handleProcessSuccess}
-                onProcessStart={handleImportStart}
-                onProcessEnd={handleImportEnd}
-                setIsLoading={setImportLoadingFlag}
-                // render prop: force consistent button look
-                renderTrigger={(open) => (
-                  <button 
-                    style={(!isWebSocketConnected || isLoadingImport) ? actionBtnStyle("disabled") : actionBtnStyle("secondary")} 
-                    onClick={open}
-                    disabled={!isWebSocketConnected || isLoadingImport}
-                  >
-                    Open file
-                  </button>
-                )}
-              />
-            </div>
-
-            {/* Export */}
-            {isMetadataReady ? (
+            <Suspense fallback={null}>
               <div {...pressable}>
-                <ExportButton
-                  disabled={!isWebSocketConnected || isLoadingExport}
-                  // render prop: consistent primary button look
-                  renderTrigger={(doExport, disabled) => (
-                    <button
-                      onClick={doExport}
-                      disabled={disabled || !isWebSocketConnected || isLoadingExport}
-                      style={(disabled || !isWebSocketConnected || isLoadingExport) ? actionBtnStyle("disabled") : actionBtnStyle("primary")}
+                <FileOpener
+                  disabled={!isWebSocketConnected || isLoadingImport}
+                  onProcessSuccess={handleProcessSuccess}
+                  onProcessStart={handleImportStart}
+                  onProcessEnd={handleImportEnd}
+                  setIsLoading={setImportLoadingFlag}
+                  // render prop: force consistent button look
+                  renderTrigger={(open) => (
+                    <button 
+                      style={(!isWebSocketConnected || isLoadingImport) ? actionBtnStyle("disabled") : actionBtnStyle("secondary")} 
+                      onClick={open}
+                      disabled={!isWebSocketConnected || isLoadingImport}
                     >
-                      Export
+                      Open file
                     </button>
                   )}
                 />
               </div>
+            </Suspense>
+
+            {/* Export */}
+            {isMetadataReady ? (
+              <Suspense fallback={null}>
+                <div {...pressable}>
+                  <ExportButton
+                    disabled={!isWebSocketConnected || isLoadingExport}
+                    // render prop: consistent primary button look
+                    renderTrigger={(doExport, disabled) => (
+                      <button
+                        onClick={doExport}
+                        disabled={disabled || !isWebSocketConnected || isLoadingExport}
+                        style={(disabled || !isWebSocketConnected || isLoadingExport) ? actionBtnStyle("disabled") : actionBtnStyle("primary")}
+                      >
+                        Export
+                      </button>
+                    )}
+                  />
+                </div>
+              </Suspense>
             ) : (
               <button disabled style={actionBtnStyle("disabled")}>Export</button>
             )}
@@ -1290,6 +1303,7 @@ const Dashboard = () => {
         />
       </div>
     </div>
+      </Suspense>
     </MetadataContext.Provider>);
 }; export default Dashboard;
 

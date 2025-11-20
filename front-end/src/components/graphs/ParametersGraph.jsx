@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import ReactECharts from "echarts-for-react";
+import echarts from "../../utils/echartsConfig";
 
 // --- Toolbar styles (match other panels) ---
 const toolbarCardStyle = {
@@ -569,6 +570,7 @@ const ParametersGraph = ({
 
       {/* Chart */}
       <ReactECharts
+        echarts={echarts}
         ref={chartRef}
         option={chartOptions}
         style={{ height: chartHeight, width: "100%" }}

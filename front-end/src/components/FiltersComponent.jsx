@@ -1,4 +1,4 @@
-import React from "react";
+import React, { Suspense, lazy } from "react";
 import {
   Box,
   Button,
@@ -15,7 +15,8 @@ import {
   useTheme,
   useMediaQuery,
 } from "@mui/material";
-import FilterStatusSidebar from "./FilterStatusSidebar";
+// Lazy-load FilterStatusSidebar since it's only needed when the drawer is opened
+const FilterStatusSidebar = lazy(() => import("./FilterStatusSidebar"));
 
 // Drawer width constant - must match FilterStatusSidebar DRAWER_WIDTH
 const DRAWER_WIDTH = 300;
@@ -440,41 +441,43 @@ const FiltersComponent = ({
         </Box>
       </Box>
 
-      {/* Sidebar (unchanged) */}
-      <FilterStatusSidebar
-        regularFilters={regularFilters}
-        cpFilters={cpFilters}
-        forceModels={forceModels}
-        elasticityModels={elasticityModels}
-        capitalizeFilterName={capitalizeFilterName}
-        handleRemoveFilter={handleRemoveFilter}
-        handleFilterChange={handleFilterChange}
-        sx={{ zIndex: 1002 }}
-        selectedForceModel={selectedForceModel}
-        selectedParameters={selectedParameters}
-        onParameterChange={onParameterChange}
-        showParameters={showParameters}
-        setShowParameters={setShowParameters}
-        selectedElasticityModel={selectedElasticityModel}
-        selectedElasticityParameters={selectedElasticityParameters}
-        onElasticityParameterChange={onElasticityParameterChange}
-        showElasticityParameters={showElasticityParameters}
-        setShowElasticityParameters={setShowElasticityParameters}
-        setZeroForce={setZeroForce}
-        onSetZeroForceChange={onSetZeroForceChange}
-        activeTab={activeTab}
-        canUseModels={canUseModels}
-        elasticityParams={elasticityParams}
-        onElasticityParamsChange={onElasticityParamsChange}
-        forceModelParams={forceModelParams}
-        onForceModelParamsChange={onForceModelParamsChange}
-        elasticModelParams={elasticModelParams}
-        onElasticModelParamsChange={onElasticModelParamsChange}
-        open={open}
-        onToggle={onToggle}
-        fparamsProgress={fparamsProgress}
-        eparamsProgress={eparamsProgress}
-      />
+      {/* Sidebar - lazy-loaded since it's only needed when drawer is opened */}
+      <Suspense fallback={null}>
+        <FilterStatusSidebar
+          regularFilters={regularFilters}
+          cpFilters={cpFilters}
+          forceModels={forceModels}
+          elasticityModels={elasticityModels}
+          capitalizeFilterName={capitalizeFilterName}
+          handleRemoveFilter={handleRemoveFilter}
+          handleFilterChange={handleFilterChange}
+          sx={{ zIndex: 1002 }}
+          selectedForceModel={selectedForceModel}
+          selectedParameters={selectedParameters}
+          onParameterChange={onParameterChange}
+          showParameters={showParameters}
+          setShowParameters={setShowParameters}
+          selectedElasticityModel={selectedElasticityModel}
+          selectedElasticityParameters={selectedElasticityParameters}
+          onElasticityParameterChange={onElasticityParameterChange}
+          showElasticityParameters={showElasticityParameters}
+          setShowElasticityParameters={setShowElasticityParameters}
+          setZeroForce={setZeroForce}
+          onSetZeroForceChange={onSetZeroForceChange}
+          activeTab={activeTab}
+          canUseModels={canUseModels}
+          elasticityParams={elasticityParams}
+          onElasticityParamsChange={onElasticityParamsChange}
+          forceModelParams={forceModelParams}
+          onForceModelParamsChange={onForceModelParamsChange}
+          elasticModelParams={elasticModelParams}
+          onElasticModelParamsChange={onElasticModelParamsChange}
+          open={open}
+          onToggle={onToggle}
+          fparamsProgress={fparamsProgress}
+          eparamsProgress={eparamsProgress}
+        />
+      </Suspense>
     </Box>
   );
 };

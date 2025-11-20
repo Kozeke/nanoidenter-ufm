@@ -1,14 +1,11 @@
 import React from "react";
-import MultiLineChart from "./components/Dashboard"
-import { Provider } from './components/ui/provider';
+import MultiLineChart from "./components/Dashboard";
 
 function App() {
   return (
-    <Provider>
     <div>
-      <MultiLineChart></MultiLineChart>
+      <MultiLineChart />
     </div>
-    </Provider>
   );
 }
 
