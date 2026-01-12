@@ -12,9 +12,12 @@ import hashlib
 import json
 import math
 import asyncio
+# TEMP COMPATIBILITY LAYER
+from db.connection import get_conn
+from db.init_db import ensure_cache_tables
 
 # Stores absolute DuckDB database path for analysis queries
-DB_PATH = "data/all.db"
+# DB_PATH = "data/all.db"
 
 # Provide stable hash strings for filter dictionaries
 def _hash_dict(d: Dict) -> str:
@@ -28,34 +31,34 @@ def _hash_dict(d: Dict) -> str:
     return hashlib.md5(payload.encode("utf-8")).hexdigest()
 
 # Ensure cache tables exist for hash-based curve caching
-def ensure_cache_tables(conn: duckdb.DuckDBPyConnection) -> None:
-    """
-    Ensure cache tables exist (contact_points, indentations, elspectra).
-    Delegates to _ensure_extended_cache_tables which defines the canonical schema.
-    """
-    _ensure_extended_cache_tables(conn)
+# def ensure_cache_tables(conn: duckdb.DuckDBPyConnection) -> None:
+#     """
+#     Ensure cache tables exist (contact_points, indentations, elspectra).
+#     Delegates to _ensure_extended_cache_tables which defines the canonical schema.
+#     """
+#     _ensure_extended_cache_tables(conn)
 
 # Singleton connection to ensure consistent DuckDB configuration
-_conn_singleton = None
+# _conn_singleton = None
 
-def get_conn():
-    """
-    Return a module-level singleton DuckDB connection with consistent configuration.
-    This ensures all code paths use the same connection config to avoid
-    DuckDB's "different configuration" error.
+# def get_conn():
+#     """
+#     Return a module-level singleton DuckDB connection with consistent configuration.
+#     This ensures all code paths use the same connection config to avoid
+#     DuckDB's "different configuration" error.
     
-    Returns:
-        duckdb.DuckDBPyConnection: A DuckDB connection with consistent config
-    """
-    global _conn_singleton
-    if _conn_singleton is None:
-        # Use read/write to match WebSocket connection config (DuckDB constraint: same config per process)
-        _conn_singleton = duckdb.connect(DB_PATH)
-        # Register filters on first connection
-        register_filters(_conn_singleton)
-        # Ensure cache tables exist
-        ensure_cache_tables(_conn_singleton)
-    return _conn_singleton
+#     Returns:
+#         duckdb.DuckDBPyConnection: A DuckDB connection with consistent config
+#     """
+#     global _conn_singleton
+#     if _conn_singleton is None:
+#         # Use read/write to match WebSocket connection config (DuckDB constraint: same config per process)
+#         _conn_singleton = duckdb.connect(DB_PATH)
+#         # Register filters on first connection
+#         register_filters(_conn_singleton)
+#         # Ensure cache tables exist
+#         ensure_cache_tables(_conn_singleton)
+#     return _conn_singleton
 
 def _json_hash(obj) -> str:
     """Create a stable hash from a JSON-serializable object."""
@@ -63,43 +66,43 @@ def _json_hash(obj) -> str:
     return hashlib.md5(json_str.encode()).hexdigest()
 
 # Preserve legacy cache structures that store extended intermediate results
-def _ensure_extended_cache_tables(conn: duckdb.DuckDBPyConnection):
-    """Create cache tables for contact_points, indentations, and elspectra if they don't exist."""
-    # Create contact_points cache table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS contact_points (
-            curve_id INTEGER,
-            method VARCHAR,
-            params_hash VARCHAR,
-            cp_values DOUBLE[][],
-            spring_constant DOUBLE,
-            tip_radius DOUBLE,
-            tip_geometry VARCHAR,
-            PRIMARY KEY (curve_id, method, params_hash)
-        )
-    """)
+# def _ensure_extended_cache_tables(conn: duckdb.DuckDBPyConnection):
+#     """Create cache tables for contact_points, indentations, and elspectra if they don't exist."""
+#     # Create contact_points cache table
+#     conn.execute("""
+#         CREATE TABLE IF NOT EXISTS contact_points (
+#             curve_id INTEGER,
+#             method VARCHAR,
+#             params_hash VARCHAR,
+#             cp_values DOUBLE[][],
+#             spring_constant DOUBLE,
+#             tip_radius DOUBLE,
+#             tip_geometry VARCHAR,
+#             PRIMARY KEY (curve_id, method, params_hash)
+#         )
+#     """)
     
-    # Create indentations cache table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS indentations (
-            curve_id INTEGER,
-            cp_hash VARCHAR,
-            zi DOUBLE[],
-            fi DOUBLE[],
-            PRIMARY KEY (curve_id, cp_hash)
-        )
-    """)
+#     # Create indentations cache table
+#     conn.execute("""
+#         CREATE TABLE IF NOT EXISTS indentations (
+#             curve_id INTEGER,
+#             cp_hash VARCHAR,
+#             zi DOUBLE[],
+#             fi DOUBLE[],
+#             PRIMARY KEY (curve_id, cp_hash)
+#         )
+#     """)
     
-    # Create elspectra cache table
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS elspectra (
-            curve_id INTEGER,
-            spec_hash VARCHAR,
-            ze DOUBLE[],
-            ee DOUBLE[],
-            PRIMARY KEY (curve_id, spec_hash)
-        )
-    """)
+#     # Create elspectra cache table
+#     conn.execute("""
+#         CREATE TABLE IF NOT EXISTS elspectra (
+#             curve_id INTEGER,
+#             spec_hash VARCHAR,
+#             ze DOUBLE[],
+#             ee DOUBLE[],
+#             PRIMARY KEY (curve_id, spec_hash)
+#         )
+#     """)
 
 def get_metadata_for_curves(conn: duckdb.DuckDBPyConnection, curve_ids: List[str]) -> Dict:
     """

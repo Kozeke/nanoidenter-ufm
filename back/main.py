@@ -8,8 +8,10 @@ import os
 import logging
 # from db import transform_hdf5_to_db
 from filters.register_all import register_filters
-from db import fetch_curves_batch, ensure_cache_tables, get_metadata_for_curves, get_conn, compute_elasticity_params_batched
+from pipeline import fetch_curves_batch, get_metadata_for_curves, compute_elasticity_params_batched
 import asyncio
+from db.connection import get_conn
+from db.init_db import ensure_cache_tables
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any
 
@@ -167,25 +169,25 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
 @app.websocket("/ws/data")
 async def websocket_data_stream(websocket: WebSocket):
     """WebSocket endpoint to stream batches of curve data from DuckDB and send filter defaults."""
-    # print("WebSocket connected")
+    print("WebSocket connected")
     await websocket.accept()
     conn = duckdb.connect(DB_PATH)
-    # print(f"Connected to database: {DB_PATH}")
+    print(f"Connected to database: {DB_PATH}")
 
     try:
         # Debug: List all tables before any operations
         tables = conn.execute("SHOW TABLES").fetchall()
-        # print(f"Tables in database at connection: {tables}")
+        print(f"Tables in database at connection: {tables}")
         
         # Register filters
         register_filters(conn)
         # Ensure cache tables exist
         ensure_cache_tables(conn)
-        # print("Filters registered")
+        print("Filters registered")
 
         # Debug: List tables after register_filters
         tables = conn.execute("SHOW TABLES").fetchall()
-        # print(f"Tables in database after register_filters: {tables}")
+        print(f"Tables in database after register_filters: {tables}")
 
         # Send filter defaults immediately after connection
         result = conn.execute("SELECT name, parameters FROM filters").fetchall()
@@ -231,7 +233,7 @@ async def websocket_data_stream(websocket: WebSocket):
                 for param_name, param_info in params.items()
             }
             
-        # print("Prepared contact point filter defaults")
+        print("Prepared contact point filter defaults")
         await websocket.send_json({
             "status": "filter_defaults",             
             "data": {
@@ -240,19 +242,19 @@ async def websocket_data_stream(websocket: WebSocket):
                 "fmodels": fmodel_defaults,
                 "emodels": emodel_defaults
             }})
-        # print("Sent filter defaults to client")
+        print("Sent filter defaults to client")
 
         # Check table existence
         table_exists = conn.execute(
             "SELECT count(*) FROM information_schema.tables WHERE table_name='force_vs_z'"
         ).fetchone()[0]
-        # print(f"force_vs_z exists: {table_exists}")
+        print(f"force_vs_z exists: {table_exists}")
         if table_exists == 0:
             await websocket.send_text(json.dumps({
-                "status": "error",
-                "message": "❌ Table force_vs_z does not exist!"
+                "status": "idle",
+                "message": "No experiment loaded yet. Upload a file to begin.",
+                "ready": False
             }))
-            return
 
         # Continuously accept requests
         while True:
@@ -302,7 +304,7 @@ async def websocket_data_stream(websocket: WebSocket):
                     "minInd": 0,
                     "poisson": 0.5
                 })  # Extract force model parameters
-                # print(f"Received request: num_curves={num_curves}, curve_id={curve_id}, filters={filters}")
+                print(f"Received request: num_curves={num_curves}, curve_id={curve_id}, filters={filters}")
 
                 # Fetch curve IDs based on request
                 if curve_id:
@@ -464,7 +466,7 @@ async def process_and_stream_batch(
 
         # Use ThreadPoolExecutor for blocking DuckDB ops
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            from db import get_metadata_for_curves
+            from pipeline import get_metadata_for_curves
             metadata = get_metadata_for_curves(conn, batch_ids)
             print(f"DEBUG: Retrieved metadata: {metadata}")
 
@@ -597,6 +599,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from routers.opener import router as experiment_router
 from routers.exporter import router as exporter_router
+from auth.router import router as auth_router
 
 # Configure logging
 logging.basicConfig(
@@ -610,6 +613,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 app.include_router(experiment_router)
 app.include_router(exporter_router)
+
+app.include_router(auth_router)
 
 
 # Sanitize file system paths
