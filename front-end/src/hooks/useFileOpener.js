@@ -388,10 +388,13 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
         }
 
         // Initializes metadata object with empty values for all required fields.
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
         const initializedMetadata = Object.keys(activeValidationRules).reduce((acc, key) => {
-          acc[key] = '';
+          acc[key] = key === 'date' ? today : '';
           return acc;
         }, {});
+
         const mergedMetadata = { ...initializedMetadata, ...attributes };
 
         if (Object.keys(attributes).length === 0) {
@@ -459,13 +462,16 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
         }
 
         // Initializes metadata object with empty values for all required fields.
+        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+
         const initializedMetadata = Object.keys(activeValidationRules).reduce(
           (acc, key) => {
-            acc[key] = '';
+            acc[key] = key === 'date' ? today : '';
             return acc;
           },
           {}
         );
+
         const mergedMetadata = { ...initializedMetadata, ...attributes };
 
         if (Object.keys(attributes).length === 0) {

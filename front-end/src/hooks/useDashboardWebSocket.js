@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useDashboardStore } from "../state/useDashboardStore";
+import { useAuthStore } from "../state/useAuthStore";
 
 // Exposes dashboard curve data and WebSocket helpers to the presentation layer.
 export const useDashboardWebSocket = () => {
@@ -39,6 +40,9 @@ export const useDashboardWebSocket = () => {
     yMin: null,
     yMax: null,
   });
+
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const token = useAuthStore((s) => s.token);
 
   // Stores metadata columns and sample rows for file operations.
   const [metadataObject, setMetadataObject] = useState({
@@ -111,10 +115,12 @@ export const useDashboardWebSocket = () => {
 
   // Sends a curve metadata request through the active WebSocket channel.
   const sendCurveRequest = useCallback(() => {
+    console.log("sendCurveReq")
     // Avoid sending requests when the socket is unavailable.
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
       return;
     }
+    console.log("sendCurveReq2")
 
     // Flag loading so UI elements stay responsive.
     setLoadingMulti({ curves: true });
@@ -127,30 +133,31 @@ export const useDashboardWebSocket = () => {
       setIsLoadingCurves(false);
     }, 30000);
     socketRef.current.loadingTimeout = loadingTimeout;
+    console.log("sendCurveReq3")
 
     // Compares previous and current filter snapshots for change detection.
-    const areFiltersEqual = (prev, current) => {
-      if (!prev || !current) {
-        return false;
-      }
-      return JSON.stringify(prev) === JSON.stringify(current);
-    };
+    // const areFiltersEqual = (prev, current) => {
+    //   if (!prev || !current) {
+    //     return false;
+    //   }
+    //   return JSON.stringify(prev) === JSON.stringify(current);
+    // };
 
     // Determines if any filter group has changed since the last request.
-    const filtersChanged = !areFiltersEqual(
-      {
-        regular: prevFiltersRef.current.regular,
-        cp: prevFiltersRef.current.cp,
-        f_models: prevFiltersRef.current.f_models,
-        e_models: prevFiltersRef.current.e_models,
-      },
-      {
-        regular: regularFilters,
-        cp: cpFilters,
-        f_models: forceModels,
-        e_models: elasticityModels,
-      }
-    );
+    // const filtersChanged = !areFiltersEqual(
+    //   {
+    //     regular: prevFiltersRef.current.regular,
+    //     cp: prevFiltersRef.current.cp,
+    //     f_models: prevFiltersRef.current.f_models,
+    //     e_models: prevFiltersRef.current.e_models,
+    //   },
+    //   {
+    //     regular: regularFilters,
+    //     cp: cpFilters,
+    //     f_models: forceModels,
+    //     e_models: elasticityModels,
+    //   }
+    // );
 
     // Determines whether the requested curve count changed.
     const numCurvesChanged = prevNumCurvesRef.current !== numCurves;
@@ -163,7 +170,7 @@ export const useDashboardWebSocket = () => {
       yMax: null,
     };
 
-    if (filtersChanged || numCurvesChanged || forceRequest) {
+    if (numCurvesChanged || forceRequest) {
       setForceData([]);
       setIndentationData({ curves_cp: [], curves_fparam: [] });
       setElspectraData({ curves: [], curves_elasticity_param: [] });
@@ -404,6 +411,7 @@ export const useDashboardWebSocket = () => {
           }));
         }
       }
+      console.log("sendCurveReq5")
 
       // Handle filter defaults sent once on WebSocket handshake
       if (response.status === "filter_defaults" && response.data) {
@@ -447,6 +455,7 @@ export const useDashboardWebSocket = () => {
         setForceModelDefaults(cleanedFmodels);
         setElasticityModelDefaults(cleanedEmodels);
       }
+      console.log("sendCurveReq8")
 
       if (response.status === "metadata") {
         setMetadataObject(response.metadata);
@@ -489,6 +498,7 @@ export const useDashboardWebSocket = () => {
       }
       initialRequestSent.current = false;
     };
+    console.log("sendCurveReq9")
 
     socket.onerror = (event) => {
       console.error("WebSocket error:", event);
@@ -512,6 +522,16 @@ export const useDashboardWebSocket = () => {
 
   // Auto-initializes the WebSocket connection and tears it down on unmount.
   useEffect(() => {
+    if (!isAuthenticated || !token) {
+      // 🔐 Ensure socket is closed when logged out
+      if (socketRef.current) {
+        try {
+          socketRef.current.close();
+        } catch {}
+        socketRef.current = null;
+      }
+      return;
+    }
     initializeWebSocket();
     return () => {
       const s = socketRef.current;
@@ -520,13 +540,15 @@ export const useDashboardWebSocket = () => {
         s.close();
       }
     };
+    // socketRef.current = null;
     // We only want this to run once on mount/unmount,
     // not every time initializeWebSocket (and thus numCurves) changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAuthenticated, token]);
 
   // Forces a fresh WebSocket connection when the caller requests a hard reload.
   const resetAndReload = useCallback(() => {
+    console.log("resetAndReload")
     setForceRequest(true);
     initialRequestSent.current = false;
     initializeWebSocket();

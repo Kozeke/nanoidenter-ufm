@@ -346,7 +346,53 @@ const ExportButton = ({
                   error={errors.some((error) => error.includes('Metadata path'))}
                 />
               )}
-              {step === 3 && (
+              {step === 3 && selectedFormat === 'hdf5' && (
+                <Box>
+                  <Typography variant="h6" gutterBottom>
+                    Enter Metadata
+                  </Typography>
+
+                  {Object.keys(metadataValidationRules).map((key) => {
+                    const rule = metadataValidationRules[key];
+
+                    if (rule.type === 'select') {
+                      return (
+                        <FormControl key={key} fullWidth margin="normal">
+                          <InputLabel>{rule.label}</InputLabel>
+                          <Select
+                            name={key}
+                            value={metadata[key] || ''}
+                            onChange={handleMetadataChange}
+                            label={rule.label}
+                          >
+                            {rule.options.map((opt) => (
+                              <MenuItem key={opt} value={opt}>
+                                {opt}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                      );
+                    }
+
+                    return (
+                      <TextField
+                        key={key}
+                        name={key}
+                        label={rule.label}
+                        type={key === 'date' ? 'date' : rule.type === 'number' ? 'number' : 'text'}
+                        value={metadata[key] || ''}
+                        onChange={handleMetadataChange}
+                        InputLabelProps={key === 'date' ? { shrink: true } : undefined}
+                        fullWidth
+                        margin="normal"
+                      />
+                    );
+                  })}
+                </Box>
+              )}
+
+              {step === 4 && (
                 <Box>
                   <Typography variant="h6" gutterBottom>Review Export Details</Typography>
                   <Typography><strong>File Path:</strong> {exportPath}</Typography>

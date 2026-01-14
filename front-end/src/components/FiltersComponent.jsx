@@ -1,4 +1,4 @@
-import React, { Suspense, lazy } from "react";
+import React, { Suspense, lazy, useCallback } from "react";
 import {
   Box,
   Button,
@@ -16,6 +16,8 @@ import {
   useMediaQuery,
 } from "@mui/material";
 // Lazy-load FilterStatusSidebar since it's only needed when the drawer is opened
+
+
 const FilterStatusSidebar = lazy(() => import("./FilterStatusSidebar"));
 
 // Drawer width constant - must match FilterStatusSidebar DRAWER_WIDTH
@@ -92,7 +94,7 @@ const MultiSelectFilter = ({
   options,
   value,
   onChange,
-  capitalizeFilterName,
+  formatLabel,
   size = "small",
   sx = fieldFontSx
 }) => (
@@ -107,14 +109,14 @@ const MultiSelectFilter = ({
         multiple
         value={value}
         onChange={onChange}
-        renderValue={(selected) => selected.map(capitalizeFilterName).join(", ") || "None"}
+        renderValue={(selected) => selected.map(formatLabel).join(", ") || "None"}
         sx={sx}
       >
         {options.map((name) => (
           <MenuItem key={name} value={name}>
             <Checkbox checked={value.includes(name)} size="small" />
             <ListItemText
-              primary={capitalizeFilterName(name)}
+              primary={formatLabel(name)}
               primaryTypographyProps={sx}
             />
           </MenuItem>
@@ -129,7 +131,7 @@ const SingleSelectFilter = ({
   options,
   value,
   onChange,
-  capitalizeFilterName,
+  formatLabel,
   size = "small",
   sx = fieldFontSx,
   disabled = false,
@@ -178,7 +180,7 @@ const SingleSelectFilter = ({
             onChange(syntheticEvent);
           }
         }}
-        renderValue={(selected) => selected ? capitalizeFilterName(selected) : (disabled ? "Enter Curve ID first" : "Select...")}
+        renderValue={(selected) => selected ? formatLabel(selected) : (disabled ? "Enter Curve ID first" : "Select...")}
         sx={sx}
         disabled={disabled}
       >
@@ -190,7 +192,7 @@ const SingleSelectFilter = ({
         {options.map((name) => (
           <MenuItem key={name} value={name}>
             <ListItemText
-              primary={capitalizeFilterName(name)}
+              primary={formatLabel(name)}
               primaryTypographyProps={sx}
             />
           </MenuItem>
@@ -219,10 +221,6 @@ const FiltersComponent = ({
   selectedCpFilters,
   selectedForceModels,
   selectedElasticityModels,
-  setSelectedRegularFilters,
-  setSelectedCpFilters,
-  setSelectedForceModels,
-  setSelectedElasticityModels,
   handleAddFilter,
   handleRemoveFilter,
   handleFilterChange,
@@ -256,6 +254,15 @@ const FiltersComponent = ({
   // Disable filters when socket is down
   isSocketConnected,
 }) => {
+  const safeCapitalize = useCallback(
+    (value) => {
+      if (typeof capitalizeFilterName === "function") {
+        return capitalizeFilterName(value);
+      }
+      return String(value ?? "");
+    },
+    [capitalizeFilterName]
+  );
   // Derives a flag indicating whether controls should be disabled.
   const isDisabled = !isSocketConnected;
 
@@ -276,60 +283,63 @@ const FiltersComponent = ({
   // console.log("safeElasticityModels:", safeElasticityModels);
 
   // Handle multi-select changes
-  const createChangeHandler = (setSelected, type, prevSelected) => (event) => {
-    // console.log("createChangeHandler called with type:", type);
-    // console.log("event:", event);
-    // console.log("event.target:", event.target);
-    // console.log("event.target.value:", event.target?.value);
-    
-    if (!event || !event.target) {
-      // console.error("Invalid event in createChangeHandler");
-      return;
-    }
-    
-    const value = event.target.value;
-    // console.log("Value from event:", value);
-    // console.log("Previous selected:", prevSelected);
-    
-    setSelected(value);
-    
-    // Handle single selection for force models, elasticity models, and CP filters
-    if (type === 'force' || type === 'elasticity' || type === 'cp') {
-      // console.log(`Handling ${type} single selection`);
-      // Remove all previous models/filters of this type
-      prevSelected.forEach((name) => {
-        // console.log("Removing filter:", name);
-        handleRemoveFilter(name, type);
-      });
-      // Add the new model/filter
-      if (value && value.length > 0) {
-        // console.log("Adding filter:", value[0]);
-        handleAddFilter(value[0], type);
-        // Notify parent about model change
-        if (type === 'force' && onForceModelChange) {
-          onForceModelChange(value[0], true);
-        } else if (type === 'elasticity' && onElasticityModelChange) {
-          onElasticityModelChange(value[0], true);
-        }
-      } else {
-        // Notify parent about model deselection
-        if (type === 'force' && onForceModelChange) {
-          onForceModelChange("", false);
-        } else if (type === 'elasticity' && onElasticityModelChange) {
-          onElasticityModelChange("", false);
-        }
-      }
-    } else {
-      // Handle multi-selection for other filters (regular filters)
-      value.filter((name) => !prevSelected.includes(name)).forEach((name) => handleAddFilter(name, type));
-      prevSelected.filter((name) => !value.includes(name)).forEach((name) => handleRemoveFilter(name, type));
+  const handleRegularChange = (event) => {
+    const value = event.target.value || [];
+  
+    // add newly selected
+    value
+      .filter((name) => !selectedRegularFilters.includes(name))
+      .forEach((name) => handleAddFilter(name, "regular"));
+  
+    // remove unselected
+    selectedRegularFilters
+      .filter((name) => !value.includes(name))
+      .forEach((name) => handleRemoveFilter(name, "regular"));
+  };
+  const handleCpChange = (event) => {
+    const value = event.target.value || [];
+    const next = value[0];
+  
+    // remove old CP filter
+    selectedCpFilters.forEach((name) =>
+      handleRemoveFilter(name, "cp")
+    );
+  
+    if (next) {
+      handleAddFilter(next, "cp");
     }
   };
-
-  const handleRegularChange = createChangeHandler(setSelectedRegularFilters, 'regular', safeRegularFilters);
-  const handleCpChange = createChangeHandler(setSelectedCpFilters, 'cp', safeCpFilters);
-  const handleForceChange = createChangeHandler(setSelectedForceModels, 'force', safeForceModels);
-  const handleElasticityChange = createChangeHandler(setSelectedElasticityModels, 'elasticity', safeElasticityModels);
+  const handleForceChange = (event) => {
+    const value = event.target.value || [];
+    const next = value[0];
+  
+    selectedForceModels.forEach((name) =>
+      handleRemoveFilter(name, "force")
+    );
+  
+    if (next) {
+      handleAddFilter(next, "force");
+      onForceModelChange?.(next);
+    } else {
+      onForceModelChange?.("");
+    }
+  };
+  const handleElasticityChange = (event) => {
+    const value = event.target.value || [];
+    const next = value[0];
+  
+    selectedElasticityModels.forEach((name) =>
+      handleRemoveFilter(name, "elasticity")
+    );
+  
+    if (next) {
+      handleAddFilter(next, "elasticity");
+      onElasticityModelChange?.(next);
+    } else {
+      onElasticityModelChange?.("");
+    }
+  };
+        
 
   // Theme and media query to determine if content should shift on desktop
   const theme = useTheme();
@@ -358,63 +368,44 @@ const FiltersComponent = ({
 
         {/* Multi/Single selects row (wrap on small screens) */}
         <Grid container spacing={1} sx={{ flex: 1, alignItems: "center" }}>
-          <MultiSelectFilter
-            label="Regular"
-            options={Object.keys(filterDefaults || {})}
-            value={safeRegularFilters}
-            onChange={handleRegularChange}
-            capitalizeFilterName={capitalizeFilterName}
-            size="small"
-            sx={fieldFontSx}
-          />
+        <MultiSelectFilter
+          label="Regular"
+          options={Object.keys(filterDefaults || {})}
+          value={selectedRegularFilters}
+          onChange={handleRegularChange}
+          formatLabel={safeCapitalize}
+        />
 
+        <SingleSelectFilter
+          label="CP"
+          options={Object.keys(cpDefaults || {})}
+          value={selectedCpFilters}
+          onChange={handleCpChange}
+          formatLabel={safeCapitalize}
+        />
+
+        {activeTab === "forceIndentation" && (
           <SingleSelectFilter
-            label="CP"
-            options={Object.keys(cpDefaults || {})}
-            value={safeCpFilters}
-            onChange={handleCpChange}
-            capitalizeFilterName={capitalizeFilterName}
-            size="small"
-            sx={fieldFontSx}
+            label="Force"
+            options={Object.keys(forceModelDefaults || {})}
+            value={selectedForceModels}
+            onChange={canUseModels ? handleForceChange : () => {}}
+            disabled={!canUseModels}
+            formatLabel={safeCapitalize}
           />
+        )}
 
-          {/* Always show Force model select, disabled when not in single-curve mode */}
-          {activeTab === "forceIndentation" && (
-            <SingleSelectFilter
-              label="Force"
-              options={Object.keys(forceModelDefaults || {})}
-              value={safeForceModels}
-              onChange={canUseModels ? handleForceChange : () => {}}
-              capitalizeFilterName={capitalizeFilterName}
-              size="small"
-              sx={fieldFontSx}
-              disabled={!canUseModels}
-              helperText={
-                !canUseModels
-                  ? "Enter a Curve ID to enable models."
-                  : ""
-              }
-            />
-          )}
+        {activeTab === "elasticitySpectra" && (
+          <SingleSelectFilter
+            label="Elasticity"
+            options={Object.keys(elasticityModelDefaults || {})}
+            value={selectedElasticityModels}
+            onChange={canUseModels ? handleElasticityChange : () => {}}
+            disabled={!canUseModels}
+            formatLabel={safeCapitalize}
+          />
+        )}
 
-          {/* Always show Elasticity model select, disabled when not in single-curve mode */}
-          {activeTab === "elasticitySpectra" && (
-            <SingleSelectFilter
-              label="Elasticity"
-              options={Object.keys(elasticityModelDefaults || {})}
-              value={safeElasticityModels}
-              onChange={canUseModels ? handleElasticityChange : () => {}}
-              capitalizeFilterName={capitalizeFilterName}
-              size="small"
-              sx={fieldFontSx}
-              disabled={!canUseModels}
-              helperText={
-                !canUseModels
-                  ? "Enter a Curve ID to enable models."
-                  : ""
-              }
-            />
-          )}
         </Grid>
 
         {/* Right-aligned actions */}
