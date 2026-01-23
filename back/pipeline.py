@@ -117,16 +117,18 @@ def get_metadata_for_curves(conn: duckdb.DuckDBPyConnection, curve_ids: List[str
         }
     
     # Convert curve_ids to numeric format
-    numeric_curve_ids = []
-    for cid in curve_ids:
-        if cid.startswith('curve'):
-            try:
-                numeric_id = int(cid[5:])
-                numeric_curve_ids.append(str(numeric_id))
-            except ValueError:
-                continue
-        else:
-            numeric_curve_ids.append(cid)
+    numeric_curve_ids = curve_ids
+
+    # numeric_curve_ids = []
+    # for cid in curve_ids:
+    #     if isinstance(cid, str) and cid.startswith('curve'):
+    #         try:
+    #             numeric_id = int(cid[5:])
+    #             numeric_curve_ids.append(str(numeric_id))
+    #         except ValueError:
+    #             continue
+    #     else:
+    #         numeric_curve_ids.append(cid)
     
     if not numeric_curve_ids:
         return {
@@ -167,7 +169,7 @@ def get_metadata_for_curves(conn: duckdb.DuckDBPyConnection, curve_ids: List[str
 
 
 
-def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict, single = False, metadata: Dict = None, set_zero_force: bool = True, elasticity_params: Dict = None, elastic_model_params: Dict = None, force_model_params: Dict = None, compute_elspectra: bool = True) -> Tuple[List[Dict], Dict]:
+def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict, single = False, metadata: Dict = None, set_zero_force: bool = True, elasticity_params: Dict = None, elastic_model_params: Dict = None, force_model_params: Dict = None, compute_elspectra: bool = True, force_model_population: bool = False, elastic_model_population: bool = False) -> Tuple[List[Dict], Dict]:
     """
     Fetches a batch of curve data from DuckDB and applies filters dynamically in SQL.
     
@@ -230,9 +232,10 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     
     # Base query for specific curve IDs
     # Extract numeric curve IDs from strings like "curve0" -> 0
+    # numeric_curve_ids = curve_ids
     numeric_curve_ids = []
     for cid in curve_ids:
-        if cid.startswith('curve'):
+        if isinstance(cid, str) and cid.startswith('curve'):
             try:
                 numeric_id = int(cid[5:])  # Remove "curve" prefix
                 numeric_curve_ids.append(str(numeric_id))
@@ -247,10 +250,11 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     # DO NOT override set_zero_force here – use the value passed from the caller
     # set_zero_force stays whatever fetch_curves_batch(...) received
 
-    # Auto-enable single when exactly one curve and at least one model is requested
-    if not single:
+    # Auto-enable single ONLY for interactive mode
+    if not single and not force_model_population:
         if len(numeric_curve_ids) == 1 and (filters.get("f_models") or filters.get("e_models")):
             single = True
+
     
     # ---- CACHING SETUP ----
     
@@ -279,7 +283,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         SELECT curve_id, z_values, force_values 
         FROM force_vs_z 
         WHERE curve_id IN ({})
-    """.format(",".join(numeric_curve_ids))
+    """.format(",".join(map(str, numeric_curve_ids)))
 
     # --- Graph 1: Force vs Z (Regular Filters) ---
     query_regular = apply(base_query, regular_filters, curve_ids)
@@ -528,21 +532,24 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                     "y": fi
                 })
                 
-                if hertz_result is not None and fmodels and single:
+                if hertz_result is not None and fmodels and (single or force_model_population):
                     # print("hertz_result", len(hertz_result))
                     x, y, fparam = hertz_result
-                    # print(len(x),len(y))
-                    curves_cp.append({
-                        "curve_id": f"{curve_id}_hertz",
-                        "x": x,
-                        "y": y
-                    })
-                    # 👉 Append fparam with curve index - return all parameters
+                    # print(len(x),len(y))                        
+                    # Overlay only for single curve (UI)
+                    if single:
+                        curves_cp.append({
+                            "curve_id": f"{curve_id}_hertz",
+                            "x": x,
+                            "y": y
+                        })
+
+                    # Parameters always collected
                     curves_fparam.append({
                         "curve_id": f"{curve_id}_hertz",
                         "params": fparam,
                         "curve_index": i,
-                        "fparam": fparam  # Preserve legacy fields for frontend compatibility
+                        "fparam": fparam
                     })
             
             
@@ -588,14 +595,16 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                 except Exception as cache_err:
                     # Log but don't fail the main query if cache insert fails
                     print(f"Warning: Failed to cache elspectra for curve {curve_id}: {cache_err}")
-                if elastic_result is not None and emodels and single:
+                if elastic_result is not None and emodels and (single or elastic_model_population):
                     # print("elastic_result", elastic_result)
                     x, y, elasticity_param = elastic_result
-                    curves_el.append({
-                        "curve_id": f"{curve_id}_elastic",
-                        "x": x,
-                        "y": y
-                    })
+                    if single:
+                        curves_el.append({
+                            "curve_id": f"{curve_id}_elastic",
+                            "x": x,
+                            "y": y
+                        })
+
                     # 👉 Append elasticity_param with curve index
                     curves_elasticity_param.append({
                         "curve_index": i,

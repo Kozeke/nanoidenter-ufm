@@ -46,15 +46,17 @@ def apply_fmodels(query: str, fmodels: Dict, curve_ids: List[str], force_model_p
             break
 
     # Prepare curve_id filter (accepts 'curve0' or raw ints)
-    numeric_curve_ids: List[str] = []
-    for cid in curve_ids:
-        if isinstance(cid, str) and cid.startswith("curve"):
-            try:
-                numeric_curve_ids.append(str(int(cid[5:])))
-            except ValueError:
-                continue
-        else:
-            numeric_curve_ids.append(str(cid))
+    numeric_curve_ids = curve_ids
+
+    # numeric_curve_ids: List[str] = []
+    # for cid in curve_ids:
+    #     if isinstance(cid, str) and cid.startswith("curve"):
+    #         try:
+    #             numeric_curve_ids.append(str(int(cid[5:])))
+    #         except ValueError:
+    #             continue
+    #     else:
+    #         numeric_curve_ids.append(str(cid))
 
     if not numeric_curve_ids:
         # Safe empty result: still a valid SELECT for the caller
@@ -82,7 +84,7 @@ def apply_fmodels(query: str, fmodels: Dict, curve_ids: List[str], force_model_p
             {fmodel_sql} AS fmodel_values
         FROM indentation_data
         WHERE curve_id IN ({','.join(numeric_curve_ids)})
-          AND {fmodel_sql} IS NOT NULL
+          
     """
     print("Generated queryfmodel:\n", query)
     return query

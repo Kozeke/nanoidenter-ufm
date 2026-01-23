@@ -12,6 +12,9 @@ const ForceIndentationPanel = lazy(() => import("./ForceIndentationPanel"));
 const ElasticitySpectraPanel = lazy(() => import("./ElasticitySpectraPanel"));
 const FileOpener = lazy(() => import("./FileOpener"));
 const ExportButton = lazy(() => import("./ExportButton"));
+const UserMenu = lazy(() => import("./UserMenu"));
+const SaveExperimentButton = lazy(() => import("./SaveExperimentButton"));
+
 
 // Keep this in sync with FilterStatusSidebar / FiltersComponent drawer width
 const DRAWER_WIDTH = 300;
@@ -134,12 +137,25 @@ const Dashboard = () => {
   const cpFilters = filters.cp_filters;
   // Exposes force model configurations tracked in the shared store.
   const forceModels = filters.f_models;
-  const [selectedForceModels, setSelectedForceModels] = useState([]);
+  // const [selectedForceModels, setSelectedForceModels] = useState([]);
   // Exposes elasticity model configurations tracked in the shared store.
   const elasticityModels = filters.e_models;
-  const [selectedElasticityModels, setSelectedElasticityModels] = useState([]);
-  const [selectedRegularFilters, setSelectedRegularFilters] = useState([]);
-  const [selectedCpFilters, setSelectedCpFilters] = useState([]);
+
+  // ✅ Single source of truth: selected model = the only key in Zustand
+  const selectedForceModel =
+  Object.keys(forceModels || {})[0] ?? "";
+
+  const selectedElasticityModel =
+  Object.keys(elasticityModels || {})[0] ?? "";
+
+  // const [selectedElasticityModels, setSelectedElasticityModels] = useState([]);
+  // const [selectedRegularFilters, setSelectedRegularFilters] = useState([]);
+  // const [selectedCpFilters, setSelectedCpFilters] = useState([]);
+  const selectedRegularFilters = Object.keys(filters.regular);
+  const selectedCpFilters = Object.keys(filters.cp_filters);
+  const selectedForceModels = Object.keys(filters.f_models);
+  const selectedElasticityModels = Object.keys(filters.e_models);
+
   // Applies incoming changes to regular filters while preserving unrelated groups.
   const updateRegularFilters = (updater) => {
     const nextValue = typeof updater === "function" ? updater(regularFilters) : updater;
@@ -167,7 +183,7 @@ const Dashboard = () => {
   const fparamsAbortRef = useRef(null);
   const prevForceModel = useRef(null);
   const [selectedParameters, setSelectedParameters] = useState([]);
-  const [selectedForceModel, setSelectedForceModel] = useState("");
+  // const [selectedForceModel, setSelectedForceModel] = useState("");
   const [fparamsProgress, setFparamsProgress] = useState({
     phase: "",
     done: 0,
@@ -176,7 +192,7 @@ const Dashboard = () => {
     totalBatches: 0,
     isLoading: false
   });
-  const [selectedElasticityModel, setSelectedElasticityModel] = useState("");
+  // const [selectedElasticityModel, setSelectedElasticityModel] = useState("");
   const [selectedElasticityParameters, setSelectedElasticityParameters] = useState([]);
   const [showElasticityParameters, setShowElasticityParameters] = useState(false);
   const [allElasticityParams, setAllElasticityParams] = useState([]);
@@ -252,83 +268,65 @@ const Dashboard = () => {
     }
   };
 
-  // Auto-clear models when leaving single-curve mode
   useEffect(() => {
     if (!isSingleCurveMode) {
-      // Clear models and parameter selections
       setFilters({ f_models: {}, e_models: {} });
-      setSelectedForceModel("");
-      setSelectedElasticityModel("");
       setSelectedParameters([]);
       setSelectedElasticityParameters([]);
     }
-  }, [isSingleCurveMode, setFilters]); const filterTypes = {
+  }, [isSingleCurveMode, setFilters]);
+  
+  const filterTypes = {
     regular: {
       filters: regularFilters,
       setFilters: updateRegularFilters,
-      selected: selectedRegularFilters,
-      setSelected: setSelectedRegularFilters,
       defaults: filterDefaults,
     },
     cp: {
       filters: cpFilters,
       setFilters: updateCpFilters,
-      selected: selectedCpFilters,
-      setSelected: setSelectedCpFilters,
       defaults: cpDefaults,
     },
     force: {
       filters: forceModels,
       setFilters: updateForceModels,
-      selected: selectedForceModels,
-      setSelected: setSelectedForceModels,
       defaults: forceModelDefaults,
     },
     elasticity: {
       filters: elasticityModels,
       setFilters: updateElasticityModels,
-      selected: selectedElasticityModels,
-      setSelected: setSelectedElasticityModels,
       defaults: elasticityModelDefaults,
     },
-  }; const handleAddFilter = (filterName, type) => {
-    const config = filterTypes[type];
+  };
+  const handleAddFilter = (filterName, type) => {
     if (!filterName) return;
-
+  
+    const config = filterTypes[type];
     const defaultParams = config.defaults[filterName] || {};
-
+  
     config.setFilters(() => {
-      // For CP, Force model and Elasticity model we want **exactly one** active:
-      // when a new one is chosen, drop all old ones for that family.
+      // Single-select families
       if (type === "cp" || type === "force" || type === "elasticity") {
-        return {
-          [filterName]: defaultParams,
-        };
+        return { [filterName]: defaultParams };
       }
-
-      // For other filter types (regular) keep multi-select behaviour
+  
+      // Multi-select (regular)
       return {
+        ...config.filters,
         [filterName]: defaultParams,
       };
     });
-
-    // Keep the "selected" list in sync so the toolbar + sidebar reflect a single choice
-    if (type === "cp") {
-      setSelectedCpFilters([filterName]);
-    } else if (type === "force") {
-      setSelectedForceModels([filterName]);
-    } else if (type === "elasticity") {
-      setSelectedElasticityModels([filterName]);
-    }
-  }; const handleRemoveFilter = (filterName, type) => {
+  };
+  const handleRemoveFilter = (filterName, type) => {
     const config = filterTypes[type];
+  
     config.setFilters((prev) => {
-      const newFilters = { ...prev };
-      delete newFilters[filterName];
-      return newFilters;
+      const next = { ...prev };
+      delete next[filterName];
+      return next;
     });
-    config.setSelected((prev) => prev.filter((name) => name !== filterName));
-  }; const handleFilterChange = (filterName, param, value, type) => {
+  };
+  const handleFilterChange = (filterName, param, value, type) => {
     const config = filterTypes[type];
     config.setFilters((prev) => {
       if (prev[filterName]?.[param] === value) return prev;
@@ -591,6 +589,38 @@ const Dashboard = () => {
     activeEmodel,
     numCurves
   });
+
+  function YoungsModulusBadge({ value }) {
+    if (value == null || Number.isNaN(value)) {
+      return (
+        <span style={{ ...ymBadgeStyle, opacity: 0.6 }}>
+          <span style={ymLabelStyle}>E</span>
+          <span style={ymValueStyle}>—</span>
+        </span>
+      );
+    }
+  
+    // const { formatted, unit } = value;
+  
+    return (
+      <span style={ymBadgeStyle} title="Young’s Modulus">
+        <span style={ymLabelStyle}>E =</span>
+        <span style={ymValueStyle}>
+          {value}
+          <span style={ymUnitStyle}>Pa</span>
+        </span>
+      </span>
+    );
+  }
+  // function formatYoungsModulus(value) {
+  //   const abs = Math.abs(value);
+  
+  //   if (abs >= 1e9) return { formatted: (value / 1e9).toFixed(2), unit: "GPa" };
+  //   if (abs >= 1e6) return { formatted: (value / 1e6).toFixed(2), unit: "MPa" };
+  //   if (abs >= 1e3) return { formatted: (value / 1e3).toFixed(2), unit: "kPa" };
+  //   return { formatted: value.toFixed(2), unit: "Pa" };
+  // }
+  
 
   // Function to fetch all elasticity parameters (SSE streaming + caching + tab gating)
   const fetchAllElasticityParams = useCallback(async () => {
@@ -954,7 +984,37 @@ const Dashboard = () => {
         };
     }
   };
-
+  const ymBadgeStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "4px 10px",
+    borderRadius: 999,
+    background: "linear-gradient(180deg, #f5f7ff 0%, #eef1ff 100%)",
+    border: "1px solid #dfe3ff",
+    // boxShadow: "0 4px 10px rgba(90,105,255,0.15)",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#1d1e2c",
+  };
+  
+  const ymLabelStyle = {
+    fontWeight: 700,
+    color: "#5468ff",
+  };
+  
+  const ymValueStyle = {
+    fontWeight: 700,
+    letterSpacing: "0.01em",
+  };
+  
+  const ymUnitStyle = {
+    marginLeft: 2,
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#6b7280",
+  };
+  
   // Add subtle pressed effect to all clickable buttons via inline events
   const pressable = {
     onMouseDown: (e) => (e.currentTarget.style.transform = "translateY(1px)"),
@@ -1086,6 +1146,10 @@ const Dashboard = () => {
 
           {/* Middle: WebSocket status */}
           <div style={statusPillWrapperStyle}>
+            <YoungsModulusBadge
+              value={useDashboardStore.getState().modelStats?.force?.[0]?.value}
+            />
+
             <span style={statusPillStyle(connectionStatus)}>
               <span style={statusDotStyle(connectionStatus)} />
               {connectionStatus === "connected" && "Connected"}
@@ -1094,6 +1158,7 @@ const Dashboard = () => {
               {connectionStatus === "disconnected" && "Disconnected"}
             </span>
           </div>
+
 
           {/* Right: Actions */}
           <div style={actionsWrapStyle}>
@@ -1137,11 +1202,20 @@ const Dashboard = () => {
                       </button>
                     )}
                   />
+
                 </div>
               </Suspense>
+
             ) : (
               <button disabled style={actionBtnStyle("disabled")}>Export</button>
             )}
+
+            {/* ✅ Save Experiment (NEW) */}
+            <Suspense fallback={null}>
+              <div {...pressable}>
+                <SaveExperimentButton />
+              </div>
+            </Suspense>
 
             {/* Reconnect only when socket is not connected */}
             {connectionStatus !== 'connected' && (
@@ -1153,6 +1227,16 @@ const Dashboard = () => {
                 Reconnect
               </button>
             )}
+            <UserMenu />
+           {/* <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <UserMenu />
+            </div> */}
           </div>
         </div>
         {/* Filters Component */}
@@ -1171,10 +1255,6 @@ const Dashboard = () => {
              selectedCpFilters={selectedCpFilters}
              selectedForceModels={selectedForceModels}
              selectedElasticityModels={selectedElasticityModels}
-             setSelectedRegularFilters={setSelectedRegularFilters}
-             setSelectedCpFilters={setSelectedCpFilters}
-             setSelectedForceModels={setSelectedForceModels}
-             setSelectedElasticityModels={setSelectedElasticityModels}
              handleAddFilter={handleAddFilter}
              handleRemoveFilter={handleRemoveFilter}
              handleFilterChange={handleFilterChange}
@@ -1182,14 +1262,19 @@ const Dashboard = () => {
              activeTab={activeTab}
              canUseModels={isSingleCurveMode}
              onForceModelChange={(model) => {
-               if (model) {
-                 setSelectedForceModel(model);
-                 setSelectedParameters([]);
-               } else {
-                 setSelectedForceModel("");
-                 setSelectedParameters([]);
-               }
-             }}
+              if (!model) {
+                setFilters({ f_models: {} });
+                setSelectedParameters([]);
+                return;
+              }
+            
+              setFilters({
+                f_models: {
+                  [model]: forceModelDefaults[model] || {},
+                },
+              });
+              setSelectedParameters([]);
+            }}
              selectedForceModel={selectedForceModel}
              selectedParameters={selectedParameters}
              onParameterChange={setSelectedParameters}
@@ -1201,14 +1286,19 @@ const Dashboard = () => {
              showElasticityParameters={showElasticityParameters}
              setShowElasticityParameters={setShowElasticityParameters}
              onElasticityModelChange={(model) => {
-               if (model) {
-                 setSelectedElasticityModel(model);
-                 setSelectedElasticityParameters([]);
-               } else {
-                 setSelectedElasticityModel("");
-                 setSelectedElasticityParameters([]);
-               }
-             }}
+              if (!model) {
+                setFilters({ e_models: {} });
+                setSelectedElasticityParameters([]);
+                return;
+              }
+            
+              setFilters({
+                e_models: {
+                  [model]: elasticityModelDefaults[model] || {},
+                },
+              });
+              setSelectedElasticityParameters([]);
+            }}
              setZeroForce={setZeroForce}
              onSetZeroForceChange={updateZeroForce}
              elasticityParams={elasticityParams}

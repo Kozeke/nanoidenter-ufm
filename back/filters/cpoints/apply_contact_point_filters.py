@@ -31,7 +31,8 @@ def apply_cp_filters(query: str, filters: Dict, curve_ids: List[str], metadata: 
 
     # Take values from metadata (with safe defaults)
     spring_constant_val = _safe_meta(metadata, "spring_constant", 1.0)
-    tip_radius_val = _safe_meta(metadata, "tip_radius", 1e-5, positive=True)
+    # tip_radius_val = _safe_meta(metadata, "tip_radius", 1e-5, positive=True)
+    tip_radius_val = 1e-5
     tip_geometry_val = metadata.get("tip_geometry") or "sphere"
     tip_geometry_sql = str(tip_geometry_val).replace("'", "''")
 
@@ -61,16 +62,18 @@ def apply_cp_filters(query: str, filters: Dict, curve_ids: List[str], metadata: 
             break
 
     # Extract numeric curve IDs from strings like "curve0" -> 0
-    numeric_curve_ids = []
-    for cid in curve_ids:
-        if cid.startswith('curve'):
-            try:
-                numeric_id = int(cid[5:])  # Remove "curve" prefix
-                numeric_curve_ids.append(str(numeric_id))
-            except ValueError:
-                continue
-        else:
-            numeric_curve_ids.append(cid)
+    numeric_curve_ids = curve_ids
+
+    # numeric_curve_ids = []
+    # for cid in curve_ids:
+    #     if isinstance(cid, str) and cid.startswith('curve') :
+    #         try:
+    #             numeric_id = int(cid[5:])  # Remove "curve" prefix
+    #             numeric_curve_ids.append(str(numeric_id))
+    #         except ValueError:
+    #             continue
+    #     else:
+    #         numeric_curve_ids.append(cid)
     
     # If cp_col stayed "NULL" (no valid filter found), this query will just return no rows
     query = f"""
@@ -83,7 +86,7 @@ def apply_cp_filters(query: str, filters: Dict, curve_ids: List[str], metadata: 
             {tip_radius_val} AS tip_radius,
             '{tip_geometry_sql}' AS tip_geometry
         FROM force_vs_z
-        WHERE curve_id IN ({','.join(numeric_curve_ids)})
+        WHERE curve_id IN ({','.join(map(str, numeric_curve_ids))})
           AND {cp_col} IS NOT NULL
     """
     print(f"Generated query: {query}")
