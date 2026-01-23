@@ -14,6 +14,7 @@ from db.connection import get_conn
 from db.init_db import ensure_cache_tables
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any
+from utils.stats import format_stat, is_valid_param_vector
 
 
 app = FastAPI()
@@ -280,6 +281,8 @@ async def websocket_data_stream(websocket: WebSocket):
                         compute_scope = "fmodel_only"
                     elif action == "update_emodel":
                         compute_scope = "emodel_only"
+                    elif action == "compute_stats":
+                        compute_scope = "model_stats"
                     else:
                         compute_scope = "full"
                 compute_scope = str(compute_scope).lower()
@@ -306,18 +309,25 @@ async def websocket_data_stream(websocket: WebSocket):
                 })  # Extract force model parameters
                 print(f"Received request: num_curves={num_curves}, curve_id={curve_id}, filters={filters}")
 
-                # Fetch curve IDs based on request
-                if curve_id:
-                    # If specific curve_id is provided, only fetch that curve
-                    curve_ids = [curve_id]
-                    # print(f"Fetching specific curve_id: {curve_ids}")
-                else:
-                    # Otherwise fetch based on num_curves
+                # --- Population stats ignore curve_id ---
+                if compute_scope == "model_stats":
                     curve_ids_result = conn.execute(
-                        "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
+                        "SELECT curve_id FROM force_vs_z"
                     ).fetchall()
-                    curve_ids = [str(row[0]) for row in curve_ids_result]  # Ensure string IDs
-                    # print(f"Total curve IDs fetched: {curve_ids}")
+                    curve_ids = [str(row[0]) for row in curve_ids_result]
+
+                else:
+                    if curve_id:
+                        curve_ids = [curve_id]
+                    else:
+                        curve_ids_result = conn.execute(
+                            "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
+                        ).fetchall()
+                        curve_ids = [str(row[0]) for row in curve_ids_result]
+
+                # --- ADD THIS ---
+                global_force_params = []
+                global_elastic_params = []
 
                 # Process in batches
                 for i in range(0, len(curve_ids), BATCH_SIZE):
@@ -335,9 +345,46 @@ async def websocket_data_stream(websocket: WebSocket):
                         elastic_model_params,
                         force_model_params,
                         compute_scope=compute_scope,
+                        global_force_params=global_force_params,
+                        global_elastic_params=global_elastic_params,
                     )
                     await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
                 # print("send meta and now curves")
+                if compute_scope == "model_stats":
+                    stats = {}
+
+                    if len(global_force_params) >= 2:
+                        n_params = len(global_force_params[0])
+                        params_by_index = [
+                            [p[i] for p in global_force_params]
+                            for i in range(n_params)
+                        ]
+                        stats["force_params"] = {
+                            f"p{i}": format_stat(values)
+                            for i, values in enumerate(params_by_index)
+                            if len(values) >= 2
+                        }
+
+                    if len(global_elastic_params) >= 2:
+                        n_params = len(global_elastic_params[0])
+                        params_by_index = [
+                            [p[i] for p in global_elastic_params]
+                            for i in range(n_params)
+                        ]
+                        stats["elasticity_params"] = {
+                            f"p{i}": format_stat(values)
+                            for i, values in enumerate(params_by_index)
+                            if len(values) >= 2
+                        }
+
+                    await websocket.send_text(json.dumps({
+                        "status": "model_stats",
+                        "data": {
+                            "stats": stats,
+                            "num_curves": len(curve_ids)
+                        }
+                    }))
+
                 # Signal completion of this request
                 await websocket.send_text(json.dumps({"status": "complete"}))
                 # print("Request completed")
@@ -409,6 +456,8 @@ async def process_and_stream_batch(
     elastic_model_params: Dict = None,
     force_model_params: Dict = None,
     compute_scope: str = "full",  # NEW
+    global_force_params: list = None,
+    global_elastic_params: list = None,
 ) -> None:
     """
     Process a batch of curve IDs and optionally a single curve ID, fetch data from DuckDB,
@@ -424,7 +473,7 @@ async def process_and_stream_batch(
 
         # Normalise scope
         compute_scope = (compute_scope or "full").lower()
-        if compute_scope not in {"full", "fmodel_only", "emodel_only"}:
+        if compute_scope not in {"full", "fmodel_only", "emodel_only", "model_stats"}:
             compute_scope = "full"
 
         scope_full = compute_scope == "full"
@@ -438,6 +487,15 @@ async def process_and_stream_batch(
             "f_models": dict(filters.get("f_models", {})),
             "e_models": dict(filters.get("e_models", {})),
         }
+
+        # --- Model stats scope ---
+        scope_model_stats = compute_scope == "model_stats"
+        print("scope_model_stats", scope_model_stats)
+        has_fmodel = bool(filters_for_call["f_models"])
+        has_emodel = bool(filters_for_call["e_models"])
+
+        run_force_population = scope_model_stats and has_fmodel
+        run_elastic_population = scope_model_stats and has_emodel
 
         # Decide which parts of the pipeline we actually need
         if scope_f_only:
@@ -502,6 +560,8 @@ async def process_and_stream_batch(
                         elastic_model_params=elastic_model_params,
                         force_model_params=force_model_params,
                         compute_elspectra=compute_elspectra_flag,
+                        force_model_population=run_force_population,
+                        elastic_model_population=run_elastic_population,
                     ),
                 )
 
@@ -510,16 +570,31 @@ async def process_and_stream_batch(
             "status": "batch",
             "data": {},
         }
+        print("qwertrtt")
+        if scope_model_stats:
+            curves_block = graph_force_indentation.get("curves", {})
 
-        if scope_full:
-            # Original behaviour: send all graphs if present
+            if run_force_population and "curves_fparam" in curves_block:
+                for r in curves_block["curves_fparam"]:
+                    if is_valid_param_vector(r.get("fparam")):
+                        global_force_params.append(r["fparam"])
+
+            if run_elastic_population and "curves_elasticity_param" in curves_block:
+                for r in curves_block["curves_elasticity_param"]:
+                    if is_valid_param_vector(r.get("elasticity_param")):
+                        global_elastic_params.append(r["elasticity_param"])
+
+            # 🔴 DO NOT SEND STATS HERE
+            return
+
+        elif scope_full:
+            # existing logic, unchanged
             if graph_force_vs_z:
                 response_data["data"].update({
                     "graphForcevsZ": graph_force_vs_z,
                     "graphForceIndentation": graph_force_indentation,
                     "graphElspectra": graph_elspectra,
                 })
-
             if graph_force_vs_z_single:
                 response_data["data"].update({
                     "graphForcevsZSingle": graph_force_vs_z_single,
@@ -528,17 +603,12 @@ async def process_and_stream_batch(
                 })
 
         elif scope_f_only:
-            # Only update force-model overlay on the indentation graph
-            # → do NOT touch force-vs-Z or elspectra in this payload
             if graph_force_indentation_single:
                 response_data["data"]["graphForceIndentationSingle"] = graph_force_indentation_single
 
         elif scope_e_only:
-            # Only update elasticity-model overlay on the elspectra graph
-            # → do NOT touch other graphs
             if graph_elspectra_single:
                 response_data["data"]["graphElspectraSingle"] = graph_elspectra_single
-
         # Send or report empty
         if response_data["data"]:
             await websocket.send_text(json.dumps(
@@ -600,6 +670,7 @@ from pathlib import Path
 from routers.opener import router as experiment_router
 from routers.exporter import router as exporter_router
 from auth.router import router as auth_router
+from experiments.router import router as experiments_router
 
 # Configure logging
 logging.basicConfig(
@@ -613,7 +684,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 app.include_router(experiment_router)
 app.include_router(exporter_router)
-
+app.include_router(experiments_router)
 app.include_router(auth_router)
 
 
@@ -636,104 +707,104 @@ def validate_hdf5_path(path: str) -> None:
     if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_/]*[a-zA-Z0-9]$', path):
         raise ValueError("HDF5 path contains invalid characters")
 
-@app.post("/export-hdf5")
-async def export_hdf5_endpoint(data: Dict[str, Any]):
-    """Export curves from DuckDB to an HDF5 file with custom level names and metadata."""
-    export_hdf5_path = data.get("export_hdf5_path")
-    curve_ids = data.get("curve_ids", [])
-    dataset_path = data.get("dataset_path")
-    num_curves = data.get("num_curves")
-    level_names = data.get("level_names", ["curve0", "segment0"])
-    metadata_path = data.get("metadata_path", "")
-    metadata = data.get("metadata", {})
-    db_path = "data/experiment.db"
-    errors = []
+# @app.post("/export-hdf5")
+# async def export_hdf5_endpoint(data: Dict[str, Any]):
+#     """Export curves from DuckDB to an HDF5 file with custom level names and metadata."""
+#     export_hdf5_path = data.get("export_hdf5_path")
+#     curve_ids = data.get("curve_ids", [])
+#     dataset_path = data.get("dataset_path")
+#     num_curves = data.get("num_curves")
+#     level_names = data.get("level_names", ["curve0", "segment0"])
+#     metadata_path = data.get("metadata_path", "")
+#     metadata = data.get("metadata", {})
+#     db_path = "data/experiment.db"
+#     errors = []
 
-    # Validate export_hdf5_path
-    if not export_hdf5_path:
-        errors.append("Missing export_hdf5_path")
-        logger.error("Missing export_hdf5_path")
-        raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing export_hdf5_path", "errors": errors})
+#     # Validate export_hdf5_path
+#     if not export_hdf5_path:
+#         errors.append("Missing export_hdf5_path")
+#         logger.error("Missing export_hdf5_path")
+#         raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing export_hdf5_path", "errors": errors})
 
-    try:
-        # Sanitize file system path
-        export_hdf5_path = sanitize_file_path(export_hdf5_path)
+#     try:
+#         # Sanitize file system path
+#         export_hdf5_path = sanitize_file_path(export_hdf5_path)
 
-        # Validate dataset_path (required for HDF5 data storage)
-        if not dataset_path:
-            errors.append("Missing dataset_path")
-            logger.error("Missing dataset_path")
-            raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing dataset_path", "errors": errors})
-        validate_hdf5_path(dataset_path)
+#         # Validate dataset_path (required for HDF5 data storage)
+#         if not dataset_path:
+#             errors.append("Missing dataset_path")
+#             logger.error("Missing dataset_path")
+#             raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing dataset_path", "errors": errors})
+#         validate_hdf5_path(dataset_path)
 
-        # Validate metadata_path (optional, can be empty)
-        if metadata_path:
-            validate_hdf5_path(metadata_path)
+#         # Validate metadata_path (optional, can be empty)
+#         if metadata_path:
+#             validate_hdf5_path(metadata_path)
 
-        # Convert curve_ids
-        converted_curve_ids = None
-        if curve_ids:
-            converted_curve_ids = []
-            for curve_id in curve_ids:
-                match = re.match(r"curve(\d+)", curve_id)
-                if not match:
-                    errors.append(f"Invalid curve_id format: {curve_id}")
-                    logger.error(f"Invalid curve_id: {curve_id}")
-                    raise HTTPException(status_code=400, detail={"status": "error", "message": f"Invalid curve_id: {curve_id}", "errors": errors})
-                converted_curve_ids.append(int(match.group(1)))
+#         # Convert curve_ids
+#         converted_curve_ids = None
+#         if curve_ids:
+#             converted_curve_ids = []
+#             for curve_id in curve_ids:
+#                 match = re.match(r"curve(\d+)", curve_id)
+#                 if not match:
+#                     errors.append(f"Invalid curve_id format: {curve_id}")
+#                     logger.error(f"Invalid curve_id: {curve_id}")
+#                     raise HTTPException(status_code=400, detail={"status": "error", "message": f"Invalid curve_id: {curve_id}", "errors": errors})
+#                 converted_curve_ids.append(int(match.group(1)))
 
-        # Fetch curve_ids if num_curves is provided
-        if not converted_curve_ids and num_curves is not None:
-            if not isinstance(num_curves, int) or num_curves <= 0:
-                errors.append("num_curves must be a positive integer")
-                raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid num_curves", "errors": errors})
-            with duckdb.connect(db_path) as conn:
-                curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
-                converted_curve_ids = [row[0] for row in curve_ids_result]
+#         # Fetch curve_ids if num_curves is provided
+#         if not converted_curve_ids and num_curves is not None:
+#             if not isinstance(num_curves, int) or num_curves <= 0:
+#                 errors.append("num_curves must be a positive integer")
+#                 raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid num_curves", "errors": errors})
+#             with duckdb.connect(db_path) as conn:
+#                 curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
+#                 converted_curve_ids = [row[0] for row in curve_ids_result]
 
-        # Validate level_names
-        if not all(isinstance(name, str) and name.strip() for name in level_names):
-            errors.append("All level names must be non-empty strings")
-            raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid level names", "errors": errors})
+#         # Validate level_names
+#         if not all(isinstance(name, str) and name.strip() for name in level_names):
+#             errors.append("All level names must be non-empty strings")
+#             raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid level names", "errors": errors})
 
-        # Validate metadata
-        for key, value in metadata.items():
-            if value and isinstance(value, str) and not value.strip():
-                errors.append(f"Metadata field {key} cannot be empty")
-        if errors:
-            raise HTTPException(status_code=400, detail={
-                "status": "error",
-                "message": "Invalid metadata",
-                "errors": errors
-            })
+#         # Validate metadata
+#         for key, value in metadata.items():
+#             if value and isinstance(value, str) and not value.strip():
+#                 errors.append(f"Metadata field {key} cannot be empty")
+#         if errors:
+#             raise HTTPException(status_code=400, detail={
+#                 "status": "error",
+#                 "message": "Invalid metadata",
+#                 "errors": errors
+#             })
 
-        logger.info(f"Starting HDF5 export to {export_hdf5_path} with {len(converted_curve_ids or [])} curves")
-        os.makedirs(os.path.dirname(export_hdf5_path), exist_ok=True)
-        num_exported = export_from_duckdb_to_hdf5(
-            db_path=db_path,
-            output_path=export_hdf5_path,  # Fixed: Use output_path instead of export_hdf5_path
-            curve_ids=converted_curve_ids,
-            dataset_path=dataset_path,  # Pass dataset_path for HDF5 data storage
-            level_names=level_names,
-            metadata_path=metadata_path,
-            metadata=metadata
-        )
+#         logger.info(f"Starting HDF5 export to {export_hdf5_path} with {len(converted_curve_ids or [])} curves")
+#         os.makedirs(os.path.dirname(export_hdf5_path), exist_ok=True)
+#         num_exported = export_from_duckdb_to_hdf5(
+#             db_path=db_path,
+#             output_path=export_hdf5_path,  # Fixed: Use output_path instead of export_hdf5_path
+#             curve_ids=converted_curve_ids,
+#             dataset_path=dataset_path,  # Pass dataset_path for HDF5 data storage
+#             level_names=level_names,
+#             metadata_path=metadata_path,
+#             metadata=metadata
+#         )
 
-        return {
-            "status": "success",
-            "message": f"Successfully exported {num_exported} curves",
-            "export_hdf5_path": export_hdf5_path,
-            "exported_curves": num_exported
-        }
-    except Exception as e:
-        errors.append(str(e))
-        logger.error(f"Failed to export to HDF5: {str(e)}")
-        raise HTTPException(status_code=500, detail={
-            "status": "error",
-            "message": f"Failed to export: {str(e)}",
-            "export_hdf5_path": export_hdf5_path,
-            "errors": errors
-        })
+#         return {
+#             "status": "success",
+#             "message": f"Successfully exported {num_exported} curves",
+#             "export_hdf5_path": export_hdf5_path,
+#             "exported_curves": num_exported
+#         }
+#     except Exception as e:
+#         errors.append(str(e))
+#         logger.error(f"Failed to export to HDF5: {str(e)}")
+#         raise HTTPException(status_code=500, detail={
+#             "status": "error",
+#             "message": f"Failed to export: {str(e)}",
+#             "export_hdf5_path": export_hdf5_path,
+#             "errors": errors
+#         })
 
 
 # New endpoint to fetch all curves' fparams with progress streaming

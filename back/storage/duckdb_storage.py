@@ -18,11 +18,11 @@ def save_to_duckdb(curves: Dict[str, ForceCurve], db_path: str) -> None:
                 z_values DOUBLE[],
                 indentation_values DOUBLE[],
                 elasticity_values DOUBLE[],
-                file_id TEXT, 
+                file_id TEXT,
                 date TEXT,
-                instrument TEXT, 
+                instrument TEXT,
                 sample TEXT,
-                spring_constant DOUBLE, 
+                spring_constant DOUBLE,
                 inv_ols DOUBLE,
                 tip_geometry TEXT,
                 tip_radius DOUBLE,
@@ -41,6 +41,7 @@ def save_to_duckdb(curves: Dict[str, ForceCurve], db_path: str) -> None:
         """)
         batch_data = [
             (
+                # curve.curve_id,
                 i,
                 segment.type,
                 segment.deflection.tolist(),

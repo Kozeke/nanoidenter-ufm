@@ -93,7 +93,7 @@ def create_fmodel_udf(fmodel_name: str, conn: duckdb.DuckDBPyConnection):
             x, y = getFizi(zi_min, zi_max, zi_values, fi_values)
 
             # Require a minimal window to avoid ill-conditioned fits
-            if x.size > 5:
+            if x.size > 2:
                 result = inst.calculate(x, y)
                 return result if result is not None else None
             return None

@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException, Depends
+from typing import Optional
 from pydantic import BaseModel
 
 from auth.dependencies import get_current_user
-from db.users import update_user_password
+from db.users import update_user_password, update_user_profile
 
 from auth.security import (
     hash_password,
@@ -10,6 +11,8 @@ from auth.security import (
     create_access_token,
 )
 from db.users import create_user, get_user_by_email
+from schemas.user import UpdateProfile
+
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -27,6 +30,8 @@ class LoginRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+
+
 
 
 @router.post("/register")
@@ -59,6 +64,12 @@ def me(user=Depends(get_current_user)):
     return {
         "id": user["id"],
         "email": user["email"],
+        "full_name": user["full_name"],
+        "affiliation": user["affiliation"],
+        "instrument_serial_number": user["instrument_serial_number"],
+        "bio": user["bio"],
+        "phone_number": user["phone_number"],
+        "profile_completed": user["profile_completed"],
     }
 
 
@@ -77,3 +88,15 @@ def change_password(
     update_user_password(user["id"], new_hash)
 
     return {"status": "ok"}
+
+
+@router.patch("/me")
+def change_profile(
+    data: UpdateProfile,
+    user=Depends(get_current_user),
+):
+    updated_user = update_user_profile(
+        user_id=user["id"],
+        data=data
+    )
+    return updated_user

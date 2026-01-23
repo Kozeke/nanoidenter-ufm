@@ -138,11 +138,11 @@ class CSVExporter(Exporter):
                 if isinstance(curve_ids[0], str) and curve_ids[0].startswith('curve'):
                     curve_id_strings = curve_ids
                 else:
-                    curve_id_strings = [f"curve{cid}" for cid in curve_ids]
+                    curve_id_strings = [f"{cid}" for cid in curve_ids]
             else:
                 # Prevent accidental full-table scans; remove if you want "all curves"
                 raise ValueError("No curve_ids provided for average export to avoid full-table processing.")
-
+            # curve_id_strings = curve_ids
             filters_config = {
                 "regular": regular_filters,
                 "cp_filters": cp_filters,
@@ -156,7 +156,7 @@ class CSVExporter(Exporter):
                 from filters.register_all import register_filters
                 register_filters(conn)
 
-                from db import fetch_curves_batch
+                from pipeline import fetch_curves_batch
                 graph_force_vs_z, graph_force_indentation, graph_elspectra = fetch_curves_batch(
                     conn, curve_id_strings, filters_config, single=True
                 )
@@ -451,7 +451,7 @@ class CSVExporter(Exporter):
                 from filters.register_all import register_filters
                 register_filters(conn)
 
-                from db import fetch_curves_batch
+                from pipeline import fetch_curves_batch
                 graph_force_vs_z, graph_force_indentation, graph_elspectra = fetch_curves_batch(
                     conn, curve_id_strings, filters_config, single=True
                 )

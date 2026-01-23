@@ -2,6 +2,7 @@ import duckdb
 from filters.register_all import register_filters
 from db.init_db import init_auth_tables
 from db.init_db import init_cache_tables
+from db.init_db import init_experiment_tables
 
 DB_PATH = "data/all.db"
 
@@ -14,4 +15,5 @@ def get_conn() -> duckdb.DuckDBPyConnection:
         register_filters(_conn_singleton)
         init_cache_tables(_conn_singleton)
         init_auth_tables(_conn_singleton)
+        init_experiment_tables(_conn_singleton)
     return _conn_singleton

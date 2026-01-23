@@ -28,23 +28,25 @@ def apply_emodels(query: str, emodels: Dict, curve_ids: List[str], elastic_model
             break
 
     # Extract numeric curve IDs from strings like "curve0" -> 0
-    numeric_curve_ids = []
-    for cid in curve_ids:
-        if cid.startswith('curve'):
-            try:
-                numeric_id = int(cid[5:])  # Remove "curve" prefix
-                numeric_curve_ids.append(str(numeric_id))
-            except ValueError:
-                continue
-        else:
-            numeric_curve_ids.append(cid)
+    numeric_curve_ids = curve_ids
+
+    # numeric_curve_ids = []
+    # for cid in curve_ids:
+    #     if isinstance(cid, str) and cid.startswith('curve'):
+    #         try:
+    #             numeric_id = int(cid[5:])  # Remove "curve" prefix
+    #             numeric_curve_ids.append(str(numeric_id))
+    #         except ValueError:
+    #             continue
+    #     else:
+    #         numeric_curve_ids.append(cid)
     
     query = f"""
         SELECT 
             curve_id,
             {emodel_col} AS emodel_values
         FROM base_results
-        WHERE curve_id IN ({','.join(numeric_curve_ids)})
+        WHERE curve_id IN ({','.join(map(str, numeric_curve_ids))})
         AND {emodel_col} IS NOT NULL
     """
     print(f"Generated queryemodel:\n{query}")

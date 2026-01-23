@@ -104,7 +104,8 @@ async def process_file_endpoint(data: Dict[str, Any]):
             "filename": file_path,
             "duckdb_status": "saved",
             "spring_constant": float(metadata.get("spring_constant", 0.1)),
-            "tip_radius_um": float(metadata.get("tip_radius", 10)) / 1000,  # Convert nm to μm for display
+            # "tip_radius_um": float(metadata.get("tip_radius", 10)) / 1000,  # Convert nm to μm for display
+            "tip_radius_um": float(metadata.get("tip_radius", 10)),
             "errors": errors
         }
     except Exception as e:
