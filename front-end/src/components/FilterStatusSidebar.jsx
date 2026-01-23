@@ -19,7 +19,7 @@ import {
   useMediaQuery
 } from "@mui/material";
 import { Delete, Close } from "@mui/icons-material";
-
+import { useDashboardStore } from "../state/useDashboardStore";
 // Drawer width constant for consistent spacing across components
 const DRAWER_WIDTH = 300;
 
@@ -85,6 +85,57 @@ const closeBtnHandlers = {
   onMouseDown: (e) => (e.currentTarget.style.transform = "translateY(1px)"),
   onMouseUp:   (e) => (e.currentTarget.style.transform = "translateY(0)"),
   onMouseLeave:(e) => (e.currentTarget.style.transform = "translateY(0)"),
+};
+const ComputedResults = ({ title, stats }) => {
+  if (!Array.isArray(stats) || stats.length === 0) return null;
+
+  return (
+    <Box sx={{ mt: 1 }}>
+      <Typography
+        variant="caption"
+        sx={{
+          fontSize: 12,
+          fontWeight: 700,
+          color: "#6b7280",
+          textTransform: "uppercase",
+          letterSpacing: "0.04em",
+          mb: 0.75,
+          display: "block",
+        }}
+      >
+        {title}
+      </Typography>
+
+      <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
+        {stats.map((item, idx) => (
+          <Box
+            key={idx}
+            sx={{
+              border: "1px dashed #dbe2ff",
+              borderRadius: "8px",
+              px: 1,
+              py: 0.75,
+              backgroundColor: "#f9faff",
+            }}
+          >
+            <Typography variant="caption" sx={{ fontSize: 11, color: "#6b7280" }}>
+              {item.label}
+            </Typography>
+            <Typography
+              variant="body2"
+              sx={{
+                fontWeight: 700,
+                fontSize: 13,
+                fontFamily: "monospace",
+              }}
+            >
+              {item.value ?? "—"}
+            </Typography>
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
 };
 
 const FilterCard = ({
@@ -215,6 +266,7 @@ const FilterStatusSidebar = ({
   // Debug logging
   // console.log("selectedElasticityModel:", selectedElasticityModel);
   // console.log("elasticityParameterOptions:", elasticityParameterOptions);
+  const modelStats = useDashboardStore((s) => s.modelStats);
 
   const handleParameterChange = (parameter) => {
     const newSelectedParams = selectedParameters.includes(parameter)
@@ -312,7 +364,13 @@ const FilterStatusSidebar = ({
                       sx={inputCompactSx}
                     />
                   </Box>
+                  
                 </Box>
+                <ComputedResults
+                  title="Elastic Model Results"
+                  stats={modelStats.elasticity}
+                />
+
               </CardContent>
             </Card>
           )}
@@ -410,17 +468,11 @@ const FilterStatusSidebar = ({
               </Box>
               
               {/* Young's Modulus Info - Show for any force model */}
-              <Box sx={{ mt: 0.5 }}>
-                <Typography variant="caption" sx={{ 
-                  display: "block", 
-                  fontSize: 11, 
-                  color: "#666", 
-                  textAlign: "center"
-                }}>
-                  Young's modulus (8±2)10²
-                </Typography>
-              </Box>
-              
+              <ComputedResults
+                title="Force Model Results"
+                stats={modelStats.force}
+              />
+
               {/* Poisson Ratio Slider - Only show for Hertz and DriftedHertz models */}
               {(selectedForceModel === "hertz" || selectedForceModel === "driftedhertz") && (
                 <Box sx={{ mt: 0.75 }}>

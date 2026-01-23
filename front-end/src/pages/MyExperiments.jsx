@@ -7,7 +7,6 @@ import { useDashboardStore } from "../state/useDashboardStore";
 import { getExperiment } from "../api/experiments";
 import ExperimentPreviewModal from "../components/ExperimentPreviewModal";
 
-
 export default function MyExperiments() {
   // 🔧 Frontend-only mock data (replace with API later)
   const navigate = useNavigate();
@@ -31,7 +30,7 @@ export default function MyExperiments() {
       })
       .finally(() => setLoading(false));
   }, [token]);
-  
+
   const handleDelete = (id) => {
     if (!window.confirm("Delete this experiment?")) return;
     setExperiments((prev) => prev.filter((e) => e.id !== id));
@@ -39,15 +38,8 @@ export default function MyExperiments() {
 
   const handleOpen = async (exp) => {
     const data = await getExperiment(token, exp.id);
-  
-    // console.log("OPEN EXPERIMENT DATA:", data.filters.regular);
-    // function parseCurveId(curveId){
-    //   if (typeof curveId === "number") return curveId;
-    //   if (typeof curveId !== "string") return null;
-    //   const match = curveId.match(/\d+/);
-    //   return match ? Number(match[0]) : null 
-    // }
-    console.log("data filters",data.filters)
+
+    console.log("data filters", data.filters);
     // ✅ 1. Set Zustand state FIRST
     dashboard.setFilters(data.filters ?? {});
     dashboard.setElasticityParams(data.elasticity_params ?? {});
@@ -59,21 +51,26 @@ export default function MyExperiments() {
     // ✅ 2. THEN navigate
     navigate("/dashboard");
   };
-  
 
   return (
     <div style={pageStyle}>
+      
+
+      <div style={cardStyle}>
       <div style={{ marginBottom: 12 }}>
         <BackToDashboardButton />
       </div>
-
-      <div style={cardStyle}>
         <h2 style={titleStyle}>My Experiments</h2>
         <p style={subtitleStyle}>Saved analysis runs</p>
         {loading ? (
-            <div>Loading experiments…</div>
+          <div>Loading experiments…</div>
         ) : experiments.length === 0 ? (
-          <div style={emptyStyle}>No experiments saved yet</div>
+          <div style={emptyStyle}>
+            No experiments yet
+            <div style={{ marginTop: 8, fontSize: 13 }}>
+              Open a file and save your first analysis
+            </div>
+          </div>
         ) : (
           <table style={tableStyle}>
             <thead>
@@ -86,74 +83,96 @@ export default function MyExperiments() {
             </thead>
             <tbody>
               {experiments.map((exp) => (
-                <tr key={exp.id} style={rowStyle}>
-                  <td style={tdStyle}>{exp.name}</td>
-                  <td style={tdStyle}>{exp.created_at}</td>
+                <tr key={exp.id} style={rowStyle} className="row">
+                  <td style={tdStyle}>
+                    <div style={{ fontWeight: 600 }}>{exp.name}</div>
+                    <div style={{ fontSize: 12, color: "#6b7280" }}>
+                      ID: {exp.id}
+                    </div>
+                  </td>
+
+                  <td style={tdStyle}>{formatDate(exp.created_at)}</td>
+
                   <td style={tdStyle}>
                     <StatusBadge status={exp.status} />
                   </td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>
-                  <button
-                    style={secondaryButtonStyle}
-                    onClick={() => setPreviewId(exp.id)}
+
+                  <td
+                    style={{
+                      ...tdStyle,
+                      textAlign: "right",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <button
+                      style={secondaryButtonStyle}
+                      onClick={() => setPreviewId(exp.id)}
                     >
-                    Preview
+                      👁 Preview
                     </button>
                     <button
                       style={actionButtonStyle}
                       onClick={() => handleOpen(exp)}
                     >
-                      Open
+                      ▶ Open
                     </button>
-                    <button
-                      style={secondaryButtonStyle}
-                      onClick={() => alert("Export not wired yet")}
-                    >
-                      Export
-                    </button>
+                    <button style={secondaryButtonStyle}>⬇ Export</button>
                     <button
                       style={dangerButtonStyle}
                       onClick={() => handleDelete(exp.id)}
                     >
-                      Delete
+                      🗑 Delete
                     </button>
-                   
                   </td>
-                  
                 </tr>
               ))}
             </tbody>
           </table>
         )}
       </div>
-        {previewId && (
-            <ExperimentPreviewModal
-                id={previewId}
-                onClose={() => setPreviewId(null)}
-            />
-            )}
+      {previewId && (
+        <ExperimentPreviewModal
+          id={previewId}
+          onClose={() => setPreviewId(null)}
+        />
+      )}
     </div>
   );
-  
+}
+function formatDate(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(d);
 }
 
 /* ---------- Small components ---------- */
 
 function StatusBadge({ status }) {
+  const s = statusConfig[status] || statusConfig.Completed;
   return (
     <span
       style={{
-        ...badgeStyle,
-        background:
-          status === "Completed" ? "#ecfdf3" : "#fef3c7",
-        color:
-          status === "Completed" ? "#065f46" : "#92400e",
+        padding: "4px 10px",
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 600,
+        background: s.bg,
+        color: s.fg,
       }}
     >
-      {status}
+      {s.label}
     </span>
   );
 }
+
+const statusConfig = {
+  Completed: { bg: "#ecfdf3", fg: "#065f46", label: "Completed ✓" },
+  Running: { bg: "#eff6ff", fg: "#1d4ed8", label: "Running…" },
+  Failed: { bg: "#fee2e2", fg: "#991b1b", label: "Failed" },
+};
 
 /* ---------- Styles (Dashboard-consistent) ---------- */
 
@@ -202,6 +221,7 @@ const thStyle = {
 
 const rowStyle = {
   borderBottom: "1px solid #eef1ff",
+  transition: "background .15s ease",
 };
 
 const tdStyle = {

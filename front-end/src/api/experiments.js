@@ -1,7 +1,9 @@
+import { fetchWithAuth } from "./fetchWithAuth";
+
 const API = process.env.REACT_APP_BACKEND_URL;
 
 export async function listExperiments(token) {
-  const res = await fetch(`${API}/experiments`, {
+  const res = await fetchWithAuth(`${API}/experiments`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error("Failed to load experiments");
@@ -9,7 +11,7 @@ export async function listExperiments(token) {
 }
 
 export async function getExperiment(token, id) {
-  const res = await fetch(`${API}/experiments/${id}`, {
+  const res = await fetchWithAuth(`${API}/experiments/${id}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) throw new Error("Failed to load experiment");
@@ -17,7 +19,7 @@ export async function getExperiment(token, id) {
 }
 
 export async function saveExperiment(token, payload) {
-  const res = await fetch(`${API}/experiments`, {
+  const res = await fetchWithAuth(`${API}/experiments`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -29,4 +31,3 @@ export async function saveExperiment(token, payload) {
   if (!res.ok) throw new Error("Failed to save experiment");
   return res.json();
 }
-

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useDashboardStore } from "../state/useDashboardStore";
 import { useAuthStore } from "../state/useAuthStore";
-
+import { normalizeForceStats, normalizeElasticityStats  } from "../utils/elasticityMapper"
 // Exposes dashboard curve data and WebSocket helpers to the presentation layer.
 export const useDashboardWebSocket = () => {
   // Stores Force–Z curve batches received from the backend.
@@ -223,7 +223,56 @@ export const useDashboardWebSocket = () => {
     setLoadingMulti,
     setIsLoadingCurves,
   ]);
-
+  
+  
+  const sendModelStatsRequest = useCallback(() => {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
+  
+    const requestData = {
+      action: "compute_stats",
+      compute_scope: "model_stats",
+      num_curves: numCurves,
+      filters: {
+        regular: regularFilters,
+        cp_filters: cpFilters,
+        f_models: forceModels,
+        e_models: elasticityModels,
+      },
+      elasticity_params: elasticityParams,
+      elastic_model_params: elasticModelParams,
+      force_model_params: forceModelParams,
+      set_zero_force: setZeroForce,
+      // IMPORTANT: DO NOT send curve_id
+    };
+  
+    socketRef.current.send(JSON.stringify(requestData));
+  }, [
+    numCurves,
+    regularFilters,
+    cpFilters,
+    forceModels,
+    elasticityModels,
+    elasticityParams,
+    elasticModelParams,
+    forceModelParams,
+    setZeroForce,
+  ]);
+  useEffect(() => {
+    // if (computeScope !== "model_stats") return;
+    console.log("sendModelStats", filters)
+    const hasForceModels =
+      filters?.f_models && Object.keys(filters.f_models).length > 0;
+    const hasElasticModels =
+      filters?.e_models && Object.keys(filters.e_models).length > 0;
+  
+    // Only trigger stats when a model is actually selected
+    if (hasForceModels || hasElasticModels) {
+      console.log("sendModelStatsREq")
+      sendModelStatsRequest();
+    }
+  }, [filters.f_models, filters.e_models, sendModelStatsRequest]);
   // Initializes the WebSocket connection and wires up lifecycle handlers.
   const initializeWebSocket = useCallback(() => {
     // Ensure any existing connection is gracefully closed first.
@@ -280,7 +329,9 @@ export const useDashboardWebSocket = () => {
           graphForceIndentationSingle,
           graphElspectraSingle,
         } = response.data;
-
+            
+        
+        console.log("graphForcevsZ", graphForcevsZ)
         const forceGraph =
           (graphForcevsZSingle?.curves?.length > 0
             ? graphForcevsZSingle
@@ -411,6 +462,19 @@ export const useDashboardWebSocket = () => {
           }));
         }
       }
+      if (response.status === "model_stats" && response.data.stats) {
+        const liveFilters = useDashboardStore.getState().filters;
+        // const liveElasticityModels = liveFilters.e_models;
+        const stats = response.data.stats
+        console.log("filters (LIVE)", liveFilters);
+        // console.log("elasticityModel (LIVE)", liveElasticityModels);
+        const normalizedForceStats = normalizeForceStats(stats, liveFilters);
+        const normalizedElasticStats = normalizeElasticityStats(stats, liveFilters);
+        
+        useDashboardStore.getState().setModelStats("force", normalizedForceStats);
+        useDashboardStore.getState().setModelStats("elasticity", normalizedElasticStats);
+
+      }    
       console.log("sendCurveReq5")
 
       // Handle filter defaults sent once on WebSocket handshake

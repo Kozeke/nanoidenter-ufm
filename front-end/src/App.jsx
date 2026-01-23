@@ -8,9 +8,11 @@ import { useAuthInit } from "./hooks/useAuthInit";
 import { useAuthStore } from "./state/useAuthStore";
 import Profile from "./pages/Profile";
 import MyExperiments from "./pages/MyExperiments";
+import ProfileCompletedRoute from "./auth/ProfileCompletedRoute";
 
 function App() {
   useAuthInit();
+  const profileCompleted = useAuthStore((s) => s.profileCompleted);
 
   const isAuth = useAuthStore((s) => s.isAuthenticated);
 
@@ -20,7 +22,15 @@ function App() {
         {/* Default entry */}
         <Route
           path="/"
-          element={<Navigate to={isAuth ? "/dashboard" : "/login"} />}
+          element={<Navigate
+            to={
+              !isAuth
+                ? "/login"
+                : profileCompleted
+                ? "/dashboard"
+                : "/profile"
+            }
+          />}
         />
 
         {/* Public */}
@@ -31,9 +41,9 @@ function App() {
         <Route
           path="/dashboard"
           element={
-            <ProtectedRoute>
+            <ProfileCompletedRoute>
               <Dashboard />
-            </ProtectedRoute>
+            </ProfileCompletedRoute>
           }
         />
         <Route
@@ -47,9 +57,9 @@ function App() {
         <Route
           path="/experiments"
           element={
-            <ProtectedRoute>
+            <ProfileCompletedRoute>
               <MyExperiments />
-            </ProtectedRoute>
+            </ProfileCompletedRoute>
           }
         />
       </Routes>

@@ -61,3 +61,24 @@ export async function changePassword(token, payload) {
     return res.json();
   }
   
+  export async function updateProfile(token, payload) {
+    const res = await fetch(
+      `${process.env.REACT_APP_BACKEND_URL}/auth/me`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+  
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || "Profile update failed");
+    }
+  
+    return res.json();
+  }
+  

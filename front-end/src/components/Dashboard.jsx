@@ -590,6 +590,38 @@ const Dashboard = () => {
     numCurves
   });
 
+  function YoungsModulusBadge({ value }) {
+    if (value == null || Number.isNaN(value)) {
+      return (
+        <span style={{ ...ymBadgeStyle, opacity: 0.6 }}>
+          <span style={ymLabelStyle}>E</span>
+          <span style={ymValueStyle}>—</span>
+        </span>
+      );
+    }
+  
+    // const { formatted, unit } = value;
+  
+    return (
+      <span style={ymBadgeStyle} title="Young’s Modulus">
+        <span style={ymLabelStyle}>E =</span>
+        <span style={ymValueStyle}>
+          {value}
+          <span style={ymUnitStyle}>Pa</span>
+        </span>
+      </span>
+    );
+  }
+  // function formatYoungsModulus(value) {
+  //   const abs = Math.abs(value);
+  
+  //   if (abs >= 1e9) return { formatted: (value / 1e9).toFixed(2), unit: "GPa" };
+  //   if (abs >= 1e6) return { formatted: (value / 1e6).toFixed(2), unit: "MPa" };
+  //   if (abs >= 1e3) return { formatted: (value / 1e3).toFixed(2), unit: "kPa" };
+  //   return { formatted: value.toFixed(2), unit: "Pa" };
+  // }
+  
+
   // Function to fetch all elasticity parameters (SSE streaming + caching + tab gating)
   const fetchAllElasticityParams = useCallback(async () => {
     // Only load on Elasticity tab with the card open and a model selected
@@ -952,7 +984,37 @@ const Dashboard = () => {
         };
     }
   };
-
+  const ymBadgeStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "4px 10px",
+    borderRadius: 999,
+    background: "linear-gradient(180deg, #f5f7ff 0%, #eef1ff 100%)",
+    border: "1px solid #dfe3ff",
+    // boxShadow: "0 4px 10px rgba(90,105,255,0.15)",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#1d1e2c",
+  };
+  
+  const ymLabelStyle = {
+    fontWeight: 700,
+    color: "#5468ff",
+  };
+  
+  const ymValueStyle = {
+    fontWeight: 700,
+    letterSpacing: "0.01em",
+  };
+  
+  const ymUnitStyle = {
+    marginLeft: 2,
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#6b7280",
+  };
+  
   // Add subtle pressed effect to all clickable buttons via inline events
   const pressable = {
     onMouseDown: (e) => (e.currentTarget.style.transform = "translateY(1px)"),
@@ -1084,6 +1146,10 @@ const Dashboard = () => {
 
           {/* Middle: WebSocket status */}
           <div style={statusPillWrapperStyle}>
+            <YoungsModulusBadge
+              value={useDashboardStore.getState().modelStats?.force?.[0]?.value}
+            />
+
             <span style={statusPillStyle(connectionStatus)}>
               <span style={statusDotStyle(connectionStatus)} />
               {connectionStatus === "connected" && "Connected"}
@@ -1092,6 +1158,7 @@ const Dashboard = () => {
               {connectionStatus === "disconnected" && "Disconnected"}
             </span>
           </div>
+
 
           {/* Right: Actions */}
           <div style={actionsWrapStyle}>

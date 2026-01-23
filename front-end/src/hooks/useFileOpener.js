@@ -551,7 +551,7 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
           processedMetadata[key] = parseFloat(processedMetadata[key]);
         }
       });
-
+      console.log("processedMetadata",processedMetadata)
       const response = await fetch(
         `${process.env.REACT_APP_BACKEND_URL}/experiment/process-file`,
         {

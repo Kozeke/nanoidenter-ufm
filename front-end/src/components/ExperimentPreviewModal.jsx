@@ -2,18 +2,40 @@ import { useEffect, useState } from "react";
 import { getExperiment } from "../api/experiments";
 import { useAuthStore } from "../state/useAuthStore";
 
-export default function ExperimentPreviewModal({ id, onClose }) {
+import {
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Typography,
+  Stack,
+  Chip,
+  Divider,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  CircularProgress,
+  Button,
+} from "@mui/material";
+
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+
+/* ───────────────────────────────────────────── */
+
+export default function ExperimentPreviewModal({ id, onClose, onOpen }) {
   const token = useAuthStore((s) => s.token);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-
+  function formatYoungsModulus(mean, std, decimals = 1) {
+    if (mean == null || std == null) return "—";
+    return `${mean.toFixed(decimals)} ± ${std.toFixed(decimals)}`;
+  }
+  
   useEffect(() => {
     if (!id || !token) return;
 
     let mounted = true;
-
-    
 
     const fetchData = async () => {
       setLoading(true);
@@ -25,270 +47,264 @@ export default function ExperimentPreviewModal({ id, onClose }) {
         if (mounted) setData(result);
       } catch (err) {
         console.error(err);
-        if (mounted) {
-          setError(
-            err.response?.data?.message ||
-              "Failed to load experiment. Please try again."
-          );
-        }
+        if (mounted) setError("Failed to load experiment.");
       } finally {
         if (mounted) setLoading(false);
       }
     };
 
     fetchData();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+    };
   }, [id, token]);
 
   if (!id) return null;
 
-  const hasFilters = data?.filters && Object.keys(data.filters).length > 0;
-  const hasFmodel = data?.filters?.f_models && Object.keys(data.filters.f_models).length > 0;
-  const hasEmodel = data?.filters?.e_models && Object.keys(data.filters.e_models).length > 0;
+  const hasFilters = !!data?.filters;
+  const hasFmodel =
+    Object.keys(data?.filters?.f_models || {}).length > 0;
+  const hasEmodel =
+    Object.keys(data?.filters?.e_models || {}).length > 0;
 
   return (
-    <div style={overlayStyle} onClick={onClose}>
-      <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
-        <h3 style={{ margin: "0 0 20px 0" }}>Experiment {id}</h3>
+    <Dialog open={!!id} onClose={onClose} maxWidth="md" fullWidth>
+      {/* ───────────── Header ───────────── */}
+      <DialogTitle>
+        <Stack spacing={0.5}>
+          <Typography variant="h6">
+            {data?.name || `Experiment #${id}`}
+          </Typography>
 
-        {loading ? (
-          <div style={msgStyle}>Loading experiment data...</div>
-        ) : error ? (
-          <div style={{ ...msgStyle, color: "#dc2626" }}>{error}</div>
-        ) : !data ? (
-          <div style={msgStyle}>No data available</div>
-        ) : (
-          <div style={contentStyle}>
-            {/* General fields (id, name, metadata, etc.) */}
-            <RenderValue value={data} level={0} skipKeys={["filters", "elasticity_params", "force_model_params"]} />
-
-            {/* Filters section – only if not empty */}
-            {hasFilters && (
-              <Section title="Filters">
-                <RenderValue value={data.filters} level={1} skipKeys={["f_models", "e_models"]} />
-                {Object.keys(data.filters.f_models).length > 0 && (
-                  <div style={{ marginTop: 12 }}>
-                    <h5 style={subsectionTitleStyle}>Force Models (f_models)</h5>
-                    <RenderValue value={data.filters.f_models} level={2} />
-                  </div>
-                )}
-                {Object.keys(data.filters.e_models).length > 0 && (
-                  <div style={{ marginTop: 12 }}>
-                    <h5 style={subsectionTitleStyle}>Elasticity Models (e_models)</h5>
-                    <RenderValue value={data.filters.e_models} level={2} />
-                  </div>
-                )}
-              </Section>
+          <Stack direction="row" spacing={1} alignItems="center">
+            {data?.created_at && (
+              <Typography variant="caption" color="text.secondary">
+                {formatDate(data.created_at)}
+              </Typography>
             )}
-
-            {/* Force Model Params – only if fmodel chosen */}
-            {hasFmodel && (
-              <Section title="Force Model Parameters" color="#1e40af">
-                {data.force_model_params?.poisson != null && (
-                  <ValueDisplay name="Poisson's ratio" value={data.force_model_params.poisson} />
-                )}
-                {data.force_model_params?.maxInd != null && (
-                  <ValueDisplay name="Max individual" value={data.force_model_params.maxInd} />
-                )}
-                {data.force_model_params?.minInd != null && (
-                  <ValueDisplay name="Min individual" value={data.force_model_params.minInd} />
-                )}
-                {/* Render any unknown/extra params */}
-                <RenderValue value={data.force_model_params} level={1} skipKnownFields={knownForceFields} />
-              </Section>
+            {data?.status && (
+              <Chip
+                size="small"
+                label={data.status}
+                color={
+                  data.status === "Completed"
+                    ? "success"
+                    : "warning"
+                }
+              />
             )}
+          </Stack>
+        </Stack>
+      </DialogTitle>
 
-            {/* Elasticity Model Params – only if emodel chosen */}
-            {hasEmodel && (
-              <Section title="Elasticity Model Parameters" color="#166534">
-                {data.elasticity_params?.interpolate != null && (
-                  <ValueDisplay
-                    name="Interpolate"
-                    value={data.elasticity_params.interpolate ? "Yes" : "No"}
-                  />
-                )}
-                {data.elasticity_params?.order != null && (
-                  <ValueDisplay name="Interpolation order" value={data.elasticity_params.order} />
-                )}
-                {data.elasticity_params?.window != null && (
-                  <ValueDisplay name="Window size" value={data.elasticity_params.window} />
-                )}
-                {/* Render any unknown/extra params */}
-                <RenderValue value={data.elasticity_params} level={1} skipKnownFields={knownElasticityFields} />
-              </Section>
-            )}
-          </div>
+      {/* ───────────── Content ───────────── */}
+      <DialogContent dividers>
+        {loading && (
+          <Stack alignItems="center" py={6}>
+            <CircularProgress />
+            <Typography variant="body2" mt={2}>
+              Loading experiment…
+            </Typography>
+          </Stack>
         )}
 
-        <button style={closeBtnStyle} onClick={onClose}>
+        {error && (
+          <Typography color="error" align="center" py={4}>
+            {error}
+          </Typography>
+        )}
+
+        {data && !loading && (
+          <Stack spacing={2}>
+            {/* ───────── Overview ───────── */}
+            <Typography variant="subtitle1">Overview</Typography>
+
+            <KeyValue label="Experiment ID" value={data.id} />
+            {data.curve_id != null && (
+              <KeyValue label="Curve ID" value={data.curve_id} />
+            )}
+            <Typography variant="body2">
+              <strong>Young’s modulus:</strong>{" "}
+              {formatYoungsModulus(
+                data.youngs_modulus_mean,
+                data.youngs_modulus_std
+              )} Pa
+            </Typography>
+
+            <Divider />
+
+            {/* ───────── Filters ───────── */}
+            {hasFilters && (
+              <Accordion defaultExpanded>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography>Filters</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <KeyValue
+                    label="Regular filters"
+                    value={
+                      Object.keys(data.filters.regular || {}).join(", ") ||
+                      "None"
+                    }
+                  />
+                  <KeyValue
+                    label="Contact point filters"
+                    value={
+                      Object.keys(data.filters.cp_filters || {}).join(", ") ||
+                      "None"
+                    }
+                  />
+                </AccordionDetails>
+              </Accordion>
+            )}
+
+            {/* ───────── Force model ───────── */}
+            {hasFmodel && (
+              <Accordion>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography>Force model</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Stack direction="row" spacing={1} mb={2} flexWrap="wrap">
+                    {data.force_model_params?.poisson != null && (
+                      <Chip
+                        label={`Poisson: ${data.force_model_params.poisson}`}
+                      />
+                    )}
+                    {data.force_model_params?.maxInd != null && (
+                      <Chip
+                        label={`MaxInd: ${data.force_model_params.maxInd}`}
+                      />
+                    )}
+                    {data.force_model_params?.minInd != null && (
+                      <Chip
+                        label={`MinInd: ${data.force_model_params.minInd}`}
+                      />
+                    )}
+                  </Stack>
+
+                  <RenderValue
+                    value={data.force_model_params}
+                    skipKnownFields={knownForceFields}
+                  />
+                </AccordionDetails>
+              </Accordion>
+            )}
+
+            {/* ───────── Elasticity params ───────── */}
+            {hasEmodel && (
+              <Accordion>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography>Elasticity parameters</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Stack direction="row" spacing={1} mb={2} flexWrap="wrap">
+                    {data.elasticity_params?.window != null && (
+                      <Chip
+                        label={`Window: ${data.elasticity_params.window}`}
+                      />
+                    )}
+                    {data.elasticity_params?.order != null && (
+                      <Chip
+                        label={`Order: ${data.elasticity_params.order}`}
+                      />
+                    )}
+                  </Stack>
+
+                  <RenderValue
+                    value={data.elasticity_params}
+                    skipKnownFields={knownElasticityFields}
+                  />
+                </AccordionDetails>
+              </Accordion>
+            )}
+          </Stack>
+        )}
+      </DialogContent>
+
+      {/* ───────────── Footer ───────────── */}
+      <DialogActions>
+        <Button onClick={onClose} color="inherit">
           Close
-        </button>
-      </div>
-    </div>
+        </Button>
+        {onOpen && (
+          <Button variant="contained" onClick={() => onOpen(data)}>
+            Open in dashboard
+          </Button>
+        )}
+      </DialogActions>
+    </Dialog>
   );
 }
 
-// ────────────────────── Reusable Components ──────────────────────
-function Section({ title, children, color = "#1f2937" }) {
+/* ───────────────────── Helpers ───────────────────── */
+
+function KeyValue({ label, value }) {
   return (
-    <div style={sectionStyle}>
-      <h4 style={{ ...sectionTitleStyle, color }}>{title}</h4>
-      <div style={{ marginTop: 8 }}>{children}</div>
-    </div>
-  );
-}
-
-function RenderValue({ value, name, level = 0, skipKeys = [], skipKnownFields = [] }) {
-  if (value == null) {
-    return <ValueDisplay name={name} value="—" dim />;
-  }
-
-  if (Array.isArray(value)) {
-    if (value.length === 0) return <ValueDisplay name={name} value="[empty]" dim />;
-    return (
-      <div style={{ marginLeft: level * 20 }}>
-        {name && <FieldLabel>{name}</FieldLabel>}
-        <div style={{ marginTop: 4 }}>
-          {value.map((item, i) => (
-            <RenderValue key={i} value={item} name={`[${i}]`} level={level + 1} />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (typeof value === "object") {
-    const entries = Object.entries(value).filter(
-      ([k]) => !skipKeys.includes(k) && !skipKnownFields.includes(k)
-    );
-    if (entries.length === 0) return null;
-
-    return (
-      <div style={{ marginLeft: level * 20 }}>
-        {name && <FieldLabel>{name}</FieldLabel>}
-        <div style={{ margin: "6px 0" }}>
-          {entries.map(([key, val]) => (
-            <RenderValue key={key} name={niceName(key)} value={val} level={level + 1} />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return <ValueDisplay name={name} value={formatValue(value)} />;
-}
-
-function FieldLabel({ children }) {
-  return (
-    <div style={{ fontWeight: 600, fontSize: 13.5, color: "#1f2937", marginBottom: 4 }}>
-      {children}
-    </div>
-  );
-}
-
-function ValueDisplay({ name, value, dim = false }) {
-  return (
-    <div style={{ marginBottom: 8, display: "flex", gap: 12, alignItems: "baseline" }}>
-      {name && (
-        <div
-          style={{
-            fontWeight: 500,
-            fontSize: 13,
-            color: "#4b5563",
-            minWidth: 160,
-            flexShrink: 0,
-          }}
-        >
-          {name}:
-        </div>
-      )}
-      <div
-        style={{
-          fontSize: 13,
-          color: dim ? "#9ca3af" : "#111827",
-          wordBreak: "break-word",
-        }}
+    <Stack direction="row" spacing={2}>
+      <Typography
+        variant="body2"
+        color="text.secondary"
+        sx={{ minWidth: 160 }}
       >
-        {value}
-      </div>
-    </div>
+        {label}
+      </Typography>
+      <Typography variant="body2">
+        {value ?? "—"}
+      </Typography>
+    </Stack>
   );
 }
 
-// ────────────────────── Helpers ──────────────────────
+function RenderValue({ value, level = 0, skipKnownFields = [] }) {
+  if (value == null) return null;
+
+  if (typeof value !== "object") {
+    return (
+      <Typography variant="body2" sx={{ ml: level * 2 }}>
+        {String(value)}
+      </Typography>
+    );
+  }
+
+  return (
+    <Stack spacing={0.5} sx={{ ml: level * 2 }}>
+      {Object.entries(value)
+        .filter(([k]) => !skipKnownFields.includes(k))
+        .map(([key, val]) => (
+          <Stack key={key} direction="row" spacing={1}>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ minWidth: 140 }}
+            >
+              {niceName(key)}
+            </Typography>
+            <Typography variant="body2">
+              {formatValue(val)}
+            </Typography>
+          </Stack>
+        ))}
+    </Stack>
+  );
+}
+
 const knownForceFields = ["poisson", "maxInd", "minInd"];
 const knownElasticityFields = ["interpolate", "order", "window"];
 
 const niceName = (key) =>
   key
     .replace(/([A-Z])/g, " $1")
-    .replace(/^./, (str) => str.toUpperCase())
-    .replace("Ind", "Individual")
+    .replace(/^./, (s) => s.toUpperCase())
     .trim();
 
-const formatValue = (val) =>
-  val === true ? "Yes" : val === false ? "No" : val == null ? "—" : String(val);
+const formatValue = (v) =>
+  v === true ? "Yes" : v === false ? "No" : v ?? "—";
 
-// ────────────────────── Styles ──────────────────────
-const overlayStyle = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.55)",
-  display: "flex",
-  justifyContent: "center",
-  alignItems: "center",
-  zIndex: 1000,
-};
-
-const modalStyle = {
-  width: "90%",
-  maxWidth: 760,
-  maxHeight: "90vh",
-  overflowY: "auto",
-  background: "#ffffff",
-  borderRadius: 12,
-  padding: "24px",
-  boxShadow: "0 20px 30px -10px rgba(0,0,0,0.25)",
-};
-
-const contentStyle = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 16,
-};
-
-const sectionStyle = {
-  background: "#f8fafc",
-  borderRadius: 8,
-  padding: 16,
-  border: "1px solid #e2e8f0",
-};
-
-const sectionTitleStyle = {
-  margin: "0 0 12px 0",
-  fontSize: 15,
-  fontWeight: 600,
-};
-
-const subsectionTitleStyle = {
-  margin: "0 0 8px 0",
-  fontSize: 14,
-  color: "#374151",
-};
-
-const closeBtnStyle = {
-  marginTop: 24,
-  padding: "10px 24px",
-  background: "#f1f5f9",
-  border: "1px solid #cbd5e1",
-  borderRadius: 6,
-  cursor: "pointer",
-  fontWeight: 500,
-};
-
-const msgStyle = {
-  textAlign: "center",
-  padding: "40px 20px",
-  color: "#6b7280",
-  fontSize: 15,
+const formatDate = (value) => {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
 };
