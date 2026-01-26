@@ -2,24 +2,6 @@ import { useEffect, useState } from "react";
 import { getExperiment } from "../api/experiments";
 import { useAuthStore } from "../state/useAuthStore";
 
-import {
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  Typography,
-  Stack,
-  Chip,
-  Divider,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-  CircularProgress,
-  Button,
-} from "@mui/material";
-
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-
 /* ───────────────────────────────────────────── */
 
 export default function ExperimentPreviewModal({ id, onClose, onOpen }) {
@@ -27,11 +9,17 @@ export default function ExperimentPreviewModal({ id, onClose, onOpen }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [expandedSections, setExpandedSections] = useState({
+    filters: true,
+    forceModel: false,
+    elasticity: false,
+  });
+
   function formatYoungsModulus(mean, std, decimals = 1) {
     if (mean == null || std == null) return "—";
     return `${mean.toFixed(decimals)} ± ${std.toFixed(decimals)}`;
   }
-  
+
   useEffect(() => {
     if (!id || !token) return;
 
@@ -59,87 +47,81 @@ export default function ExperimentPreviewModal({ id, onClose, onOpen }) {
     };
   }, [id, token]);
 
+  const toggleSection = (section) => {
+    setExpandedSections((prev) => ({
+      ...prev,
+      [section]: !prev[section],
+    }));
+  };
+
   if (!id) return null;
 
   const hasFilters = !!data?.filters;
-  const hasFmodel =
-    Object.keys(data?.filters?.f_models || {}).length > 0;
-  const hasEmodel =
-    Object.keys(data?.filters?.e_models || {}).length > 0;
+  const hasFmodel = Object.keys(data?.filters?.f_models || {}).length > 0;
+  const hasEmodel = Object.keys(data?.filters?.e_models || {}).length > 0;
 
   return (
-    <Dialog open={!!id} onClose={onClose} maxWidth="md" fullWidth>
-      {/* ───────────── Header ───────────── */}
-      <DialogTitle>
-        <Stack spacing={0.5}>
-          <Typography variant="h6">
-            {data?.name || `Experiment #${id}`}
-          </Typography>
+    <div style={overlayStyle} onClick={onClose}>
+      <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+        {/* ───────────── Header ───────────── */}
+        <div style={headerStyle}>
+          <div>
+            <h2 style={modalTitleStyle}>
+              {data?.name || `Experiment #${id}`}
+            </h2>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
+              {data?.created_at && (
+                <span style={captionStyle}>{formatDate(data.created_at)}</span>
+              )}
+              {data?.status && (
+                <StatusBadge status={data.status} />
+              )}
+            </div>
+          </div>
+        </div>
 
-          <Stack direction="row" spacing={1} alignItems="center">
-            {data?.created_at && (
-              <Typography variant="caption" color="text.secondary">
-                {formatDate(data.created_at)}
-              </Typography>
-            )}
-            {data?.status && (
-              <Chip
-                size="small"
-                label={data.status}
-                color={
-                  data.status === "Completed"
-                    ? "success"
-                    : "warning"
-                }
-              />
-            )}
-          </Stack>
-        </Stack>
-      </DialogTitle>
+        {/* ───────────── Content ───────────── */}
+        <div style={contentStyle}>
+          {loading && (
+            <div style={centerStyle}>
+              <div style={spinnerStyle}></div>
+              <div style={{ ...captionStyle, marginTop: 16 }}>
+                Loading experiment…
+              </div>
+            </div>
+          )}
 
-      {/* ───────────── Content ───────────── */}
-      <DialogContent dividers>
-        {loading && (
-          <Stack alignItems="center" py={6}>
-            <CircularProgress />
-            <Typography variant="body2" mt={2}>
-              Loading experiment…
-            </Typography>
-          </Stack>
-        )}
+          {error && (
+            <div style={errorStyle}>{error}</div>
+          )}
 
-        {error && (
-          <Typography color="error" align="center" py={4}>
-            {error}
-          </Typography>
-        )}
+          {data && !loading && (
+            <div style={stackStyle}>
+              {/* ───────── Overview ───────── */}
+              <div style={sectionTitleStyle}>Overview</div>
 
-        {data && !loading && (
-          <Stack spacing={2}>
-            {/* ───────── Overview ───────── */}
-            <Typography variant="subtitle1">Overview</Typography>
+              <KeyValue label="Experiment ID" value={data.id} />
+              {data.curve_id != null && (
+                <KeyValue label="Chosen Curve ID" value={data.curve_id} />
+              )}
+              <div style={bodyTextStyle}>
+                <strong>Young's modulus:</strong>{" "}
+                {formatYoungsModulus(
+                  data.youngs_modulus_mean,
+                  data.youngs_modulus_std
+                )}{" "}
+                Pa
+              </div>
 
-            <KeyValue label="Experiment ID" value={data.id} />
-            {data.curve_id != null && (
-              <KeyValue label="Curve ID" value={data.curve_id} />
-            )}
-            <Typography variant="body2">
-              <strong>Young’s modulus:</strong>{" "}
-              {formatYoungsModulus(
-                data.youngs_modulus_mean,
-                data.youngs_modulus_std
-              )} Pa
-            </Typography>
+              <div style={dividerStyle}></div>
 
-            <Divider />
-
-            {/* ───────── Filters ───────── */}
-            {hasFilters && (
-              <Accordion defaultExpanded>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography>Filters</Typography>
-                </AccordionSummary>
-                <AccordionDetails>
+              {/* ───────── Filters ───────── */}
+              {hasFilters && (
+                <Accordion
+                  title="Filters"
+                  expanded={expandedSections.filters}
+                  onToggle={() => toggleSection("filters")}
+                >
                   <KeyValue
                     label="Regular filters"
                     value={
@@ -154,105 +136,155 @@ export default function ExperimentPreviewModal({ id, onClose, onOpen }) {
                       "None"
                     }
                   />
-                </AccordionDetails>
-              </Accordion>
-            )}
+                </Accordion>
+              )}
 
-            {/* ───────── Force model ───────── */}
-            {hasFmodel && (
-              <Accordion>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography>Force model</Typography>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <Stack direction="row" spacing={1} mb={2} flexWrap="wrap">
+              {/* ───────── Force model ───────── */}
+              {hasFmodel && (
+                <Accordion
+                  title="Force model"
+                  expanded={expandedSections.forceModel}
+                  onToggle={() => toggleSection("forceModel")}
+                >
+                  <KeyValue
+                    label="Model"
+                    value={
+                      Object.keys(data.filters?.f_models || {})
+                        .map(capitalizeModelName)
+                        .join(", ") || "None"
+                    }
+                  />
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, marginBottom: 16 }}>
                     {data.force_model_params?.poisson != null && (
-                      <Chip
-                        label={`Poisson: ${data.force_model_params.poisson}`}
-                      />
+                      <Chip label={`Poisson: ${data.force_model_params.poisson}`} />
                     )}
                     {data.force_model_params?.maxInd != null && (
-                      <Chip
-                        label={`MaxInd: ${data.force_model_params.maxInd}`}
-                      />
+                      <Chip label={`MaxInd: ${data.force_model_params.maxInd}`} />
                     )}
                     {data.force_model_params?.minInd != null && (
-                      <Chip
-                        label={`MinInd: ${data.force_model_params.minInd}`}
-                      />
+                      <Chip label={`MinInd: ${data.force_model_params.minInd}`} />
                     )}
-                  </Stack>
+                  </div>
 
                   <RenderValue
                     value={data.force_model_params}
                     skipKnownFields={knownForceFields}
                   />
-                </AccordionDetails>
-              </Accordion>
-            )}
+                </Accordion>
+              )}
 
-            {/* ───────── Elasticity params ───────── */}
-            {hasEmodel && (
-              <Accordion>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography>Elasticity parameters</Typography>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <Stack direction="row" spacing={1} mb={2} flexWrap="wrap">
+              {/* ───────── Elasticity params ───────── */}
+              {hasEmodel && (
+                <Accordion
+                  title="Elasticity model"
+                  expanded={expandedSections.elasticity}
+                  onToggle={() => toggleSection("elasticity")}
+                >
+                  <KeyValue
+                    label="Model"
+                    value={
+                      Object.keys(data.filters?.e_models || {})
+                        .map(capitalizeModelName)
+                        .join(", ") || "None"
+                    }
+                  />
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8, marginBottom: 16 }}>
                     {data.elasticity_params?.window != null && (
-                      <Chip
-                        label={`Window: ${data.elasticity_params.window}`}
-                      />
+                      <Chip label={`Window: ${data.elasticity_params.window}`} />
                     )}
                     {data.elasticity_params?.order != null && (
-                      <Chip
-                        label={`Order: ${data.elasticity_params.order}`}
-                      />
+                      <Chip label={`Order: ${data.elasticity_params.order}`} />
                     )}
-                  </Stack>
+                  </div>
 
                   <RenderValue
                     value={data.elasticity_params}
                     skipKnownFields={knownElasticityFields}
                   />
-                </AccordionDetails>
-              </Accordion>
-            )}
-          </Stack>
-        )}
-      </DialogContent>
+                </Accordion>
+              )}
+            </div>
+          )}
+        </div>
 
-      {/* ───────────── Footer ───────────── */}
-      <DialogActions>
-        <Button onClick={onClose} color="inherit">
-          Close
-        </Button>
-        {onOpen && (
-          <Button variant="contained" onClick={() => onOpen(data)}>
-            Open in dashboard
-          </Button>
-        )}
-      </DialogActions>
-    </Dialog>
+        {/* ───────────── Footer ───────────── */}
+        <div style={footerStyle}>
+          <button style={secondaryButtonStyle} onClick={onClose}>
+            Close
+          </button>
+          {onOpen && (
+            <button
+              style={primaryButtonStyle}
+              onClick={() => onOpen(data)}
+            >
+              Open in dashboard
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
-/* ───────────────────── Helpers ───────────────────── */
+/* ───────────────────── Components ───────────────────── */
 
 function KeyValue({ label, value }) {
   return (
-    <Stack direction="row" spacing={2}>
-      <Typography
-        variant="body2"
-        color="text.secondary"
-        sx={{ minWidth: 160 }}
-      >
+    <div style={{ display: "flex", gap: 16, marginBottom: 8 }}>
+      <div style={{ ...captionStyle, minWidth: 160 }}>
         {label}
-      </Typography>
-      <Typography variant="body2">
+      </div>
+      <div style={bodyTextStyle}>
         {value ?? "—"}
-      </Typography>
-    </Stack>
+      </div>
+    </div>
+  );
+}
+
+function Accordion({ title, expanded, onToggle, children }) {
+  return (
+    <div style={accordionStyle}>
+      <div style={accordionHeaderStyle} onClick={onToggle}>
+        <span style={accordionTitleStyle}>{title}</span>
+        <span style={{
+          ...accordionIconStyle,
+          transform: expanded ? "rotate(180deg)" : "rotate(0deg)",
+        }}>
+          ▼
+        </span>
+      </div>
+      {expanded && (
+        <div style={accordionContentStyle}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Chip({ label }) {
+  return (
+    <span style={chipStyle}>
+      {label}
+    </span>
+  );
+}
+
+function StatusBadge({ status }) {
+  const s = statusConfig[status] || statusConfig.Completed;
+  return (
+    <span
+      style={{
+        padding: "4px 10px",
+        borderRadius: 999,
+        fontSize: 12,
+        fontWeight: 600,
+        background: s.bg,
+        color: s.fg,
+      }}
+    >
+      {s.label}
+    </span>
   );
 }
 
@@ -261,36 +293,47 @@ function RenderValue({ value, level = 0, skipKnownFields = [] }) {
 
   if (typeof value !== "object") {
     return (
-      <Typography variant="body2" sx={{ ml: level * 2 }}>
+      <div style={{ ...bodyTextStyle, marginLeft: level * 16 }}>
         {String(value)}
-      </Typography>
+      </div>
     );
   }
 
   return (
-    <Stack spacing={0.5} sx={{ ml: level * 2 }}>
+    <div style={{ marginLeft: level * 16 }}>
       {Object.entries(value)
         .filter(([k]) => !skipKnownFields.includes(k))
         .map(([key, val]) => (
-          <Stack key={key} direction="row" spacing={1}>
-            <Typography
-              variant="body2"
-              color="text.secondary"
-              sx={{ minWidth: 140 }}
-            >
+          <div key={key} style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+            <div style={{ ...captionStyle, minWidth: 140 }}>
               {niceName(key)}
-            </Typography>
-            <Typography variant="body2">
+            </div>
+            <div style={bodyTextStyle}>
               {formatValue(val)}
-            </Typography>
-          </Stack>
+            </div>
+          </div>
         ))}
-    </Stack>
+    </div>
   );
 }
 
+/* ───────────────────── Helpers ───────────────────── */
+
 const knownForceFields = ["poisson", "maxInd", "minInd"];
 const knownElasticityFields = ["interpolate", "order", "window"];
+
+const statusConfig = {
+  Completed: { bg: "#ecfdf3", fg: "#065f46", label: "Completed ✓" },
+  Running: { bg: "#eff6ff", fg: "#1d4ed8", label: "Running…" },
+  Failed: { bg: "#fee2e2", fg: "#991b1b", label: "Failed" },
+};
+
+const capitalizeModelName = (name) => {
+  if (!name) return "";
+  return name
+    .charAt(0)
+    .toUpperCase() + name.slice(1).replace(/([A-Z])/g, " $1");
+};
 
 const niceName = (key) =>
   key
@@ -308,3 +351,193 @@ const formatDate = (value) => {
     timeStyle: "short",
   }).format(new Date(value));
 };
+
+/* ───────────────────── Styles ───────────────────── */
+
+const overlayStyle = {
+  position: "fixed",
+  top: 0,
+  left: 0,
+  right: 0,
+  bottom: 0,
+  background: "rgba(0, 0, 0, 0.5)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: 1000,
+  padding: 24,
+};
+
+const modalStyle = {
+  width: "100%",
+  maxWidth: 700,
+  maxHeight: "90vh",
+  background: "linear-gradient(180deg, #ffffff 0%, #fafbff 100%)",
+  borderRadius: 14,
+  border: "1px solid #e9ecf5",
+  boxShadow: "0 18px 40px rgba(20,20,43,0.12)",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+};
+
+const headerStyle = {
+  padding: 24,
+  borderBottom: "1px solid #eef1ff",
+};
+
+const modalTitleStyle = {
+  margin: 0,
+  fontSize: 20,
+  fontWeight: 700,
+  color: "#1d1e2c",
+};
+
+const contentStyle = {
+  flex: 1,
+  overflow: "auto",
+  padding: 24,
+};
+
+const footerStyle = {
+  padding: 24,
+  borderTop: "1px solid #eef1ff",
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 8,
+};
+
+const stackStyle = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 16,
+};
+
+const sectionTitleStyle = {
+  fontSize: 16,
+  fontWeight: 600,
+  color: "#1d1e2c",
+  marginBottom: 8,
+};
+
+const bodyTextStyle = {
+  fontSize: 14,
+  color: "#1d1e2c",
+  lineHeight: 1.5,
+};
+
+const captionStyle = {
+  fontSize: 13,
+  color: "#6b7280",
+};
+
+const dividerStyle = {
+  height: 1,
+  background: "#eef1ff",
+  margin: "8px 0",
+};
+
+const centerStyle = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: "48px 0",
+};
+
+const errorStyle = {
+  color: "#b91c1c",
+  textAlign: "center",
+  padding: "32px 0",
+  fontSize: 14,
+};
+
+const spinnerStyle = {
+  width: 40,
+  height: 40,
+  border: "4px solid #eef1ff",
+  borderTop: "4px solid #6772ff",
+  borderRadius: "50%",
+  animation: "spin 1s linear infinite",
+};
+
+const accordionStyle = {
+  border: "1px solid #e9ecf5",
+  borderRadius: 8,
+  overflow: "hidden",
+  marginBottom: 8,
+};
+
+const accordionHeaderStyle = {
+  padding: "12px 16px",
+  background: "#fafbff",
+  cursor: "pointer",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  transition: "background 0.15s ease",
+  userSelect: "none",
+};
+
+const accordionTitleStyle = {
+  fontSize: 14,
+  fontWeight: 600,
+  color: "#1d1e2c",
+};
+
+const accordionIconStyle = {
+  fontSize: 10,
+  color: "#6b7280",
+  transition: "transform 0.2s ease",
+};
+
+const accordionContentStyle = {
+  padding: 16,
+  background: "#fff",
+};
+
+const chipStyle = {
+  padding: "4px 10px",
+  borderRadius: 999,
+  fontSize: 12,
+  fontWeight: 600,
+  background: "#eff6ff",
+  color: "#1d4ed8",
+  display: "inline-block",
+};
+
+const primaryButtonStyle = {
+  padding: "8px 16px",
+  borderRadius: 8,
+  border: "none",
+  background: "linear-gradient(180deg, #6772ff 0%, #5468ff 100%)",
+  color: "#fff",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+  transition: "opacity 0.15s ease",
+};
+
+const secondaryButtonStyle = {
+  padding: "8px 16px",
+  borderRadius: 8,
+  border: "1px solid #e6e9f7",
+  background: "#fff",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: "pointer",
+  color: "#1d1e2c",
+  transition: "background 0.15s ease",
+};
+
+// Add CSS animation for spinner
+if (typeof document !== "undefined") {
+  const style = document.createElement("style");
+  style.textContent = `
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+  `;
+  document.head.appendChild(style);
+}

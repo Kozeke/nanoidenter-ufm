@@ -392,6 +392,7 @@ const FiltersComponent = ({
             onChange={canUseModels ? handleForceChange : () => {}}
             disabled={!canUseModels}
             formatLabel={safeCapitalize}
+            helperText={!canUseModels ? "Please select a Curve ID first" : null}
           />
         )}
 
@@ -403,6 +404,7 @@ const FiltersComponent = ({
             onChange={canUseModels ? handleElasticityChange : () => {}}
             disabled={!canUseModels}
             formatLabel={safeCapitalize}
+            helperText={!canUseModels ? "Please select a Curve ID first" : null}
           />
         )}
 

@@ -5,12 +5,14 @@ export const useAuthStore = create((set) => ({
   user: null,
   isAuthenticated: !!localStorage.getItem("token"),
   profileCompleted: false,
+  isInitializing: !!localStorage.getItem("token"), // Track if we're still loading user data
 
   login: (token) => {
     localStorage.setItem("token", token);
     set({
       token,
       isAuthenticated: true,
+      isInitializing: true, // Start initializing after login
     });
   },
 
@@ -21,6 +23,7 @@ export const useAuthStore = create((set) => ({
       isAuthenticated: true,
       user,
       profileCompleted: !!user.profile_completed,
+      isInitializing: false, // Finished initializing
     })
   },
     
@@ -31,6 +34,7 @@ export const useAuthStore = create((set) => ({
       user: null,
       isAuthenticated: false,
       profileCompleted: false,
+      isInitializing: false,
     });
   },
 }));

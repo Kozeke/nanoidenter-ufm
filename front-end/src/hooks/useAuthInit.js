@@ -8,10 +8,18 @@ export function useAuthInit() {
   const logout = useAuthStore((s) => s.logout);
 
   useEffect(() => {
-    if (!token) return;
+    if (!token) {
+      // If no token, make sure we're not initializing
+      useAuthStore.setState({ isInitializing: false });
+      return;
+    }
 
     getMe(token)
       .then(setUser)
-      .catch(logout);
-  }, [token]);
+      .catch((err) => {
+        // On error, stop initializing and logout
+        useAuthStore.setState({ isInitializing: false });
+        logout();
+      });
+  }, [token, setUser, logout]);
 }

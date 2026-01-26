@@ -8,8 +8,9 @@ back/file_types/__pycache__/__init__.cpython-310.pyc
 back/hdf5_processing.log
 back/__pycache__/db.cpython-310.pyc
 back/__pycache__/main.cpython-310.pyc
-back/data/experiment.db
-back/data/experiment.db.wal
+back/data/
+*.db
+*.db.wal
 back/exporters/__pycache__/__init__.cpython-310.pyc
 back/exporters/__pycache__/base.cpython-310.pyc
 back/exporters/__pycache__/csv_exporter.cpython-310.pyc

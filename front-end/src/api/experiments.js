@@ -31,3 +31,18 @@ export async function saveExperiment(token, payload) {
   if (!res.ok) throw new Error("Failed to save experiment");
   return res.json();
 }
+
+export async function deleteExperiment(token, id) {
+  const res = await fetchWithAuth(`${API}/experiments/${id}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ detail: "Failed to delete experiment" }));
+    throw new Error(error.detail || "Failed to delete experiment");
+  }
+  return res.json();
+}

@@ -2,6 +2,12 @@ import { useState } from "react";
 import { register } from "../api/auth";
 import { useNavigate, Link } from "react-router-dom";
 
+// Email validation function
+const isValidEmail = (email) => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+};
+
 export default function Register() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -15,6 +21,23 @@ export default function Register() {
     if (loading) return;
 
     setError("");
+
+    // Validate email format
+    if (!email.trim()) {
+      setError("Email is required");
+      return;
+    }
+
+    if (!isValidEmail(email)) {
+      setError("Please enter a valid email address");
+      return;
+    }
+
+    if (!password) {
+      setError("Password is required");
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -35,11 +58,13 @@ export default function Register() {
         {error && <div style={errorStyle}>{error}</div>}
 
         <input
+          type="email"
           style={inputStyle}
           placeholder="Email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           disabled={loading}
+          required
         />
 
         <input
@@ -65,7 +90,7 @@ export default function Register() {
         <p style={footerTextStyle}>
           Already have an account?{" "}
           <Link to="/login" style={linkStyle}>
-            Login
+            Sign in
           </Link>
         </p>
       </form>
