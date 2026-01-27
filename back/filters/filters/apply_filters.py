@@ -38,20 +38,23 @@ def apply(query: str, filters: Dict, curve_ids: List[str]) -> str:
                 filter_chain = f"{function_name}({z_col}, {filter_chain}{param_string})"
 
     # Extract numeric curve IDs from strings like "curve0" -> 0
-    numeric_curve_ids = curve_ids
-
-    # numeric_curve_ids = []
-    # for cid in curve_ids:
-    #     if isinstance(cid, str) and cid.startswith('curve'):
-    #         try:
-    #             numeric_id = int(cid[5:])  # Remove "curve" prefix
-    #             numeric_curve_ids.append(str(numeric_id))
-    #         except ValueError:
-    #             continue
-    #     else:
-    #         numeric_curve_ids.append(cid)
+    # Convert to integers for proper SQL type handling (curve_id is INTEGER in database)
+    numeric_curve_ids = []
+    for cid in curve_ids:
+        if isinstance(cid, str) and cid.startswith('curve'):
+            try:
+                numeric_id = int(cid[5:])  # Remove "curve" prefix
+                numeric_curve_ids.append(numeric_id)
+            except ValueError:
+                continue
+        else:
+            # Convert string to integer if it's a numeric string
+            try:
+                numeric_curve_ids.append(int(cid))
+            except (ValueError, TypeError):
+                continue
     
-    # Construct the final SQL query
+    # Construct the final SQL query with integer curve_ids
     query = f"""
         SELECT curve_id, 
                {z_col}, 

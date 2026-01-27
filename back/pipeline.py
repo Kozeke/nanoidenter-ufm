@@ -232,17 +232,21 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     
     # Base query for specific curve IDs
     # Extract numeric curve IDs from strings like "curve0" -> 0
-    # numeric_curve_ids = curve_ids
+    # Convert to integers for proper SQL type handling (curve_id is INTEGER in database)
     numeric_curve_ids = []
     for cid in curve_ids:
         if isinstance(cid, str) and cid.startswith('curve'):
             try:
                 numeric_id = int(cid[5:])  # Remove "curve" prefix
-                numeric_curve_ids.append(str(numeric_id))
+                numeric_curve_ids.append(numeric_id)  # Store as integer, not string
             except ValueError:
                 continue
         else:
-            numeric_curve_ids.append(cid)
+            # Convert string to integer if it's a numeric string
+            try:
+                numeric_curve_ids.append(int(cid))
+            except (ValueError, TypeError):
+                continue
     
     # Guarantee cache tables exist before applying hash-based lookups
     ensure_cache_tables(conn)
@@ -251,7 +255,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     # set_zero_force stays whatever fetch_curves_batch(...) received
 
     # Auto-enable single ONLY for interactive mode
-    if not single and not force_model_population:
+    if not single and not force_model_population and not elastic_model_population:
         if len(numeric_curve_ids) == 1 and (filters.get("f_models") or filters.get("e_models")):
             single = True
 
@@ -308,7 +312,8 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     
     if cp_filters:
         # Build cache-aware CP query
-        ids_csv = ",".join(numeric_curve_ids)
+        # Convert integer curve_ids to strings for SQL IN clause
+        ids_csv = ",".join(map(str, numeric_curve_ids))
         
         # 1) cached rows for these curves, method, and params_hash
         cp_cached_cte = f"""
@@ -545,10 +550,12 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                         })
 
                     # Parameters always collected
+                    # 🔧 FIX: Use curve_id directly instead of loop index i
+                    # This ensures unique identification across batches
                     curves_fparam.append({
                         "curve_id": f"{curve_id}_hertz",
                         "params": fparam,
-                        "curve_index": i,
+                        "curve_index": int(curve_id),  # Use actual curve_id, not batch-local index
                         "fparam": fparam
                     })
             
@@ -605,9 +612,11 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                             "y": y
                         })
 
-                    # 👉 Append elasticity_param with curve index
+                    # 🔧 FIX: Use curve_id directly instead of loop index i
+                    # This ensures unique identification across batches
                     curves_elasticity_param.append({
-                        "curve_index": i,
+                        "curve_id": f"curve{curve_id}",  # Add curve_id for traceability
+                        "curve_index": int(curve_id),    # Use actual curve_id, not batch-local index
                         "elasticity_param": elasticity_param
                     })
         

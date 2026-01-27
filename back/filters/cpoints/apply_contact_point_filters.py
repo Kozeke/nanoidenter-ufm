@@ -62,18 +62,21 @@ def apply_cp_filters(query: str, filters: Dict, curve_ids: List[str], metadata: 
             break
 
     # Extract numeric curve IDs from strings like "curve0" -> 0
-    numeric_curve_ids = curve_ids
-
-    # numeric_curve_ids = []
-    # for cid in curve_ids:
-    #     if isinstance(cid, str) and cid.startswith('curve') :
-    #         try:
-    #             numeric_id = int(cid[5:])  # Remove "curve" prefix
-    #             numeric_curve_ids.append(str(numeric_id))
-    #         except ValueError:
-    #             continue
-    #     else:
-    #         numeric_curve_ids.append(cid)
+    # Convert to integers for proper SQL type handling (curve_id is INTEGER in database)
+    numeric_curve_ids = []
+    for cid in curve_ids:
+        if isinstance(cid, str) and cid.startswith('curve'):
+            try:
+                numeric_id = int(cid[5:])  # Remove "curve" prefix
+                numeric_curve_ids.append(numeric_id)
+            except ValueError:
+                continue
+        else:
+            # Convert string to integer if it's a numeric string
+            try:
+                numeric_curve_ids.append(int(cid))
+            except (ValueError, TypeError):
+                continue
     
     # If cp_col stayed "NULL" (no valid filter found), this query will just return no rows
     query = f"""
