@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 import json
 import duckdb
 import os
+import platform  
 import logging
 # from db import transform_hdf5_to_db
 from filters.register_all import register_filters
@@ -15,7 +16,10 @@ from db.init_db import ensure_cache_tables
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any
 from utils.stats import format_stat, is_valid_param_vector
+from utils.cache import warmup_cp_cache
 
+# Detect OS for parallel processing strategy
+IS_WINDOWS = platform.system() == 'Windows'
 
 app = FastAPI()
 
@@ -67,10 +71,12 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
         For dict compute_spec: Tuple (True, out_dict) where out_dict contains full result structure
     """
     # Each worker gets its own read-only connection (separate process, won't conflict with main process)
-    conn = duckdb.connect(DB_PATH, read_only=True)
+    # Use DB_PATH from environment or default
+    db_path = os.environ.get("DB_PATH", "data/experiment.db")
+    conn = duckdb.connect(db_path, read_only=True)
     try:
         # Let DuckDB parallelize *inside* each query too (tune as you like)
-        conn.execute(f"PRAGMA threads = {os.cpu_count() or 2};")
+        conn.execute(f"PRAGMA threads = {max(1, (os.cpu_count() or 2) // 4)};")  # Limit threads per worker
 
         # Every process must (re)register UDFs
         register_filters(conn)
@@ -271,7 +277,7 @@ async def websocket_data_stream(websocket: WebSocket):
                 compute_scope = request_data.get("compute_scope")
 
                 # If client asked for metadata, send it,
-                # but DO NOT skip curve processing – we still fall through.
+                # but DO NOT skip curve processing Ã¢â‚¬â€œ we still fall through.
                 if action == "get_metadata":
                     await get_metadata(conn, websocket)
 
@@ -315,6 +321,20 @@ async def websocket_data_stream(websocket: WebSocket):
                         "SELECT curve_id FROM force_vs_z"
                     ).fetchall()
                     curve_ids = [str(row[0]) for row in curve_ids_result]
+                    # Added before using cp_filters
+                    cp_filters = filters.get("cp_filters", {})
+                    # Optimization: Pre-warm CP cache for ALL curves before parallel processing
+                    if cp_filters:
+                        print(f"🔥 Pre-warming CP cache for {len(curve_ids)} curves before parallel processing...")
+                        metadata_global = get_metadata_for_curves(conn, curve_ids)
+                        warmup_cp_cache(
+                            conn, 
+                            [int(cid) for cid in curve_ids], 
+                            cp_filters, 
+                            metadata_global,
+                            batch_size=100  # Larger batches for initial warmup
+                        )
+                        print(f"✅ CP cache ready for parallel processing")
 
                 else:
                     if curve_id:
@@ -328,66 +348,133 @@ async def websocket_data_stream(websocket: WebSocket):
                 # --- ADD THIS ---
                 global_force_params = []
                 global_elastic_params = []
+                # Added before using has_fmodel and has_emodel
+                has_fmodel = bool(filters.get("f_models", {}))
+                has_emodel = bool(filters.get("e_models", {}))
+                # Optimization: Use parallel processing for model_stats
+                if compute_scope == "model_stats" and len(curve_ids) > BATCH_SIZE and not IS_WINDOWS:
+                    print(f"🚀 Using parallel processing for {len(curve_ids)} curves...")
+                    
+                    # Create larger batches for parallel processing (100 curves per worker)
+                    parallel_batch_size = 100
+                    parallel_batches = [
+                        curve_ids[i:i+parallel_batch_size] 
+                        for i in range(0, len(curve_ids), parallel_batch_size)
+                    ]
+                    
+                    # Use ProcessPoolExecutor for true parallelism
+                    max_workers = min(os.cpu_count() or 2, len(parallel_batches))
+                    
+                    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                        # Submit all batches
+                        futures = []
+                        for batch in parallel_batches:
+                            # Create compute spec for worker
+                            compute_spec = {
+                                "compute": "fparams" if has_fmodel else "elasticity",
+                                "emodel_params": elastic_model_params,
+                                "elasticity_params": elasticity_params if has_emodel else None,
+                            }
+                            
+                            future = executor.submit(
+                                _parallel_worker, 
+                                batch, 
+                                filters, 
+                                compute_spec
+                            )
+                            futures.append((future, batch))
+                        
+                        # Collect results as they complete
+                        completed = 0
+                        for future, batch in futures:
+                            try:
+                                success, result = future.result()
+                                
+                                if success:
+                                    # Extract force params
+                                    if has_fmodel and "fparams" in result:
+                                        for r in result["fparams"]:
+                                            if is_valid_param_vector(r.get("fparam")):
+                                                global_force_params.append(r["fparam"])
+                                    
+                                    # Extract elastic params
+                                    if has_emodel and "elasticity_params" in result:
+                                        for r in result["elasticity_params"]:
+                                            if is_valid_param_vector(r.get("elasticity_param")):
+                                                global_elastic_params.append(r["elasticity_param"])
+                                
+                                completed += len(batch)
+                                progress = (completed / len(curve_ids)) * 100
+                                print(f"  📊 Progress: {completed}/{len(curve_ids)} curves ({progress:.1f}%)")
+                            
+                            except Exception as e:
+                                print(f"  ❌ Error processing batch: {e}")
+                                continue
+                    
+                    print(f"✅ Parallel processing complete: {len(global_force_params)} force params, {len(global_elastic_params)} elastic params")
+                
+                else:
+                    # Original sequential processing for small datasets or non-model_stats
+                    # Process in batches
+                    for i in range(0, len(curve_ids), BATCH_SIZE):
+                        batch_ids = curve_ids[i:i + BATCH_SIZE]
+                        # print(f"Processing batch: {batch_ids}")
+                        await process_and_stream_batch(
+                            conn,
+                            batch_ids,
+                            filters,
+                            websocket,
+                            curve_id,
+                            filters_changed,
+                            set_zero_force,
+                            elasticity_params,
+                            elastic_model_params,
+                            force_model_params,
+                            compute_scope=compute_scope,
+                            global_force_params=global_force_params,
+                            global_elastic_params=global_elastic_params,
+                        )
+                        await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
+                
+                    # print("send meta and now curves")
+                    if compute_scope == "model_stats":
+                        stats = {}
 
-                # Process in batches
-                for i in range(0, len(curve_ids), BATCH_SIZE):
-                    batch_ids = curve_ids[i:i + BATCH_SIZE]
-                    # print(f"Processing batch: {batch_ids}")
-                    await process_and_stream_batch(
-                        conn,
-                        batch_ids,
-                        filters,
-                        websocket,
-                        curve_id,
-                        filters_changed,
-                        set_zero_force,
-                        elasticity_params,
-                        elastic_model_params,
-                        force_model_params,
-                        compute_scope=compute_scope,
-                        global_force_params=global_force_params,
-                        global_elastic_params=global_elastic_params,
-                    )
-                    await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
-                # print("send meta and now curves")
-                if compute_scope == "model_stats":
-                    stats = {}
+                        if len(global_force_params) >= 2:
+                            n_params = len(global_force_params[0])
+                            params_by_index = [
+                                [p[i] for p in global_force_params]
+                                for i in range(n_params)
+                            ]
+                            stats["force_params"] = {
+                                f"p{i}": format_stat(values)
+                                for i, values in enumerate(params_by_index)
+                                if len(values) >= 2
+                            }
 
-                    if len(global_force_params) >= 2:
-                        n_params = len(global_force_params[0])
-                        params_by_index = [
-                            [p[i] for p in global_force_params]
-                            for i in range(n_params)
-                        ]
-                        stats["force_params"] = {
-                            f"p{i}": format_stat(values)
-                            for i, values in enumerate(params_by_index)
-                            if len(values) >= 2
-                        }
+                        if len(global_elastic_params) >= 2:
+                            n_params = len(global_elastic_params[0])
+                            params_by_index = [
+                                [p[i] for p in global_elastic_params]
+                                for i in range(n_params)
+                            ]
+                            stats["elasticity_params"] = {
+                                f"p{i}": format_stat(values)
+                                for i, values in enumerate(params_by_index)
+                                if len(values) >= 2
+                            }
 
-                    if len(global_elastic_params) >= 2:
-                        n_params = len(global_elastic_params[0])
-                        params_by_index = [
-                            [p[i] for p in global_elastic_params]
-                            for i in range(n_params)
-                        ]
-                        stats["elasticity_params"] = {
-                            f"p{i}": format_stat(values)
-                            for i, values in enumerate(params_by_index)
-                            if len(values) >= 2
-                        }
+                        await websocket.send_text(json.dumps({
+                            "status": "model_stats",
+                            "data": {
+                                "stats": stats,
+                                "num_curves": len(curve_ids)
+                            }
+                        }))
 
-                    await websocket.send_text(json.dumps({
-                        "status": "model_stats",
-                        "data": {
-                            "stats": stats,
-                            "num_curves": len(curve_ids)
-                        }
-                    }))
-
-                # Signal completion of this request
-                await websocket.send_text(json.dumps({"status": "complete"}))
-                # print("Request completed")
+                    # Signal completion of this request
+                    await websocket.send_text(json.dumps({"status": "complete"}))
+                    # print("Request completed")
 
             except WebSocketDisconnect:
                 # print("Client disconnected.")
@@ -464,9 +551,9 @@ async def process_and_stream_batch(
     and stream results via WebSocket.
 
     compute_scope:
-        - "full"         → compute all graphs (current behaviour)
-        - "fmodel_only"  → update only force-model overlay (indentation graph)
-        - "emodel_only"  → update only elasticity-model overlay (elspectra graph)
+        - "full"         Ã¢â€ â€™ compute all graphs (current behaviour)
+        - "fmodel_only"  Ã¢â€ â€™ update only force-model overlay (indentation graph)
+        - "emodel_only"  Ã¢â€ â€™ update only elasticity-model overlay (elspectra graph)
     """
     try:
         loop = asyncio.get_running_loop()
@@ -487,7 +574,7 @@ async def process_and_stream_batch(
             "f_models": dict(filters.get("f_models", {})),
             "e_models": dict(filters.get("e_models", {})),
         }
-
+        cp_filters = filters_for_call.get("cp_filters", {})     # Added before using cp_filters
         # --- Model stats scope ---
         scope_model_stats = compute_scope == "model_stats"
         print("scope_model_stats", scope_model_stats)
@@ -498,12 +585,16 @@ async def process_and_stream_batch(
         run_elastic_population = scope_model_stats and has_emodel
 
         # Decide which parts of the pipeline we actually need
-        if scope_f_only:
-            # Only force-model (uses indentation) → no elasticity models, no elspectra
+        # Optimization: skip expensive elspectra when only fmodel stats needed
+        if scope_model_stats and run_force_population and not run_elastic_population:
+            compute_elspectra_flag = False
+            print(f"âš¡ Optimization: Skipping elspectra for force-only population stats")
+        elif scope_f_only:
+            # Only force-model (uses indentation) Ã¢â€ â€™ no elasticity models, no elspectra
             filters_for_call["e_models"] = {}
             compute_elspectra_flag = False
         elif scope_e_only:
-            # Only elasticity-model (uses elspectra) → no force models
+            # Only elasticity-model (uses elspectra) Ã¢â€ â€™ no force models
             filters_for_call["f_models"] = {}
             compute_elspectra_flag = True
         else:
@@ -548,6 +639,12 @@ async def process_and_stream_batch(
             # ---- BATCH PATH (full graphs) ----
             elif filters_changed or not curve_id or scope_full:
                 print(f"Batch processing ({compute_scope}):", batch_ids)
+                
+                # Optimization: Warm up CP cache for model stats before parallel processing
+                if scope_model_stats and cp_filters:
+                    print(f"🔥 Pre-warming CP cache for {len(batch_ids)} curves...")
+                    warmup_cp_cache(conn, [int(cid) for cid in batch_ids], cp_filters, metadata, batch_size=50)
+                
                 graph_force_vs_z, graph_force_indentation, graph_elspectra = await loop.run_in_executor(
                     executor,
                     lambda: fetch_curves_batch(
@@ -587,7 +684,7 @@ async def process_and_stream_batch(
                     if is_valid_param_vector(r.get("elasticity_param")):
                         global_elastic_params.append(r["elasticity_param"])
 
-            # 🔴 DO NOT SEND STATS HERE
+            # Ã°Å¸â€Â´ DO NOT SEND STATS HERE
             return
 
         elif scope_full:
@@ -639,11 +736,11 @@ async def startup_event():
     """Load HDF5 data into DuckDB and set up filters when the server starts."""
     # Check if DB needs initialization
     # if not os.path.exists(DB_PATH) or os.stat(DB_PATH).st_size == 0:
-    #     print("🚀 Loading HDF5 data into DuckDB...")
+    #     print("Ã°Å¸Å¡â‚¬ Loading HDF5 data into DuckDB...")
     #     transform_hdf5_to_db(HDF5_FILE_PATH, DB_PATH)
     # else:
-    #     print("✅ DuckDB database already exists, skipping reload.")
-    print("✅ Startup complete.")
+    #     print("Ã¢Å“â€¦ DuckDB database already exists, skipping reload.")
+    print("Ã¢Å“â€¦ Startup complete.")
 
 
 from fastapi import FastAPI, UploadFile, HTTPException
@@ -879,7 +976,7 @@ async def get_all_fparams_stream(data: Dict[str, Any]):
                     curves_data = graph_force_indentation["curves"]
                     if isinstance(curves_data, dict) and "curves_fparam" in curves_data:
                         batch_fparams = curves_data["curves_fparam"]
-                        # 🔧 FIX: No longer need to adjust curve_index - it's now the actual curve_id (global)
+                        # Ã°Å¸â€Â§ FIX: No longer need to adjust curve_index - it's now the actual curve_id (global)
                         all_fparams.extend(batch_fparams)
                         print(f"Batch {batch_num}: Found {len(batch_fparams)} fparams")
                 
