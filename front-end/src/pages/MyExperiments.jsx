@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import BackToDashboardButton from "../components/BackToDashboardButton";
-import { listExperiments } from "../api/experiments";
+import { listExperiments, deleteExperiment } from "../api/experiments";
 import { useAuthStore } from "../state/useAuthStore";
 import { useNavigate } from "react-router-dom";
 import { useDashboardStore } from "../state/useDashboardStore";
@@ -31,9 +31,17 @@ export default function MyExperiments() {
       .finally(() => setLoading(false));
   }, [token]);
 
-  const handleDelete = (id) => {
+  const handleDelete = async (id) => {
     if (!window.confirm("Delete this experiment?")) return;
-    setExperiments((prev) => prev.filter((e) => e.id !== id));
+    
+    try {
+      await deleteExperiment(token, id);
+      // Remove from local state after successful deletion
+      setExperiments((prev) => prev.filter((e) => e.id !== id));
+    } catch (err) {
+      console.error("Failed to delete experiment:", err);
+      alert(err.message || "Failed to delete experiment");
+    }
   };
 
   const handleOpen = async (exp) => {

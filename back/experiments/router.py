@@ -7,6 +7,7 @@ from db.experiments import (
     create_experiment,
     list_experiments,
     get_experiment,
+    delete_experiment,
 )
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
@@ -66,3 +67,15 @@ def load_experiment(
         raise HTTPException(404, "Experiment not found")
 
     return exp
+
+
+@router.delete("/{experiment_id}")
+def delete_experiment_endpoint(
+    experiment_id: int,
+    user=Depends(get_current_user),
+):
+    deleted = delete_experiment(experiment_id, user["id"])
+    if not deleted:
+        raise HTTPException(404, "Experiment not found")
+    
+    return {"status": "ok", "message": "Experiment deleted successfully"}

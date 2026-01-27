@@ -116,6 +116,8 @@ def get_experiment(exp_id: int, user_id: int) -> Optional[dict]:
         (exp_id, user_id),
     ).fetchone()
 
+    if not row:
+        return None
     
     return {
         "id": row[0],
@@ -132,3 +134,27 @@ def get_experiment(exp_id: int, user_id: int) -> Optional[dict]:
         "youngs_modulus_mean": row[9],
         "youngs_modulus_std": row[10]
     }
+
+
+def delete_experiment(exp_id: int, user_id: int) -> bool:
+    """
+    Delete an experiment by ID, ensuring it belongs to the user.
+    Returns True if deleted, False if not found.
+    """
+    conn = get_conn()
+    
+    # First verify the experiment exists and belongs to the user
+    exp = get_experiment(exp_id, user_id)
+    if not exp:
+        return False
+    
+    # Then delete it
+    conn.execute(
+        """
+        DELETE FROM experiments
+        WHERE id = ? AND user_id = ?
+        """,
+        (exp_id, user_id),
+    )
+    
+    return True
