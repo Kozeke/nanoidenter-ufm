@@ -30,16 +30,16 @@ class GofSphereFilter(CpointBase):
         tip_radius = metadata.get('tip_radius', 1e-5) if metadata else 1e-5  # Default 10 nm in meters
         tip_geometry = metadata.get('tip_geometry', 'sphere') if metadata else 'sphere'
         
-        # print(f"🔍 GofSphereFilter.calculate() DEBUG:")
-        # print(f"  📊 Input data: x={len(x)} points, y={len(y)} points")
-        # print(f"  📋 Parameters from filter instance:")
-        # print(f"    - fit_window: {fit_window}")
-        # print(f"    - x_range: {x_range}")
-        # print(f"    - force_threshold: {force_threshold}")
-        # print(f"  🔧 Metadata values:")
-        # print(f"    - spring_constant: {spring_constant}")
-        # print(f"    - tip_radius: {tip_radius}")
-        # print(f"    - tip_geometry: {tip_geometry}")
+        print(f"🔍 GofSphereFilter.calculate() DEBUG:")
+        print(f"  📊 Input data: x={len(x)} points, y={len(y)} points")
+        print(f"  📋 Parameters from filter instance:")
+        print(f"    - fit_window: {fit_window}")
+        print(f"    - x_range: {x_range}")
+        print(f"    - force_threshold: {force_threshold}")
+        print(f"  🔧 Metadata values:")
+        print(f"    - spring_constant: {spring_constant}")
+        print(f"    - tip_radius: {tip_radius}")
+        print(f"    - tip_geometry: {tip_geometry}")
 
         # DO NOT SWAP: keep x=z, y=f
         z = np.asarray(x, dtype=np.float64)  # z-values

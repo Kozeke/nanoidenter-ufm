@@ -80,17 +80,20 @@ def apply_cp_filters(query: str, filters: Dict, curve_ids: List[str], metadata: 
     
     # If cp_col stayed "NULL" (no valid filter found), this query will just return no rows
     query = f"""
-        SELECT
-            curve_id,
-            {z_col},
-            {f_col},
-            {cp_col} AS cp_values,
-            {spring_constant_val} AS spring_constant,
-            {tip_radius_val} AS tip_radius,
-            '{tip_geometry_sql}' AS tip_geometry
-        FROM force_vs_z
-        WHERE curve_id IN ({','.join(map(str, numeric_curve_ids))})
-          AND {cp_col} IS NOT NULL
+        WITH cp_calc AS (
+            SELECT
+                curve_id,
+                {z_col},
+                {f_col},
+                {cp_col} AS cp_values,
+                {spring_constant_val} AS spring_constant,
+                {tip_radius_val} AS tip_radius,
+                '{tip_geometry_sql}' AS tip_geometry
+            FROM force_vs_z
+            WHERE curve_id IN ({','.join(map(str, numeric_curve_ids))})
+        )
+        SELECT * FROM cp_calc
+        WHERE cp_values IS NOT NULL
     """
-    print(f"Generated query: {query}")
+    print(f"Generated query (optimized): {query}")
     return query

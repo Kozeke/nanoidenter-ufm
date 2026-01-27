@@ -46,14 +46,14 @@ class BilayerModel(EmodelBase):
             z = np.asarray(x, dtype=np.float64)
             e = np.asarray(y, dtype=np.float64)
             
-            print(f"\n{'='*60}")
-            print(f"CALCULATE CALLED - RAW INPUT DATA:")
-            print(f"  x length: {len(z)}")
-            print(f"  y length: {len(e)}")
-            print(f"  x range: [{z.min()*1e9:.3f}, {z.max()*1e9:.3f}] nm")
-            print(f"  y range: [{e.min():.6e}, {e.max():.6e}] Pa")
-            print(f"  params: {params}")
-            print(f"{'='*60}\n")
+            # print(f"\n{'='*60}")
+            # print(f"CALCULATE CALLED - RAW INPUT DATA:")
+            # print(f"  x length: {len(z)}")
+            # print(f"  y length: {len(e)}")
+            # print(f"  x range: [{z.min()*1e9:.3f}, {z.max()*1e9:.3f}] nm")
+            # print(f"  y range: [{e.min():.6e}, {e.max():.6e}] Pa")
+            # print(f"  params: {params}")
+            # print(f"{'='*60}\n")
             
             # Require at least 3 points for a 3-parameter fit
             if z.size < 3 or e.size < 3 or z.size != e.size:
@@ -82,27 +82,27 @@ class BilayerModel(EmodelBase):
             z_windowed = z[mask]
             e_windowed = e[mask]
             
-            print(f"AFTER WINDOWING:")
-            print(f"  Window: [{min_ind_nm:.1f}, {max_ind_nm:.1f}] nm")
-            print(f"  Mask sum: {mask.sum()} / {len(mask)} points")
-            print(f"  z_windowed length: {len(z_windowed)}")
-            print(f"  z_windowed range: [{z_windowed.min()*1e9:.3f}, {z_windowed.max()*1e9:.3f}] nm")
-            print(f"  e_windowed range: [{e_windowed.min():.6e}, {e_windowed.max():.6e}] Pa")
+            # print(f"AFTER WINDOWING:")
+            # print(f"  Window: [{min_ind_nm:.1f}, {max_ind_nm:.1f}] nm")
+            # print(f"  Mask sum: {mask.sum()} / {len(mask)} points")
+            # print(f"  z_windowed length: {len(z_windowed)}")
+            # print(f"  z_windowed range: [{z_windowed.min()*1e9:.3f}, {z_windowed.max()*1e9:.3f}] nm")
+            # print(f"  e_windowed range: [{e_windowed.min():.6e}, {e_windowed.max():.6e}] Pa")
             
             if len(z_windowed) < 3:
                 # print(f"\nERROR: Not enough points after windowing! Need at least 3 for 3-parameter fit.")
                 return None
 
-            print(f"\nSTARTING CURVE_FIT...")
-            print(f"  Initial guess: p0=[100000, 1000, 1000] (E0, Eb, d)")
+            # print(f"\nSTARTING CURVE_FIT...")
+            # print(f"  Initial guess: p0=[100000, 1000, 1000] (E0, Eb, d)")
             
             p0 = [100000, 1000, 1000]  # Initial guesses: E0 (Pa), Eb (Pa), d (nm)
             popt, _ = curve_fit(self.theory, z_windowed, e_windowed, p0=p0, maxfev=10000)
             
-            print(f"\nFIT RESULT:")
-            print(f"  E0 = {popt[0]:.6f} Pa")
-            print(f"  Eb = {popt[1]:.6f} Pa")
-            print(f"  d = {popt[2]:.6f} nm")
+            # print(f"\nFIT RESULT:")
+            # print(f"  E0 = {popt[0]:.6f} Pa")
+            # print(f"  Eb = {popt[1]:.6f} Pa")
+            # print(f"  d = {popt[2]:.6f} nm")
             
             # Calculate y_fit using the fitted parameters
             y_fit = self.theory(z_windowed, popt[0], popt[1], popt[2])
@@ -110,13 +110,13 @@ class BilayerModel(EmodelBase):
             # Calculate residuals
             residuals = e_windowed - y_fit
             rms_error = np.sqrt(np.mean(residuals**2))
-            print(f"  RMS error: {rms_error:.6e} Pa")
-            print(f"  Max residual: {np.abs(residuals).max():.6e} Pa")
-            print(f"{'='*60}\n")
+            # print(f"  RMS error: {rms_error:.6e} Pa")
+            # print(f"  Max residual: {np.abs(residuals).max():.6e} Pa")
+            # print(f"{'='*60}\n")
             
             return [z_windowed.tolist(), y_fit.tolist(), popt.tolist()]  # Return with parameters
 
         except (RuntimeError, ValueError, Exception) as e:
-            print(f"\nFITTING FAILED: {str(e)}")
-            print(f"{'='*60}\n")
+            # print(f"\nFITTING FAILED: {str(e)}")
+            # print(f"{'='*60}\n")
             return None

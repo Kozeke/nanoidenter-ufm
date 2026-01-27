@@ -24,14 +24,14 @@ def calc_elspectra(
     y = np.asarray(force_values, dtype=np.float64)
 
     # DEBUG: Check force values units
-    print(f"DEBUG FORCE VALUES UNITS:", tip_radius, tip_geometry, tip_angle)
-    print(f"  force_values range: [{y.min():.6e}, {y.max():.6e}]")
-    print(f"  force_values mean: {y.mean():.6e}")
-    print(f"  force_values std: {y.std():.6e}")
-    print(f"  z_values range: [{x.min():.6e}, {x.max():.6e}] m")
-    print(f"  Expected: Force should be in Newtons (N), typical range: 1e-9 to 1e-6 N")
-    print(f"  If values are ~1e-3 to 1e0, they might be in milliNewtons (mN)")
-    print(f"  If values are ~1e-6 to 1e-3, they might be in microNewtons (uN)")
+    # print(f"DEBUG FORCE VALUES UNITS:", tip_radius, tip_geometry, tip_angle)
+    # print(f"  force_values range: [{y.min():.6e}, {y.max():.6e}]")
+    # print(f"  force_values mean: {y.mean():.6e}")
+    # print(f"  force_values std: {y.std():.6e}")
+    # print(f"  z_values range: [{x.min():.6e}, {x.max():.6e}] m")
+    # print(f"  Expected: Force should be in Newtons (N), typical range: 1e-9 to 1e-6 N")
+    # print(f"  If values are ~1e-3 to 1e0, they might be in milliNewtons (mN)")
+    # print(f"  If values are ~1e-6 to 1e-3, they might be in microNewtons (uN)")
 
     # Early exit check from nano.py - check on length of indentation
     if x.size < 2:
@@ -109,20 +109,20 @@ def calc_elspectra(
         Ey = Ey[dwin:-dwin]
 
     # DEBUG: Print unit information before returning (with safety checks like nano.py)
-    print(f"DEBUG ELASTICITY UNITS:")
-    print(f"  tip_radius: {tip_radius:.6e} m")
-    if aradius.size > 0:
-        print(f"  aradius range: [{aradius.min():.6e}, {aradius.max():.6e}] m")
-        print(f"  coeff range: [{coeff.min():.6e}, {coeff.max():.6e}]")
-    else:
-        print(f"  aradius: empty array (no data)")
-    if deriv.size > 0:
-        print(f"  deriv range: [{deriv.min():.6e}, {deriv.max():.6e}]")
-    if Ey.size > 0:
-        print(f"  Ey range: [{Ey.min():.6e}, {Ey.max():.6e}] Pa")
-    else:
-        print(f"  Ey range: EMPTY ARRAY (no data after trimming)")
-    print(f"  ddt: {ddt:.6e} m")
+    # print(f"DEBUG ELASTICITY UNITS:")
+    # print(f"  tip_radius: {tip_radius:.6e} m")
+    # if aradius.size > 0:
+    #     print(f"  aradius range: [{aradius.min():.6e}, {aradius.max():.6e}] m")
+    #     print(f"  coeff range: [{coeff.min():.6e}, {coeff.max():.6e}]")
+    # else:
+    #     print(f"  aradius: empty array (no data)")
+    # if deriv.size > 0:
+    #     print(f"  deriv range: [{deriv.min():.6e}, {deriv.max():.6e}]")
+    # if Ey.size > 0:
+    #     print(f"  Ey range: [{Ey.min():.6e}, {Ey.max():.6e}] Pa")
+    # else:
+    #     print(f"  Ey range: EMPTY ARRAY (no data after trimming)")
+    # print(f"  ddt: {ddt:.6e} m")
 
     # Final safety check before returning
     if Ex.size == 0 or Ey.size == 0:
