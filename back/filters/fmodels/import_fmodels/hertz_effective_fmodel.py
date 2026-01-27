@@ -26,7 +26,7 @@ class HertzEffectiveModel(FmodelBase):
             Theoretical force values (N)
         """
         x = np.array(x)
-        print("elastic", elastic)
+        # print("elastic", elastic)
         # Get tip parameters from curve metadata
         if hasattr(self, 'curve') and self.curve is not None:
             tip_geometry = self.curve.get('tip', {}).get('geometry', 'sphere')
@@ -55,14 +55,14 @@ class HertzEffectiveModel(FmodelBase):
         x = np.asarray(x, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
 
-        print(f"\n{'='*60}")
-        print(f"CALCULATE CALLED - RAW INPUT DATA:")
-        print(f"  x length: {len(x)}")
-        print(f"  y length: {len(y)}")
-        print(f"  x range: [{x.min()*1e9:.3f}, {x.max()*1e9:.3f}] nm")
-        print(f"  y range: [{y.min():.6e}, {y.max():.6e}] N")
-        print(f"  params: {params}")
-        print(f"{'='*60}\n")
+        # print(f"\n{'='*60}")
+        # print(f"CALCULATE CALLED - RAW INPUT DATA:")
+        # print(f"  x length: {len(x)}")
+        # print(f"  y length: {len(y)}")
+        # print(f"  x range: [{x.min()*1e9:.3f}, {x.max()*1e9:.3f}] nm")
+        # print(f"  y range: [{y.min():.6e}, {y.max():.6e}] N")
+        # print(f"  params: {params}")
+        # print(f"{'='*60}\n")
 
         if len(x) < 2 or len(y) < 2:
             return None
@@ -83,24 +83,24 @@ class HertzEffectiveModel(FmodelBase):
         x_windowed = x[mask]
         y_windowed = y[mask]
         
-        print(f"AFTER WINDOWING:")
-        print(f"  Window: [{min_ind_nm:.1f}, {max_ind_nm:.1f}] nm")
-        print(f"  Mask sum: {mask.sum()} / {len(mask)} points")
-        print(f"  x_windowed length: {len(x_windowed)}")
-        print(f"  x_windowed range: [{x_windowed.min()*1e9:.3f}, {x_windowed.max()*1e9:.3f}] nm")
-        print(f"  y_windowed range: [{y_windowed.min():.6e}, {y_windowed.max():.6e}] N")
+        # print(f"AFTER WINDOWING:")
+        # print(f"  Window: [{min_ind_nm:.1f}, {max_ind_nm:.1f}] nm")
+        # print(f"  Mask sum: {mask.sum()} / {len(mask)} points")
+        # print(f"  x_windowed length: {len(x_windowed)}")
+        # print(f"  x_windowed range: [{x_windowed.min()*1e9:.3f}, {x_windowed.max()*1e9:.3f}] nm")
+        # print(f"  y_windowed range: [{y_windowed.min():.6e}, {y_windowed.max():.6e}] N")
         
         # Print first and last few points
-        print(f"\nFIRST 5 POINTS:")
-        for i in range(min(5, len(x_windowed))):
-            print(f"    x[{i}] = {x_windowed[i]*1e9:.6f} nm, y[{i}] = {y_windowed[i]:.6e} N")
+        # print(f"\nFIRST 5 POINTS:")
+        # for i in range(min(5, len(x_windowed))):
+        #     print(f"    x[{i}] = {x_windowed[i]*1e9:.6f} nm, y[{i}] = {y_windowed[i]:.6e} N")
         
-        print(f"\nLAST 5 POINTS:")
-        for i in range(max(0, len(x_windowed)-5), len(x_windowed)):
-            print(f"    x[{i}] = {x_windowed[i]*1e9:.6f} nm, y[{i}] = {y_windowed[i]:.6e} N")
+        # print(f"\nLAST 5 POINTS:")
+        # for i in range(max(0, len(x_windowed)-5), len(x_windowed)):
+        #     print(f"    x[{i}] = {x_windowed[i]*1e9:.6f} nm, y[{i}] = {y_windowed[i]:.6e} N")
         
         if len(x_windowed) < 2:
-            print(f"\nERROR: Not enough points after windowing!")
+            # print(f"\nERROR: Not enough points after windowing!")
             return None
 
         # Get tip parameters
@@ -111,33 +111,33 @@ class HertzEffectiveModel(FmodelBase):
             tip_geometry = 'sphere'
             tip_radius = 1e-5
         
-        print(f"\nTIP PARAMETERS:")
-        print(f"  geometry: {tip_geometry}")
-        print(f"  radius: {tip_radius:.6e} m")
+        # print(f"\nTIP PARAMETERS:")
+        # print(f"  geometry: {tip_geometry}")
+        # print(f"  radius: {tip_radius:.6e} m")
         
         try:
-            print(f"\nSTARTING CURVE_FIT...")
-            print(f"  Initial guess: p0=[1000]")
+            # print(f"\nSTARTING CURVE_FIT...")
+            # print(f"  Initial guess: p0=[1000]")
             
             # Fit
             popt, _ = curve_fit(self.theory, x_windowed, y_windowed, p0=[1000], maxfev=1000)
             E_eff = popt[0]
             
-            print(f"\nFIT RESULT:")
-            print(f"  E_eff = {E_eff:.6f} Pa")
+            # print(f"\nFIT RESULT:")
+            # print(f"  E_eff = {E_eff:.6f} Pa")
             
             y_fit = self.theory(x_windowed, E_eff)
             
             # Calculate residuals
             residuals = y_windowed - y_fit
             rms_error = np.sqrt(np.mean(residuals**2))
-            print(f"  RMS error: {rms_error:.6e} N")
-            print(f"  Max residual: {np.abs(residuals).max():.6e} N")
-            print(f"{'='*60}\n")
+            # print(f"  RMS error: {rms_error:.6e} N")
+            # print(f"  Max residual: {np.abs(residuals).max():.6e} N")
+            # print(f"{'='*60}\n")
             
             return [x_windowed.tolist(), y_fit.tolist(), [E_eff]]
             
         except (RuntimeError, ValueError) as e:
-            print(f"\nFITTING FAILED: {str(e)}")
-            print(f"{'='*60}\n")
+            # print(f"\nFITTING FAILED: {str(e)}")
+            # print(f"{'='*60}\n")
             return None

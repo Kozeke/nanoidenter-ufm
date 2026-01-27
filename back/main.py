@@ -572,15 +572,18 @@ async def process_and_stream_batch(
         }
         print("qwertrtt")
         if scope_model_stats:
-            curves_block = graph_force_indentation.get("curves", {})
+            # Force params come from graph_force_indentation["curves"]["curves_fparam"]
+            curves_block = graph_force_indentation.get("curves", {}) if graph_force_indentation else {}
 
             if run_force_population and "curves_fparam" in curves_block:
                 for r in curves_block["curves_fparam"]:
                     if is_valid_param_vector(r.get("fparam")):
                         global_force_params.append(r["fparam"])
 
-            if run_elastic_population and "curves_elasticity_param" in curves_block:
-                for r in curves_block["curves_elasticity_param"]:
+            # Elasticity params come from graph_elspectra["curves_elasticity_param"] (top-level, not inside "curves")
+            if run_elastic_population and graph_elspectra:
+                elasticity_params_list = graph_elspectra.get("curves_elasticity_param", [])
+                for r in elasticity_params_list:
                     if is_valid_param_vector(r.get("elasticity_param")):
                         global_elastic_params.append(r["elasticity_param"])
 
@@ -876,9 +879,7 @@ async def get_all_fparams_stream(data: Dict[str, Any]):
                     curves_data = graph_force_indentation["curves"]
                     if isinstance(curves_data, dict) and "curves_fparam" in curves_data:
                         batch_fparams = curves_data["curves_fparam"]
-                        # Adjust curve_index to be global
-                        for fparam in batch_fparams:
-                            fparam["curve_index"] += i  # Add the batch offset
+                        # 🔧 FIX: No longer need to adjust curve_index - it's now the actual curve_id (global)
                         all_fparams.extend(batch_fparams)
                         print(f"Batch {batch_num}: Found {len(batch_fparams)} fparams")
                 
