@@ -73,6 +73,11 @@ class CSVExporter(Exporter):
                 for key, value in metadata_payload.items():
                     writer.writerow([key, value])
                 
+                # Add Young's modulus formatted value from websocket stats if available
+                youngs_modulus_formatted = kwargs.get("youngs_modulus_formatted")
+                if youngs_modulus_formatted:
+                    writer.writerow(["youngs_modulus", youngs_modulus_formatted])
+                
                 num_exported = 0
                 for row in results:
                     (curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
@@ -380,7 +385,7 @@ class CSVExporter(Exporter):
                                 ]
                                 if E_values:
                                     avg_E = float(np.average(E_values))
-                                    header += f"#Average Hertz modulus [Pa]: {avg_E}\n"
+                                    # header += f"#Average Hertz modulus [Pa]: {avg_E}\n"
 
                         force_model_params = kwargs.get("force_model_params") or {}
                         max_ind_param = force_model_params.get("maxInd")
@@ -396,6 +401,11 @@ class CSVExporter(Exporter):
 
                     except Exception:
                         pass
+
+                # Add Young's modulus formatted value from websocket stats if available
+                youngs_modulus_formatted = kwargs.get("youngs_modulus_formatted")
+                if youngs_modulus_formatted:
+                    header += f"#Average Hertz modulus [Pa]: {youngs_modulus_formatted}\n"
 
                 if dataset_type == "Force":
                     header += "#Columns: Indentation <F> SigmaF\n" if direction == 'V' else "#Columns: <Indentation> F SigmaZ\n"

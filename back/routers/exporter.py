@@ -145,6 +145,7 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
             "filters": filters,  # Pass filters to the exporter
             "force_model_params": force_model_params,  # Pass force model parameters for Hertz fit calculations
             "elasticity_params": data.get("elasticity_params") or {},  # optional, but add
+            "youngs_modulus_formatted": data.get("youngs_modulus_formatted"),  # Pass Young's modulus from websocket stats
         }
         
         num_exported = exporter.export(
