@@ -201,6 +201,18 @@ async def websocket_data_stream(websocket: WebSocket):
         register_filters(conn)
         # Ensure cache tables exist
         ensure_cache_tables(conn)
+        
+        # Optimize DuckDB for single-CPU instances
+        cpu_count = os.cpu_count() or 1
+        if cpu_count == 1:
+            # Single CPU - disable DuckDB parallelism to reduce overhead
+            conn.execute("PRAGMA threads = 1;")
+            print("ℹ️ DuckDB optimized for single CPU (threads=1)")
+        else:
+            # Multi-CPU - let DuckDB use parallelism
+            conn.execute(f"PRAGMA threads = {cpu_count};")
+            print(f"ℹ️ DuckDB configured for {cpu_count} CPU cores")
+        
         print("Filters registered")
 
         # Debug: List tables after register_filters
@@ -362,8 +374,33 @@ async def websocket_data_stream(websocket: WebSocket):
                 # Added before using has_fmodel and has_emodel
                 has_fmodel = bool(filters.get("f_models", {}))
                 has_emodel = bool(filters.get("e_models", {}))
-                # Optimization: Use parallel processing for model_stats
-                if compute_scope == "model_stats" and len(curve_ids) > BATCH_SIZE and not IS_WINDOWS:
+                
+                # Check if parallel processing is feasible based on system resources
+                try:
+                    import psutil
+                    available_memory_gb = psutil.virtual_memory().available / (1024**3)
+                except ImportError:
+                    # psutil not available - assume constrained environment
+                    print("⚠️ psutil not available, assuming constrained environment")
+                    available_memory_gb = 0.5  # Conservative estimate
+                
+                cpu_count = os.cpu_count() or 1
+                
+                # Require at least 1.5GB free RAM and 2+ CPU cores for parallel processing
+                can_parallelize = (
+                    available_memory_gb >= 1.5 and 
+                    cpu_count >= 2 and 
+                    not IS_WINDOWS
+                )
+                
+                if not can_parallelize:
+                    print(f"⚠️ Parallel processing disabled: insufficient resources")
+                    print(f"   Available RAM: {available_memory_gb:.1f} GB (need 1.5+ GB)")
+                    print(f"   CPU cores: {cpu_count} (need 2+)")
+                    print(f"   Using sequential processing instead...")
+                
+                # Optimization: Use parallel processing for model_stats (only if resources available)
+                if compute_scope == "model_stats" and len(curve_ids) > BATCH_SIZE and can_parallelize:
                     print(f"ðŸš€ Using parallel processing for {len(curve_ids)} curves...")
                     
                     # Create larger batches for parallel processing (100 curves per worker)
@@ -425,11 +462,35 @@ async def websocket_data_stream(websocket: WebSocket):
                     print(f"âœ… Parallel processing complete: {len(global_force_params)} force params, {len(global_elastic_params)} elastic params")
                 
                 else:
-                    # Original sequential processing for small datasets or non-model_stats
+                    # Sequential processing for small datasets, constrained resources, or non-model_stats
+                    # Adjust batch size based on available resources (use variable from resource check above)
+                    if available_memory_gb < 1.0:
+                        # Very constrained - use smaller batches
+                        batch_size_to_use = 5
+                        print(f"⚠️ Low memory detected ({available_memory_gb:.1f} GB), using batch size: {batch_size_to_use}")
+                    elif available_memory_gb < 2.0:
+                        # Moderately constrained - medium batches
+                        batch_size_to_use = 10
+                        print(f"ℹ️ Moderate resources ({available_memory_gb:.1f} GB, {cpu_count} CPU), using batch size: {batch_size_to_use}")
+                    elif cpu_count == 1:
+                        # Single CPU but good memory - larger batches for efficiency
+                        batch_size_to_use = 20
+                        print(f"ℹ️ Single CPU with good memory ({available_memory_gb:.1f} GB), using batch size: {batch_size_to_use}")
+                    else:
+                        # Normal batch size
+                        batch_size_to_use = BATCH_SIZE
+                        print(f"ℹ️ Using standard batch size: {batch_size_to_use}")
+                    
+                    total_batches = (len(curve_ids) + batch_size_to_use - 1) // batch_size_to_use
+                    
                     # Process in batches
-                    for i in range(0, len(curve_ids), BATCH_SIZE):
-                        batch_ids = curve_ids[i:i + BATCH_SIZE]
-                        # print(f"Processing batch: {batch_ids}")
+                    for i in range(0, len(curve_ids), batch_size_to_use):
+                        batch_ids = curve_ids[i:i + batch_size_to_use]
+                        batch_num = i // batch_size_to_use + 1
+                        
+                        if compute_scope == "model_stats":
+                            print(f"📊 Sequential processing: batch {batch_num}/{total_batches} ({len(batch_ids)} curves)")
+                        
                         await process_and_stream_batch(
                             conn,
                             batch_ids,
