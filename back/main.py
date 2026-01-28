@@ -16,7 +16,7 @@ from db.init_db import ensure_cache_tables
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any
 from utils.stats import format_stat, is_valid_param_vector
-from utils.cache import warmup_cp_cache
+from utils.cache import warmup_cp_cache, clear_cache
 
 # Detect OS for parallel processing strategy
 IS_WINDOWS = platform.system() == 'Windows'
@@ -1293,3 +1293,38 @@ async def serve_exported_file(file_path: str):
         logger.error(f"File not found: {full_path}")
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(full_path, filename=os.path.basename(full_path))
+
+
+# Cache management endpoint
+@app.delete("/clear-cache")
+async def clear_cache_endpoint(cache_type: str = None):
+    """
+    Clear cache tables. Can clear all caches or specific cache types.
+    
+    Query Parameters:
+        cache_type: Optional. One of: "contact_points", "indentations", "elspectra"
+                    If not provided, clears all cache tables.
+    
+    Returns:
+        Dictionary with counts of deleted rows for each cache table
+    """
+    try:
+        conn = get_conn()
+        results = clear_cache(conn, cache_type)
+        
+        return {
+            "status": "success",
+            "message": f"Cache cleared successfully",
+            "deleted_rows": results
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={
+            "status": "error",
+            "message": str(e)
+        })
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail={
+            "status": "error",
+            "message": f"Failed to clear cache: {str(e)}"
+        })
