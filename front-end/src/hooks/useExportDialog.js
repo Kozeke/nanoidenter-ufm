@@ -15,6 +15,7 @@ export const useExportDialog = () => {
     setLoadingMulti,
     // Stores force model parameters (maxInd, minInd, poisson) used for Hertz fit calculations.
     forceModelParams,
+    modelStats,
   } = useDashboardStore();
 
   // Indicates whether metadata is ready once we have at least one sample row.
@@ -506,6 +507,9 @@ export const useExportDialog = () => {
         poisson: forceModelParams?.poisson ?? hertzConfig.poisson ?? 0.5,
       };
       
+      // Extract Young's modulus formatted value from websocket model stats
+      const youngsModulusFormatted = modelStats?.force?.[0]?.mean || null;
+      
       // Prepare payload with level names and metadata
         const payload = {
           export_path: exportPath,
@@ -533,6 +537,8 @@ export const useExportDialog = () => {
             softmech_metadata: editableSoftMechMetadata,
             // Pass Hertz fit window + poisson parameters for force model calculations.
             force_model_params: forceModelParamsPayload,
+            // Pass Young's modulus formatted value from websocket stats
+            youngs_modulus_formatted: youngsModulusFormatted,
           }),
           // Only include metadata for non-CSV exports (HDF5, JSON, TXT, etc.)
           ...(selectedFormat !== 'csv') && {
