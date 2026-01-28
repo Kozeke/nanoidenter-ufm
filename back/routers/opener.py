@@ -5,6 +5,8 @@ from typing import Dict, Any
 import os
 import logging
 from openers import get_opener
+from db.connection import get_conn
+from utils.cache import clear_cache
 
 SUPPORTED_EXTENSIONS = [".json", ".hdf5", ".csv", ".txt"]
 
@@ -137,6 +139,23 @@ async def process_file_endpoint(data: Dict[str, Any]):
         db_path = "data/experiment.db"
         save_to_duckdb(transformed_curves, db_path)
         logger.info(f"Saved {len(curves)} curves to DuckDB at {db_path}")
+        
+        # Clear all caches since we're loading a new experiment
+        # This ensures old cached contact points, indentations, and elspectra
+        # from previous datasets don't interfere with the new data
+        logger.info("Clearing cache for new experiment...")
+        try:
+            conn = get_conn()
+            cache_results = clear_cache(conn)
+            total_cleared = sum(v for v in cache_results.values() if v >= 0)
+            logger.info(f"✅ Cache cleared: {total_cleared} total rows deleted")
+            logger.info(f"   - Contact points: {cache_results.get('contact_points', 0)} rows")
+            logger.info(f"   - Indentations: {cache_results.get('indentations', 0)} rows")
+            logger.info(f"   - Elspectra: {cache_results.get('elspectra', 0)} rows")
+        except Exception as cache_error:
+            # Don't fail the whole operation if cache clearing fails
+            logger.warning(f"⚠️  Failed to clear cache (non-critical): {cache_error}")
+        
         logging.info("info3")
 
         return {
