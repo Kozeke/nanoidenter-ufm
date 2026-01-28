@@ -222,3 +222,62 @@ def get_cp_cache_key(cp_filters: Dict, metadata: Dict) -> Tuple[Optional[str], O
         return name, _json_hash(cp_hash_payload)
     
     return None, None
+
+
+def clear_cache(
+    conn: duckdb.DuckDBPyConnection,
+    cache_type: Optional[str] = None
+) -> Dict[str, int]:
+    """
+    Clear cache tables. Can clear all caches or specific cache types.
+    
+    Args:
+        conn: DuckDB connection
+        cache_type: Optional string to clear specific cache type.
+                   Options: "contact_points", "indentations", "elspectra", or None for all
+    
+    Returns:
+        Dictionary with counts of deleted rows for each cache table
+    """
+    results = {}
+    
+    cache_tables = {
+        "contact_points": "contact_points",
+        "indentations": "indentations",
+        "elspectra": "elspectra"
+    }
+    
+    if cache_type:
+        if cache_type not in cache_tables:
+            raise ValueError(f"Invalid cache_type: {cache_type}. Must be one of: {list(cache_tables.keys())}")
+        tables_to_clear = {cache_type: cache_tables[cache_type]}
+    else:
+        tables_to_clear = cache_tables
+    
+    for cache_name, table_name in tables_to_clear.items():
+        try:
+            # Check if table exists
+            table_check = conn.execute(f"""
+                SELECT COUNT(*) FROM information_schema.tables 
+                WHERE table_name = '{table_name}'
+            """).fetchone()
+            
+            if table_check and table_check[0] > 0:
+                # Get count before deletion
+                count_query = conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()
+                count_before = count_query[0] if count_query else 0
+                
+                # Delete all rows
+                conn.execute(f"DELETE FROM {table_name}")
+                
+                results[cache_name] = count_before
+                print(f"🗑️ Cleared {cache_name} cache: {count_before} rows deleted")
+            else:
+                results[cache_name] = 0
+                print(f"⚠️ Table {table_name} does not exist, skipping")
+                
+        except Exception as e:
+            print(f"⚠️ Error clearing {cache_name} cache: {e}")
+            results[cache_name] = -1  # Indicate error
+    
+    return results
