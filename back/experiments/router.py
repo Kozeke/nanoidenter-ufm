@@ -35,7 +35,15 @@ def save_experiment(
         "tip_geometry": sample.get("tip_geometry"),
     }
     
-
+    # Check if experiment has results (finished)
+    has_results = bool(data.results) and any(
+        value is not None and value != "" 
+        for value in data.results.values()
+    )
+    
+    # Determine status code based on whether results exist
+    status_code = "success" if has_results else "pending"
+    
     create_experiment(
         user_id=user["id"],
         name=data.name,
@@ -49,7 +57,12 @@ def save_experiment(
         results=data.results,
     )
 
-    return {"status": "ok"}
+    message = "Experiment saved successfully" if has_results else "Experiment saved (pending results)"
+    return {
+        "status": "ok", 
+        "status_code": status_code,
+        "message": message
+    }
 
 
 @router.get("")

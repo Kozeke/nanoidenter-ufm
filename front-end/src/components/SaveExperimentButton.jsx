@@ -6,8 +6,6 @@ import { useMetadata } from "./Dashboard"; // adjust path if needed
 
 export default function SaveExperimentButton() {
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const { metadataObject } = useMetadata();
 
   const dashboard = useDashboardStore();
@@ -16,17 +14,14 @@ export default function SaveExperimentButton() {
   const handleSave = async () => {
     if (loading) return;
     if (!metadataObject || metadataObject.columns?.length === 0) {
-        setError("Cannot save experiment: metadata not loaded yet");
-        setLoading(false);
+        alert("Cannot save experiment: metadata not loaded yet");
         return;
       }
       
-    setError("");
-    setSuccess("");
     setLoading(true);
     console.log("Asd");
     try {
-      await saveExperiment(token, {
+      const result = await saveExperiment(token, {
         name: generateDefaultName(),
         metadata: metadataObject,
         filters: dashboard.filters,
@@ -40,9 +35,12 @@ export default function SaveExperimentButton() {
         },
       });
 
-      setSuccess("Experiment saved");
+      // Show status in alert with status_code
+      const statusCode = result.status_code || result.status || "ok";
+      const statusMessage = result.message || "Experiment saved successfully";
+      alert(`Status: ${statusCode.toUpperCase()}\n${statusMessage}`);
     } catch (err) {
-      setError(err.message || "Failed to save experiment");
+      alert(err.message || "Failed to save experiment");
     } finally {
       setLoading(false);
     }
@@ -60,9 +58,6 @@ export default function SaveExperimentButton() {
       >
         {loading ? "Saving…" : "Save Experiment"}
       </button>
-
-      {success && <span style={successStyle}>{success}</span>}
-      {error && <span style={errorStyle}>{error}</span>}
     </div>
   );
 }
@@ -92,14 +87,4 @@ const buttonStyle = {
 const disabledStyle = {
   opacity: 0.7,
   cursor: "not-allowed",
-};
-
-const successStyle = {
-  fontSize: 12,
-  color: "#065f46",
-};
-
-const errorStyle = {
-  fontSize: 12,
-  color: "#b91c1c",
 };

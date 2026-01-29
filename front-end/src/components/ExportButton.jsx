@@ -73,6 +73,8 @@ const pressable = {
 const ExportButton = ({ 
   // Optional custom trigger renderer; defaults to a simple button.
   renderTrigger,
+  // Optional experiment data when exporting from experiments page
+  experimentData = null,
 }) => {
   const {
     isMetadataReady,
@@ -121,7 +123,7 @@ const ExportButton = ({
     handleMetadataChange,
     handleStepClick,
     metadataValidationRules,
-  } = useExportDialog();
+  } = useExportDialog(experimentData);
 
   // Controls the menu anchor element for the format selection dropdown.
   const [anchorEl, setAnchorEl] = React.useState(null);
@@ -138,10 +140,15 @@ const ExportButton = ({
     hookHandleExportStart(format);
   };
 
+  // When experimentData is provided, skip menu and go directly to CSV export
+  const handleExportClick = experimentData 
+    ? () => hookHandleExportStart('csv')
+    : handleMenuOpen;
+
   return (
     <Box display="inline-block">
       {renderTrigger ? (
-        renderTrigger(handleMenuOpen, !isMetadataReady || isExporting)
+        renderTrigger(handleExportClick, !isMetadataReady || isExporting)
       ) : (
         <button
           onClick={handleMenuOpen}
@@ -167,7 +174,7 @@ const ExportButton = ({
           },
         }}
       >
-        <MenuItem
+        {/* <MenuItem
           sx={{
             fontSize: 14,
             fontWeight: 600,
@@ -178,7 +185,7 @@ const ExportButton = ({
           onClick={() => handleExportStart('hdf5')}
         >
           HDF5
-        </MenuItem>
+        </MenuItem> */}
         <MenuItem
           sx={{
             fontSize: 14,
@@ -189,10 +196,16 @@ const ExportButton = ({
           }}
           onClick={() => handleExportStart('csv')}
         >
-          CSV (with SoftMech options)
+          CSV
         </MenuItem>
       </Menu>
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={open} onClose={() => {
+        setOpen(false);
+        // Reset experiment data when dialog closes if it was set
+        if (experimentData) {
+          // Note: experimentData is passed as prop, parent should handle reset if needed
+        }
+      }} maxWidth="sm" fullWidth>
         <DialogTitle>
           {getSteps()[step]}
           {selectedFormat === 'hdf5' && (
@@ -202,13 +215,13 @@ const ExportButton = ({
               </Typography>
             </Tooltip>
           )}
-          {selectedFormat === 'csv' && (
+          {/* {selectedFormat === 'csv' && (
             <Tooltip title="CSV export supports SoftMech-style analysis with averaging and model fitting.">
               <Typography component="span" variant="body2" sx={{ ml: 1, color: 'info.main' }}>
                 (SoftMech features available)
               </Typography>
             </Tooltip>
-          )}
+          )} */}
         </DialogTitle>
         <DialogContent>
           <Box mb={2}>
@@ -426,7 +439,7 @@ const ExportButton = ({
                     >
                       <MenuItem value="raw">Raw Data</MenuItem>
                       <MenuItem value="average">Average Curves</MenuItem>
-                      <MenuItem value="scatter">Scatter Data</MenuItem>
+                      {/* <MenuItem value="scatter">Scatter Data</MenuItem> */}
                     </Select>
                   </FormControl>
                   

@@ -87,7 +87,8 @@ def list_experiments(user_id: int) -> List[dict]:
             "tip_radius": r[5],
             "e_model": r[6],
             "youngs_modulus_mean": r[7],
-            "youngs_modulus_std": r[8]
+            "youngs_modulus_std": r[8],
+            "status_code": "success" if (r[7] is not None or r[8] is not None) else "pending"
         }
         for r in rows
     ]
