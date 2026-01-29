@@ -4,33 +4,61 @@ import { saveAs } from 'file-saver';
 import { useMetadata } from '../components/Dashboard';
 import { useDashboardStore } from '../state/useDashboardStore';
 
-export const useExportDialog = () => {
+export const useExportDialog = (experimentDataOrFn = null) => {
   const { metadataObject } = useMetadata();
   const {
-    filters,
+    filters: dashboardFilters,
     numCurves: storeNumCurves,
     selectedExportCurveIds,
     isLoadingExport,
     setIsLoadingExport,
     setLoadingMulti,
     // Stores force model parameters (maxInd, minInd, poisson) used for Hertz fit calculations.
-    forceModelParams,
+    forceModelParams: dashboardForceModelParams,
     modelStats,
   } = useDashboardStore();
+  
+  // Get experiment data - can be a value or a function that returns it
+  const getExperimentData = useCallback(() => {
+    if (typeof experimentDataOrFn === 'function') {
+      return experimentDataOrFn();
+    }
+    return experimentDataOrFn;
+  }, [experimentDataOrFn]);
+  
+  // Get current experiment data
+  const experimentData = getExperimentData();
+  
+  // Use experiment data if provided, otherwise use dashboard store
+  const filters = experimentData?.filters ?? dashboardFilters;
+  const forceModelParams = experimentData?.force_model_params ?? dashboardForceModelParams;
 
   // Indicates whether metadata is ready once we have at least one sample row.
-  const isMetadataReady = !!metadataObject?.sample_row;
+  // For experiment exports, use experiment metadata if available
+  const experimentMetadata = experimentData?.metadata;
+  const isMetadataReady = experimentMetadata ? true : !!metadataObject?.sample_row;
 
-  // Stores initial metadata values derived from the database sample row.
+  // Stores initial metadata values derived from the database sample row or experiment data.
   const initialMetadata = useMemo(
-    () => ({
-      file_id: String(metadataObject.sample_row?.file_id ?? ''),
-      date: String(metadataObject.sample_row?.date ?? ''),
-      spring_constant: String(metadataObject.sample_row?.spring_constant ?? ''),
-      tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
-      tip_radius: String(metadataObject.sample_row?.tip_radius ?? ''),
-    }),
-    [metadataObject.sample_row]
+    () => {
+      if (experimentMetadata) {
+        return {
+          file_id: String(experimentMetadata.file_id ?? ''),
+          date: String(experimentMetadata.date ?? ''),
+          spring_constant: String(experimentMetadata.spring_constant ?? ''),
+          tip_geometry: String(experimentMetadata.tip_geometry ?? 'sphere'),
+          tip_radius: String(experimentMetadata.tip_radius ?? ''),
+        };
+      }
+      return {
+        file_id: String(metadataObject.sample_row?.file_id ?? ''),
+        date: String(metadataObject.sample_row?.date ?? ''),
+        spring_constant: String(metadataObject.sample_row?.spring_constant ?? ''),
+        tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
+        tip_radius: String(metadataObject.sample_row?.tip_radius ?? ''),
+      };
+    },
+    [metadataObject.sample_row, experimentMetadata]
   );
 
   // --- Local state moved here ---
@@ -225,7 +253,7 @@ export const useExportDialog = () => {
       ][step];
     } else if (isCsv) {
       return [
-        'Choose the type of CSV export: Raw data, Average curves, or Scatter data.',
+        'Choose the type of CSV export: Raw data, Average curves.', // or Scatter data.
         `Enter the file path where the ${selectedFormat.toUpperCase()} file will be saved.`,
         'Edit the calculated SoftMech metadata fields before export.',
         'Review the export details before saving the file.',
@@ -429,9 +457,13 @@ export const useExportDialog = () => {
     } else if (isCsv) {
       if (step === 0) {
         // Guard: average CSV export needs CP filters
+        // Check experiment data first, then dashboard store
+        const currentExpData = getExperimentData();
+        const filtersToCheck = currentExpData?.filters ?? filters;
+        const currentCpFilters = filtersToCheck?.cp_filters ?? cpFilters ?? {};
         if (
           exportType === 'average' &&
-          (!cpFilters || Object.keys(cpFilters).length === 0)
+          (!currentCpFilters || Object.keys(currentCpFilters).length === 0)
         ) {
           setErrors([
             'Average CSV export requires at least one contact-point filter (cp_filters). ' +
@@ -507,14 +539,25 @@ export const useExportDialog = () => {
         poisson: forceModelParams?.poisson ?? hertzConfig.poisson ?? 0.5,
       };
       
-      // Extract Young's modulus formatted value from websocket model stats
-      const youngsModulusFormatted = modelStats?.force?.[0]?.mean || null;
+      // Get current experiment data at export time
+      const currentExpData = getExperimentData();
+      
+      // Extract Young's modulus formatted value from websocket model stats or experiment data
+      const youngsModulusFormatted = currentExpData?.youngs_modulus_mean 
+        ? `${currentExpData.youngs_modulus_mean} ± ${currentExpData.youngs_modulus_std || 0}`
+        : (modelStats?.force?.[0]?.mean || null);
+      
+      // Use experiment curve_id if available, otherwise use selected curve IDs
+      const experimentCurveId = currentExpData?.curve_id;
+      const finalCurveIds = experimentCurveId 
+        ? [experimentCurveId] 
+        : (curveIds && curveIds.length > 0 ? curveIds : undefined);
       
       // Prepare payload with level names and metadata
         const payload = {
           export_path: exportPath,
-          curve_ids: curveIds && curveIds.length > 0 ? curveIds : undefined,
-          num_curves: curveIds && curveIds.length > 0 ? undefined : numCurves,
+          curve_ids: finalCurveIds,
+          num_curves: finalCurveIds ? undefined : numCurves,
           ...(selectedFormat === 'hdf5' && {
             level_names: levelNames,
             metadata_path: metadataPath,
@@ -526,13 +569,19 @@ export const useExportDialog = () => {
             dataset_type: datasetType,
             direction: direction,
             loose: loose,
-            // Pass the actual filters from the frontend
-            filters: {
-              regular: regularFilters,
-              cp_filters: cpFilters,
-              f_models: forceModels,
-              e_models: elasticityModels
-            },
+            // Pass the actual filters from the frontend or experiment data
+            filters: (() => {
+              const currentExpData = getExperimentData();
+              if (currentExpData?.filters) {
+                return currentExpData.filters;
+              }
+              return {
+                regular: regularFilters,
+                cp_filters: cpFilters,
+                f_models: forceModels,
+                e_models: elasticityModels
+              };
+            })(),
             // Pass editable metadata for all CSV exports (both raw and non-raw)
             softmech_metadata: editableSoftMechMetadata,
             // Pass Hertz fit window + poisson parameters for force model calculations.

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import BackToDashboardButton from "../components/BackToDashboardButton";
 import { listExperiments, deleteExperiment } from "../api/experiments";
 import { useAuthStore } from "../state/useAuthStore";
@@ -6,6 +6,7 @@ import { useNavigate } from "react-router-dom";
 import { useDashboardStore } from "../state/useDashboardStore";
 import { getExperiment } from "../api/experiments";
 import ExperimentPreviewModal from "../components/ExperimentPreviewModal";
+import ExportButton from "../components/ExportButton";
 
 export default function MyExperiments() {
   // 🔧 Frontend-only mock data (replace with API later)
@@ -15,18 +16,30 @@ export default function MyExperiments() {
   const [experiments, setExperiments] = useState([]);
   const token = useAuthStore((s) => s.token);
   const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const experimentDataRef = useRef({});
 
   const dashboard = useDashboardStore.getState();
+  
+  const ITEMS_PER_PAGE = 10;
+  const totalPages = Math.ceil(experiments.length / ITEMS_PER_PAGE);
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+  const endIndex = startIndex + ITEMS_PER_PAGE;
+  const paginatedExperiments = experiments.slice(startIndex, endIndex);
 
   useEffect(() => {
     if (!token) return;
     setLoading(true);
 
     listExperiments(token)
-      .then(setExperiments)
+      .then((data) => {
+        setExperiments(data);
+        setCurrentPage(1); // Reset to first page when experiments are loaded
+      })
       .catch((err) => {
         console.error("Failed to load experiments", err);
         setExperiments([]);
+        setCurrentPage(1);
       })
       .finally(() => setLoading(false));
   }, [token]);
@@ -37,7 +50,15 @@ export default function MyExperiments() {
     try {
       await deleteExperiment(token, id);
       // Remove from local state after successful deletion
-      setExperiments((prev) => prev.filter((e) => e.id !== id));
+      setExperiments((prev) => {
+        const filtered = prev.filter((e) => e.id !== id);
+        // Adjust current page if we deleted the last item on the current page
+        const newTotalPages = Math.ceil(filtered.length / ITEMS_PER_PAGE);
+        if (currentPage > newTotalPages && newTotalPages > 0) {
+          setCurrentPage(newTotalPages);
+        }
+        return filtered;
+      });
     } catch (err) {
       console.error("Failed to delete experiment:", err);
       alert(err.message || "Failed to delete experiment");
@@ -80,62 +101,113 @@ export default function MyExperiments() {
             </div>
           </div>
         ) : (
-          <table style={tableStyle}>
-            <thead>
-              <tr>
-                <th style={thStyle}>Name</th>
-                <th style={thStyle}>Created</th>
-                <th style={thStyle}>Status</th>
-                <th style={thStyle}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {experiments.map((exp) => (
-                <tr key={exp.id} style={rowStyle} className="row">
-                  <td style={tdStyle}>
-                    <div style={{ fontWeight: 600 }}>{exp.name}</div>
-                    <div style={{ fontSize: 12, color: "#6b7280" }}>
-                      ID: {exp.id}
-                    </div>
-                  </td>
-
-                  <td style={tdStyle}>{formatDate(exp.created_at)}</td>
-
-                  <td style={tdStyle}>
-                    <StatusBadge status={exp.status} />
-                  </td>
-
-                  <td
-                    style={{
-                      ...tdStyle,
-                      textAlign: "right",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    <button
-                      style={secondaryButtonStyle}
-                      onClick={() => setPreviewId(exp.id)}
-                    >
-                      👁 Preview
-                    </button>
-                    <button
-                      style={actionButtonStyle}
-                      onClick={() => handleOpen(exp)}
-                    >
-                      ▶ Open
-                    </button>
-                    <button style={secondaryButtonStyle}>⬇ Export</button>
-                    <button
-                      style={dangerButtonStyle}
-                      onClick={() => handleDelete(exp.id)}
-                    >
-                      🗑 Delete
-                    </button>
-                  </td>
+          <>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={thStyle}>Name</th>
+                  <th style={thStyle}>Created</th>
+                  <th style={thStyle}>Status</th>
+                  <th style={thStyle}></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {paginatedExperiments.map((exp) => (
+                  <tr key={exp.id} style={rowStyle} className="row">
+                    <td style={tdStyle}>
+                      <div style={{ fontWeight: 600 }}>{exp.name}</div>
+                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                        ID: {exp.id}
+                      </div>
+                    </td>
+
+                    <td style={tdStyle}>{formatDate(exp.created_at)}</td>
+
+                    <td style={tdStyle}>
+                      <StatusBadge status={exp.status_code || exp.status} />
+                    </td>
+
+                    <td
+                      style={{
+                        ...tdStyle,
+                        textAlign: "right",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <button
+                        style={secondaryButtonStyle}
+                        onClick={() => setPreviewId(exp.id)}
+                      >
+                        👁 Preview
+                      </button>
+                      <button
+                        style={actionButtonStyle}
+                        onClick={() => handleOpen(exp)}
+                      >
+                        ▶ Open
+                      </button>
+                      <ExportButton
+                        key={`export-${exp.id}`}
+                        experimentData={() => experimentDataRef.current[exp.id] || null}
+                        renderTrigger={(doExport, disabled) => (
+                          <button
+                            style={{
+                              ...secondaryButtonStyle,
+                              ...(disabled ? { opacity: 0.5, cursor: "not-allowed" } : {}),
+                            }}
+                            onClick={async () => {
+                              // Fetch experiment data before opening export dialog
+                              try {
+                                const expData = await getExperiment(token, exp.id);
+                                // Transform experiment data to match expected format
+                                const transformedData = {
+                                  id: exp.id, // Store experiment ID to match later
+                                  filters: expData.filters || {},
+                                  force_model_params: expData.force_model_params || {},
+                                  elasticity_params: expData.elasticity_params || {},
+                                  curve_id: expData.curve_id,
+                                  metadata: {
+                                    spring_constant: expData.metadata?.spring_constant,
+                                    tip_radius: expData.metadata?.tip_radius,
+                                    tip_geometry: expData.metadata?.tip_geometry,
+                                  },
+                                  youngs_modulus_mean: expData.youngs_modulus_mean,
+                                  youngs_modulus_std: expData.youngs_modulus_std,
+                                };
+                                // Store in ref for immediate access
+                                experimentDataRef.current[exp.id] = transformedData;
+                                // Call doExport - it will read from ref via the function
+                                doExport();
+                              } catch (err) {
+                                console.error("Failed to load experiment data:", err);
+                                alert("Failed to load experiment data for export");
+                              }
+                            }}
+                            disabled={disabled}
+                          >
+                            ⬇ Export
+                          </button>
+                        )}
+                      />
+                      <button
+                        style={dangerButtonStyle}
+                        onClick={() => handleDelete(exp.id)}
+                      >
+                        🗑 Delete
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {experiments.length > ITEMS_PER_PAGE && (
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setCurrentPage}
+              />
+            )}
+          </>
         )}
       </div>
       {previewId && (
@@ -158,6 +230,100 @@ function formatDate(value) {
 
 /* ---------- Small components ---------- */
 
+function Pagination({ currentPage, totalPages, onPageChange }) {
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxVisible = 5;
+    
+    if (totalPages <= maxVisible) {
+      // Show all pages if total is less than max visible
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      // Show first page, last page, and pages around current
+      if (currentPage <= 3) {
+        // Near the start
+        for (let i = 1; i <= 4; i++) {
+          pages.push(i);
+        }
+        pages.push("...");
+        pages.push(totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        // Near the end
+        pages.push(1);
+        pages.push("...");
+        for (let i = totalPages - 3; i <= totalPages; i++) {
+          pages.push(i);
+        }
+      } else {
+        // In the middle
+        pages.push(1);
+        pages.push("...");
+        for (let i = currentPage - 1; i <= currentPage + 1; i++) {
+          pages.push(i);
+        }
+        pages.push("...");
+        pages.push(totalPages);
+      }
+    }
+    
+    return pages;
+  };
+
+  return (
+    <div style={paginationStyle}>
+      <button
+        style={{
+          ...paginationButtonStyle,
+          ...(currentPage === 1 ? paginationButtonDisabledStyle : {}),
+        }}
+        onClick={() => onPageChange(currentPage - 1)}
+        disabled={currentPage === 1}
+      >
+        ← Previous
+      </button>
+      
+      <div style={paginationNumbersStyle}>
+        {getPageNumbers().map((page, index) => {
+          if (page === "...") {
+            return (
+              <span key={`ellipsis-${index}`} style={paginationEllipsisStyle}>
+                ...
+              </span>
+            );
+          }
+          return (
+            <button
+              key={page}
+              style={{
+                ...paginationNumberButtonStyle,
+                ...(currentPage === page
+                  ? paginationNumberButtonActiveStyle
+                  : {}),
+              }}
+              onClick={() => onPageChange(page)}
+            >
+              {page}
+            </button>
+          );
+        })}
+      </div>
+      
+      <button
+        style={{
+          ...paginationButtonStyle,
+          ...(currentPage === totalPages ? paginationButtonDisabledStyle : {}),
+        }}
+        onClick={() => onPageChange(currentPage + 1)}
+        disabled={currentPage === totalPages}
+      >
+        Next →
+      </button>
+    </div>
+  );
+}
+
 function StatusBadge({ status }) {
   const s = statusConfig[status] || statusConfig.Completed;
   return (
@@ -177,6 +343,8 @@ function StatusBadge({ status }) {
 }
 
 const statusConfig = {
+  success: { bg: "#ecfdf3", fg: "#065f46", label: "Success ✓" },
+  pending: { bg: "#fef3c7", fg: "#92400e", label: "Pending" },
   Completed: { bg: "#ecfdf3", fg: "#065f46", label: "Completed ✓" },
   Running: { bg: "#eff6ff", fg: "#1d4ed8", label: "Running…" },
   Failed: { bg: "#fee2e2", fg: "#991b1b", label: "Failed" },
@@ -283,5 +451,63 @@ const emptyStyle = {
   padding: 24,
   textAlign: "center",
   fontSize: 14,
+  color: "#6b7280",
+};
+
+const paginationStyle = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  marginTop: 24,
+  paddingTop: 24,
+  borderTop: "1px solid #eef1ff",
+};
+
+const paginationButtonStyle = {
+  padding: "8px 16px",
+  borderRadius: 8,
+  border: "1px solid #e6e9f7",
+  background: "#fff",
+  fontSize: 13,
+  fontWeight: 600,
+  color: "#1d1e2c",
+  cursor: "pointer",
+  transition: "all 0.2s",
+};
+
+const paginationButtonDisabledStyle = {
+  opacity: 0.5,
+  cursor: "not-allowed",
+};
+
+const paginationNumbersStyle = {
+  display: "flex",
+  gap: 4,
+  alignItems: "center",
+};
+
+const paginationNumberButtonStyle = {
+  minWidth: 36,
+  height: 36,
+  padding: "0 8px",
+  borderRadius: 8,
+  border: "1px solid #e6e9f7",
+  background: "#fff",
+  fontSize: 13,
+  fontWeight: 600,
+  color: "#1d1e2c",
+  cursor: "pointer",
+  transition: "all 0.2s",
+};
+
+const paginationNumberButtonActiveStyle = {
+  background: "linear-gradient(180deg, #6772ff 0%, #5468ff 100%)",
+  color: "#fff",
+  border: "none",
+};
+
+const paginationEllipsisStyle = {
+  padding: "0 8px",
+  fontSize: 13,
   color: "#6b7280",
 };

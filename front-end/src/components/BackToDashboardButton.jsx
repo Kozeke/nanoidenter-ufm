@@ -1,10 +1,21 @@
 import { useNavigate } from "react-router-dom";
+import { useAuthStore } from "../state/useAuthStore";
 
 export default function BackToDashboardButton() {
   const navigate = useNavigate();
+  const profileCompleted = useAuthStore((s) => s.profileCompleted);
+
+  const handleClick = () => {
+    if (!profileCompleted) {
+      alert("Profile required fields are required. Please complete your profile to access the dashboard.");
+      navigate("/profile");
+      return;
+    }
+    navigate("/dashboard");
+  };
 
   return (
-    <button onClick={() => navigate("/dashboard")} style={buttonStyle}>
+    <button onClick={handleClick} style={buttonStyle}>
       ← Back to Analysis
     </button>
   );

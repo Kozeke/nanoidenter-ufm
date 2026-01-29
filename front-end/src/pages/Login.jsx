@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { login as loginApi } from "../api/auth";
+import { login as loginApi, getMe } from "../api/auth";
 import { useAuthStore } from "../state/useAuthStore";
 import { useNavigate, Link } from "react-router-dom";
 
@@ -10,6 +10,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
 
   const login = useAuthStore((s) => s.login);
+  const setUser = useAuthStore((s) => s.setUser);
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -22,7 +23,13 @@ export default function Login() {
     try {
       const res = await loginApi(email, password);
       login(res.access_token);
-      navigate("/profile");
+      
+      // Fetch user data to check profile completion status
+      const userData = await getMe(res.access_token);
+      setUser(userData);
+      
+      // Navigate based on profile completion status
+      navigate(userData.profile_completed ? "/dashboard" : "/profile");
     } catch (err) {
       setError(err.message);
       setLoading(false);

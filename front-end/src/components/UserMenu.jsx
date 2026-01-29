@@ -12,6 +12,7 @@ export default function UserMenu() {
   const navigate = useNavigate();
   const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
+  const profileCompleted = useAuthStore((s) => s.profileCompleted);
 
   const [coords, setCoords] = useState({ top: 0, right: 0 });
 
@@ -121,7 +122,14 @@ export default function UserMenu() {
             />
             <MenuItem
               label="My Experiments"
-              onClick={() => navigate("/experiments")}
+              onClick={() => {
+                if (!profileCompleted) {
+                  alert("Profile required fields are required. Please complete your profile to access experiments.");
+                  navigate("/profile");
+                  return;
+                }
+                navigate("/experiments");
+              }}
             />
             <Divider />
             <MenuItem label="Logout" danger onClick={handleLogout} />
