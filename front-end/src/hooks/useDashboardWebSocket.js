@@ -386,6 +386,13 @@ export const useDashboardWebSocket = () => {
           }
           const newCurves =
             indentationGraph.curves || { curves_cp: [], curves_fparam: [] };
+          // If incoming curves are empty, clear the data instead of appending
+          const hasNewCurves = (newCurves.curves_cp?.length > 0) || (newCurves.curves_fparam?.length > 0);
+          if (!hasNewCurves) {
+            // Reset domain when clearing curves
+            setIndentationDomain({ xMin: null, xMax: null, yMin: null, yMax: null });
+            return { curves_cp: [], curves_fparam: [] };
+          }
           return {
             curves_cp: [...(prevData.curves_cp || []), ...(newCurves.curves_cp || [])],
             curves_fparam: [
@@ -411,6 +418,13 @@ export const useDashboardWebSocket = () => {
           const newCurves = elspectraGraph.curves || [];
           const newElasticityParams =
             elspectraGraph.curves_elasticity_param || [];
+          // If incoming curves are empty, clear the data instead of appending
+          const hasNewCurves = (newCurves.length > 0) || (newElasticityParams.length > 0);
+          if (!hasNewCurves) {
+            // Reset domain when clearing curves
+            setElspectraDomain({ xMin: null, xMax: null, yMin: null, yMax: null });
+            return { curves: [], curves_elasticity_param: [] };
+          }
           return {
             curves: [...(prevData.curves || []), ...newCurves],
             curves_elasticity_param: [
