@@ -88,7 +88,13 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
         if curve_ids:
             converted_curve_ids = []
             for curve_id in curve_ids:
-                match = re.match(r"curve(\d+)", curve_id)
+                # Convert integer curve_id to "curve{id}" format if needed
+                if isinstance(curve_id, int):
+                    curve_id = f"curve{curve_id}"
+                elif isinstance(curve_id, str) and curve_id.isdigit():
+                    curve_id = f"curve{curve_id}"
+                
+                match = re.match(r"curve(\d+)", str(curve_id))
                 if not match:
                     errors.append(f"Invalid curve_id format: {curve_id}")
                     logger.error(f"Invalid curve_id: {curve_id}")
@@ -145,6 +151,7 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
             "filters": filters,  # Pass filters to the exporter
             "force_model_params": force_model_params,  # Pass force model parameters for Hertz fit calculations
             "elasticity_params": data.get("elasticity_params") or {},  # optional, but add
+            "youngs_modulus_formatted": data.get("youngs_modulus_formatted"),  # Pass Young's modulus from websocket stats
         }
         
         num_exported = exporter.export(
@@ -192,7 +199,13 @@ async def calculate_softmech_metadata(data: Dict[str, Any]):
         if curve_ids:
             converted_curve_ids = []
             for curve_id in curve_ids:
-                match = re.match(r"curve(\d+)", curve_id)
+                # Convert integer curve_id to "curve{id}" format if needed
+                if isinstance(curve_id, int):
+                    curve_id = f"curve{curve_id}"
+                elif isinstance(curve_id, str) and curve_id.isdigit():
+                    curve_id = f"curve{curve_id}"
+                
+                match = re.match(r"curve(\d+)", str(curve_id))
                 if match:
                     converted_curve_ids.append(int(match.group(1)))
         

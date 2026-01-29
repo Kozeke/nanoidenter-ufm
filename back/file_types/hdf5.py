@@ -195,7 +195,7 @@ def validate_and_fill_metadata(metadata: Dict, curve_name: str) -> Dict:
         "spring_constant": 0.1,
         "inv_ols": 22e-9,
         "tip_geometry": "pyramid",
-        "tip_radius": 1e-6,
+        "tip_radius": 1e-5,
         "sampling_rate": 1e5,
         "velocity": 1e-6
     }
@@ -328,7 +328,7 @@ def export_from_duckdb_to_hdf5(
                     metadata_subgroup.attrs["spring_constant"] = float(spring_constant or 0.1)
                     metadata_subgroup.attrs["inv_ols"] = float(inv_ols or 1.0)
                     metadata_subgroup.attrs["tip_geometry"] = tip_geometry or "unknown"
-                    metadata_subgroup.attrs["tip_radius"] = float(tip_radius or 1e-6)
+                    metadata_subgroup.attrs["tip_radius"] = float(tip_radius or 1e-5)
                     metadata_subgroup.attrs["sampling_rate"] = float(sampling_rate or 1e5)
                     metadata_subgroup.attrs["velocity"] = float(velocity or 1e-6)
                     metadata_subgroup.attrs["no_points"] = int(no_points or 0)

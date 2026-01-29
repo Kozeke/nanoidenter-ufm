@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 import json
 import duckdb
 import os
+import platform  
 import logging
 # from db import transform_hdf5_to_db
 from filters.register_all import register_filters
@@ -14,7 +15,11 @@ from db.connection import get_conn
 from db.init_db import ensure_cache_tables
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any
+from utils.stats import format_stat, is_valid_param_vector
+from utils.cache import warmup_cp_cache, clear_cache
 
+# Detect OS for parallel processing strategy
+IS_WINDOWS = platform.system() == 'Windows'
 
 app = FastAPI()
 
@@ -65,11 +70,15 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
         For string compute: Dict containing either "fparams" or "elasticity_params" key with results
         For dict compute_spec: Tuple (True, out_dict) where out_dict contains full result structure
     """
+    print(f"[Worker] Processing {len(curve_ids)} curves...")
+    
     # Each worker gets its own read-only connection (separate process, won't conflict with main process)
-    conn = duckdb.connect(DB_PATH, read_only=True)
+    # Use DB_PATH from environment or default
+    db_path = os.environ.get("DB_PATH", "data/experiment.db")
+    conn = duckdb.connect(db_path, read_only=True)
     try:
         # Let DuckDB parallelize *inside* each query too (tune as you like)
-        conn.execute(f"PRAGMA threads = {os.cpu_count() or 2};")
+        conn.execute(f"PRAGMA threads = {max(1, (os.cpu_count() or 2) // 4)};")  # Limit threads per worker
 
         # Every process must (re)register UDFs
         register_filters(conn)
@@ -114,6 +123,8 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
                 elastic_model_params=elastic_model_params
             )
             
+            print(f"[Worker] Pipeline complete. g_fi type: {type(g_fi)}, g_el type: {type(g_el)}")
+            
             # Build result dict with full structure
             out = {
                 "num_curves": len(curve_ids),
@@ -128,12 +139,14 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
                 if g_el and isinstance(g_el, dict):
                     elasticity_params_list = g_el.get("curves_elasticity_param", [])
                 out["elasticity_params"] = elasticity_params_list
+                print(f"[Worker] Extracted {len(elasticity_params_list)} elasticity params")
                 
             elif compute_type == "fparams":
                 fparams_list = []
                 if g_fi and isinstance(g_fi.get("curves"), dict):
                     fparams_list = g_fi["curves"].get("curves_fparam", [])
                 out["fparams"] = fparams_list
+                print(f"[Worker] Extracted {len(fparams_list)} fparams")
             
             # Return tuple format for streaming endpoints
             return True, out
@@ -162,6 +175,11 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
             else:
                 return {}
 
+    except Exception as e:
+        print(f"[Worker] ERROR: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise  # Re-raise to be caught by executor
     finally:
         conn.close()
 
@@ -183,6 +201,18 @@ async def websocket_data_stream(websocket: WebSocket):
         register_filters(conn)
         # Ensure cache tables exist
         ensure_cache_tables(conn)
+        
+        # Optimize DuckDB for single-CPU instances
+        cpu_count = os.cpu_count() or 1
+        if cpu_count == 1:
+            # Single CPU - disable DuckDB parallelism to reduce overhead
+            conn.execute("PRAGMA threads = 1;")
+            print("ℹ️ DuckDB optimized for single CPU (threads=1)")
+        else:
+            # Multi-CPU - let DuckDB use parallelism
+            conn.execute(f"PRAGMA threads = {cpu_count};")
+            print(f"ℹ️ DuckDB configured for {cpu_count} CPU cores")
+        
         print("Filters registered")
 
         # Debug: List tables after register_filters
@@ -270,7 +300,7 @@ async def websocket_data_stream(websocket: WebSocket):
                 compute_scope = request_data.get("compute_scope")
 
                 # If client asked for metadata, send it,
-                # but DO NOT skip curve processing – we still fall through.
+                # but DO NOT skip curve processing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ we still fall through.
                 if action == "get_metadata":
                     await get_metadata(conn, websocket)
 
@@ -280,6 +310,8 @@ async def websocket_data_stream(websocket: WebSocket):
                         compute_scope = "fmodel_only"
                     elif action == "update_emodel":
                         compute_scope = "emodel_only"
+                    elif action == "compute_stats":
+                        compute_scope = "model_stats"
                     else:
                         compute_scope = "full"
                 compute_scope = str(compute_scope).lower()
@@ -306,41 +338,215 @@ async def websocket_data_stream(websocket: WebSocket):
                 })  # Extract force model parameters
                 print(f"Received request: num_curves={num_curves}, curve_id={curve_id}, filters={filters}")
 
-                # Fetch curve IDs based on request
-                if curve_id:
-                    # If specific curve_id is provided, only fetch that curve
-                    curve_ids = [curve_id]
-                    # print(f"Fetching specific curve_id: {curve_ids}")
-                else:
-                    # Otherwise fetch based on num_curves
+                # --- Population stats ignore curve_id ---
+                if compute_scope == "model_stats":
                     curve_ids_result = conn.execute(
-                        "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
+                        "SELECT curve_id FROM force_vs_z"
                     ).fetchall()
-                    curve_ids = [str(row[0]) for row in curve_ids_result]  # Ensure string IDs
-                    # print(f"Total curve IDs fetched: {curve_ids}")
+                    curve_ids = [str(row[0]) for row in curve_ids_result]
+                    # Added before using cp_filters
+                    cp_filters = filters.get("cp_filters", {})
+                    # Optimization: Pre-warm CP cache for ALL curves before parallel processing
+                    if cp_filters:
+                        print(f"ðŸ”¥ Pre-warming CP cache for {len(curve_ids)} curves before parallel processing...")
+                        metadata_global = get_metadata_for_curves(conn, curve_ids)
+                        warmup_cp_cache(
+                            conn, 
+                            [int(cid) for cid in curve_ids], 
+                            cp_filters, 
+                            metadata_global,
+                            batch_size=100  # Larger batches for initial warmup
+                        )
+                        print(f"âœ… CP cache ready for parallel processing")
 
-                # Process in batches
-                for i in range(0, len(curve_ids), BATCH_SIZE):
-                    batch_ids = curve_ids[i:i + BATCH_SIZE]
-                    # print(f"Processing batch: {batch_ids}")
-                    await process_and_stream_batch(
-                        conn,
-                        batch_ids,
-                        filters,
-                        websocket,
-                        curve_id,
-                        filters_changed,
-                        set_zero_force,
-                        elasticity_params,
-                        elastic_model_params,
-                        force_model_params,
-                        compute_scope=compute_scope,
-                    )
-                    await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
-                # print("send meta and now curves")
-                # Signal completion of this request
-                await websocket.send_text(json.dumps({"status": "complete"}))
-                # print("Request completed")
+                else:
+                    if curve_id:
+                        curve_ids = [curve_id]
+                    else:
+                        curve_ids_result = conn.execute(
+                            "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
+                        ).fetchall()
+                        curve_ids = [str(row[0]) for row in curve_ids_result]
+
+                # --- ADD THIS ---
+                global_force_params = []
+                global_elastic_params = []
+                # Added before using has_fmodel and has_emodel
+                has_fmodel = bool(filters.get("f_models", {}))
+                has_emodel = bool(filters.get("e_models", {}))
+                
+                # Check if parallel processing is feasible based on system resources
+                try:
+                    import psutil
+                    available_memory_gb = psutil.virtual_memory().available / (1024**3)
+                except ImportError:
+                    # psutil not available - assume constrained environment
+                    print("⚠️ psutil not available, assuming constrained environment")
+                    available_memory_gb = 0.5  # Conservative estimate
+                
+                cpu_count = os.cpu_count() or 1
+                
+                # Require at least 1.5GB free RAM and 2+ CPU cores for parallel processing
+                can_parallelize = (
+                    available_memory_gb >= 1.5 and 
+                    cpu_count >= 2 and 
+                    not IS_WINDOWS
+                )
+                
+                if not can_parallelize:
+                    print(f"⚠️ Parallel processing disabled: insufficient resources")
+                    print(f"   Available RAM: {available_memory_gb:.1f} GB (need 1.5+ GB)")
+                    print(f"   CPU cores: {cpu_count} (need 2+)")
+                    print(f"   Using sequential processing instead...")
+                
+                # Optimization: Use parallel processing for model_stats (only if resources available)
+                if compute_scope == "model_stats" and len(curve_ids) > BATCH_SIZE and can_parallelize:
+                    print(f"ðŸš€ Using parallel processing for {len(curve_ids)} curves...")
+                    
+                    # Create larger batches for parallel processing (100 curves per worker)
+                    parallel_batch_size = 100
+                    parallel_batches = [
+                        curve_ids[i:i+parallel_batch_size] 
+                        for i in range(0, len(curve_ids), parallel_batch_size)
+                    ]
+                    
+                    # Use ProcessPoolExecutor for true parallelism
+                    max_workers = min(os.cpu_count() or 2, len(parallel_batches))
+                    
+                    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                        # Submit all batches
+                        futures = []
+                        for batch in parallel_batches:
+                            # Create compute spec for worker
+                            compute_spec = {
+                                "compute": "fparams" if has_fmodel else "elasticity",
+                                "emodel_params": elastic_model_params,
+                                "elasticity_params": elasticity_params if has_emodel else None,
+                            }
+                            
+                            future = executor.submit(
+                                _parallel_worker, 
+                                batch, 
+                                filters, 
+                                compute_spec
+                            )
+                            futures.append((future, batch))
+                        
+                        # Collect results as they complete
+                        completed = 0
+                        for future, batch in futures:
+                            try:
+                                success, result = future.result()
+                                
+                                if success:
+                                    # Extract force params
+                                    if has_fmodel and "fparams" in result:
+                                        for r in result["fparams"]:
+                                            if is_valid_param_vector(r.get("fparam")):
+                                                global_force_params.append(r["fparam"])
+                                    
+                                    # Extract elastic params
+                                    if has_emodel and "elasticity_params" in result:
+                                        for r in result["elasticity_params"]:
+                                            if is_valid_param_vector(r.get("elasticity_param")):
+                                                global_elastic_params.append(r["elasticity_param"])
+                                
+                                completed += len(batch)
+                                progress = (completed / len(curve_ids)) * 100
+                                print(f"  ðŸ“Š Progress: {completed}/{len(curve_ids)} curves ({progress:.1f}%)")
+                            
+                            except Exception as e:
+                                print(f"  âŒ Error processing batch: {e}")
+                                continue
+                    
+                    print(f"âœ… Parallel processing complete: {len(global_force_params)} force params, {len(global_elastic_params)} elastic params")
+                
+                else:
+                    # Sequential processing for small datasets, constrained resources, or non-model_stats
+                    # Adjust batch size based on available resources (use variable from resource check above)
+                    if available_memory_gb < 1.0:
+                        # Very constrained - use smaller batches
+                        batch_size_to_use = 5
+                        print(f"⚠️ Low memory detected ({available_memory_gb:.1f} GB), using batch size: {batch_size_to_use}")
+                    elif available_memory_gb < 2.0:
+                        # Moderately constrained - medium batches
+                        batch_size_to_use = 10
+                        print(f"ℹ️ Moderate resources ({available_memory_gb:.1f} GB, {cpu_count} CPU), using batch size: {batch_size_to_use}")
+                    elif cpu_count == 1:
+                        # Single CPU but good memory - larger batches for efficiency
+                        batch_size_to_use = 20
+                        print(f"ℹ️ Single CPU with good memory ({available_memory_gb:.1f} GB), using batch size: {batch_size_to_use}")
+                    else:
+                        # Normal batch size
+                        batch_size_to_use = BATCH_SIZE
+                        print(f"ℹ️ Using standard batch size: {batch_size_to_use}")
+                    
+                    total_batches = (len(curve_ids) + batch_size_to_use - 1) // batch_size_to_use
+                    
+                    # Process in batches
+                    for i in range(0, len(curve_ids), batch_size_to_use):
+                        batch_ids = curve_ids[i:i + batch_size_to_use]
+                        batch_num = i // batch_size_to_use + 1
+                        
+                        if compute_scope == "model_stats":
+                            print(f"📊 Sequential processing: batch {batch_num}/{total_batches} ({len(batch_ids)} curves)")
+                        
+                        await process_and_stream_batch(
+                            conn,
+                            batch_ids,
+                            filters,
+                            websocket,
+                            curve_id,
+                            filters_changed,
+                            set_zero_force,
+                            elasticity_params,
+                            elastic_model_params,
+                            force_model_params,
+                            compute_scope=compute_scope,
+                            global_force_params=global_force_params,
+                            global_elastic_params=global_elastic_params,
+                        )
+                        await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
+                
+                    # print("send meta and now curves")
+                    if compute_scope == "model_stats":
+                        stats = {}
+
+                        if len(global_force_params) >= 2:
+                            n_params = len(global_force_params[0])
+                            params_by_index = [
+                                [p[i] for p in global_force_params]
+                                for i in range(n_params)
+                            ]
+                            stats["force_params"] = {
+                                f"p{i}": format_stat(values)
+                                for i, values in enumerate(params_by_index)
+                                if len(values) >= 2
+                            }
+
+                        if len(global_elastic_params) >= 2:
+                            n_params = len(global_elastic_params[0])
+                            params_by_index = [
+                                [p[i] for p in global_elastic_params]
+                                for i in range(n_params)
+                            ]
+                            stats["elasticity_params"] = {
+                                f"p{i}": format_stat(values)
+                                for i, values in enumerate(params_by_index)
+                                if len(values) >= 2
+                            }
+
+                        await websocket.send_text(json.dumps({
+                            "status": "model_stats",
+                            "data": {
+                                "stats": stats,
+                                "num_curves": len(curve_ids)
+                            }
+                        }))
+
+                    # Signal completion of this request
+                    await websocket.send_text(json.dumps({"status": "complete"}))
+                    # print("Request completed")
 
             except WebSocketDisconnect:
                 # print("Client disconnected.")
@@ -409,22 +615,24 @@ async def process_and_stream_batch(
     elastic_model_params: Dict = None,
     force_model_params: Dict = None,
     compute_scope: str = "full",  # NEW
+    global_force_params: list = None,
+    global_elastic_params: list = None,
 ) -> None:
     """
     Process a batch of curve IDs and optionally a single curve ID, fetch data from DuckDB,
     and stream results via WebSocket.
 
     compute_scope:
-        - "full"         → compute all graphs (current behaviour)
-        - "fmodel_only"  → update only force-model overlay (indentation graph)
-        - "emodel_only"  → update only elasticity-model overlay (elspectra graph)
+        - "full"         ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ compute all graphs (current behaviour)
+        - "fmodel_only"  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ update only force-model overlay (indentation graph)
+        - "emodel_only"  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ update only elasticity-model overlay (elspectra graph)
     """
     try:
         loop = asyncio.get_running_loop()
 
         # Normalise scope
         compute_scope = (compute_scope or "full").lower()
-        if compute_scope not in {"full", "fmodel_only", "emodel_only"}:
+        if compute_scope not in {"full", "fmodel_only", "emodel_only", "model_stats"}:
             compute_scope = "full"
 
         scope_full = compute_scope == "full"
@@ -438,14 +646,27 @@ async def process_and_stream_batch(
             "f_models": dict(filters.get("f_models", {})),
             "e_models": dict(filters.get("e_models", {})),
         }
+        cp_filters = filters_for_call.get("cp_filters", {})     # Added before using cp_filters
+        # --- Model stats scope ---
+        scope_model_stats = compute_scope == "model_stats"
+        print("scope_model_stats", scope_model_stats)
+        has_fmodel = bool(filters_for_call["f_models"])
+        has_emodel = bool(filters_for_call["e_models"])
+
+        run_force_population = scope_model_stats and has_fmodel
+        run_elastic_population = scope_model_stats and has_emodel
 
         # Decide which parts of the pipeline we actually need
-        if scope_f_only:
-            # Only force-model (uses indentation) → no elasticity models, no elspectra
+        # Optimization: skip expensive elspectra when only fmodel stats needed
+        if scope_model_stats and run_force_population and not run_elastic_population:
+            compute_elspectra_flag = False
+            print(f"Ã¢Å¡Â¡ Optimization: Skipping elspectra for force-only population stats")
+        elif scope_f_only:
+            # Only force-model (uses indentation) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ no elasticity models, no elspectra
             filters_for_call["e_models"] = {}
             compute_elspectra_flag = False
         elif scope_e_only:
-            # Only elasticity-model (uses elspectra) → no force models
+            # Only elasticity-model (uses elspectra) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ no force models
             filters_for_call["f_models"] = {}
             compute_elspectra_flag = True
         else:
@@ -490,6 +711,12 @@ async def process_and_stream_batch(
             # ---- BATCH PATH (full graphs) ----
             elif filters_changed or not curve_id or scope_full:
                 print(f"Batch processing ({compute_scope}):", batch_ids)
+                
+                # Optimization: Warm up CP cache for model stats before parallel processing
+                if scope_model_stats and cp_filters:
+                    print(f"ðŸ”¥ Pre-warming CP cache for {len(batch_ids)} curves...")
+                    warmup_cp_cache(conn, [int(cid) for cid in batch_ids], cp_filters, metadata, batch_size=50)
+                
                 graph_force_vs_z, graph_force_indentation, graph_elspectra = await loop.run_in_executor(
                     executor,
                     lambda: fetch_curves_batch(
@@ -502,6 +729,8 @@ async def process_and_stream_batch(
                         elastic_model_params=elastic_model_params,
                         force_model_params=force_model_params,
                         compute_elspectra=compute_elspectra_flag,
+                        force_model_population=run_force_population,
+                        elastic_model_population=run_elastic_population,
                     ),
                 )
 
@@ -510,16 +739,34 @@ async def process_and_stream_batch(
             "status": "batch",
             "data": {},
         }
+        print("qwertrtt")
+        if scope_model_stats:
+            # Force params come from graph_force_indentation["curves"]["curves_fparam"]
+            curves_block = graph_force_indentation.get("curves", {}) if graph_force_indentation else {}
 
-        if scope_full:
-            # Original behaviour: send all graphs if present
+            if run_force_population and "curves_fparam" in curves_block:
+                for r in curves_block["curves_fparam"]:
+                    if is_valid_param_vector(r.get("fparam")):
+                        global_force_params.append(r["fparam"])
+
+            # Elasticity params come from graph_elspectra["curves_elasticity_param"] (top-level, not inside "curves")
+            if run_elastic_population and graph_elspectra:
+                elasticity_params_list = graph_elspectra.get("curves_elasticity_param", [])
+                for r in elasticity_params_list:
+                    if is_valid_param_vector(r.get("elasticity_param")):
+                        global_elastic_params.append(r["elasticity_param"])
+
+            # ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â´ DO NOT SEND STATS HERE
+            return
+
+        elif scope_full:
+            # existing logic, unchanged
             if graph_force_vs_z:
                 response_data["data"].update({
                     "graphForcevsZ": graph_force_vs_z,
                     "graphForceIndentation": graph_force_indentation,
                     "graphElspectra": graph_elspectra,
                 })
-
             if graph_force_vs_z_single:
                 response_data["data"].update({
                     "graphForcevsZSingle": graph_force_vs_z_single,
@@ -528,17 +775,12 @@ async def process_and_stream_batch(
                 })
 
         elif scope_f_only:
-            # Only update force-model overlay on the indentation graph
-            # → do NOT touch force-vs-Z or elspectra in this payload
             if graph_force_indentation_single:
                 response_data["data"]["graphForceIndentationSingle"] = graph_force_indentation_single
 
         elif scope_e_only:
-            # Only update elasticity-model overlay on the elspectra graph
-            # → do NOT touch other graphs
             if graph_elspectra_single:
                 response_data["data"]["graphElspectraSingle"] = graph_elspectra_single
-
         # Send or report empty
         if response_data["data"]:
             await websocket.send_text(json.dumps(
@@ -566,11 +808,11 @@ async def startup_event():
     """Load HDF5 data into DuckDB and set up filters when the server starts."""
     # Check if DB needs initialization
     # if not os.path.exists(DB_PATH) or os.stat(DB_PATH).st_size == 0:
-    #     print("🚀 Loading HDF5 data into DuckDB...")
+    #     print("ÃƒÂ°Ã…Â¸Ã…Â¡Ã¢â€šÂ¬ Loading HDF5 data into DuckDB...")
     #     transform_hdf5_to_db(HDF5_FILE_PATH, DB_PATH)
     # else:
-    #     print("✅ DuckDB database already exists, skipping reload.")
-    print("✅ Startup complete.")
+    #     print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ DuckDB database already exists, skipping reload.")
+    print("ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Startup complete.")
 
 
 from fastapi import FastAPI, UploadFile, HTTPException
@@ -600,6 +842,7 @@ from pathlib import Path
 from routers.opener import router as experiment_router
 from routers.exporter import router as exporter_router
 from auth.router import router as auth_router
+from experiments.router import router as experiments_router
 
 # Configure logging
 logging.basicConfig(
@@ -613,7 +856,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 app.include_router(experiment_router)
 app.include_router(exporter_router)
-
+app.include_router(experiments_router)
 app.include_router(auth_router)
 
 
@@ -636,104 +879,104 @@ def validate_hdf5_path(path: str) -> None:
     if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_/]*[a-zA-Z0-9]$', path):
         raise ValueError("HDF5 path contains invalid characters")
 
-@app.post("/export-hdf5")
-async def export_hdf5_endpoint(data: Dict[str, Any]):
-    """Export curves from DuckDB to an HDF5 file with custom level names and metadata."""
-    export_hdf5_path = data.get("export_hdf5_path")
-    curve_ids = data.get("curve_ids", [])
-    dataset_path = data.get("dataset_path")
-    num_curves = data.get("num_curves")
-    level_names = data.get("level_names", ["curve0", "segment0"])
-    metadata_path = data.get("metadata_path", "")
-    metadata = data.get("metadata", {})
-    db_path = "data/experiment.db"
-    errors = []
+# @app.post("/export-hdf5")
+# async def export_hdf5_endpoint(data: Dict[str, Any]):
+#     """Export curves from DuckDB to an HDF5 file with custom level names and metadata."""
+#     export_hdf5_path = data.get("export_hdf5_path")
+#     curve_ids = data.get("curve_ids", [])
+#     dataset_path = data.get("dataset_path")
+#     num_curves = data.get("num_curves")
+#     level_names = data.get("level_names", ["curve0", "segment0"])
+#     metadata_path = data.get("metadata_path", "")
+#     metadata = data.get("metadata", {})
+#     db_path = "data/experiment.db"
+#     errors = []
 
-    # Validate export_hdf5_path
-    if not export_hdf5_path:
-        errors.append("Missing export_hdf5_path")
-        logger.error("Missing export_hdf5_path")
-        raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing export_hdf5_path", "errors": errors})
+#     # Validate export_hdf5_path
+#     if not export_hdf5_path:
+#         errors.append("Missing export_hdf5_path")
+#         logger.error("Missing export_hdf5_path")
+#         raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing export_hdf5_path", "errors": errors})
 
-    try:
-        # Sanitize file system path
-        export_hdf5_path = sanitize_file_path(export_hdf5_path)
+#     try:
+#         # Sanitize file system path
+#         export_hdf5_path = sanitize_file_path(export_hdf5_path)
 
-        # Validate dataset_path (required for HDF5 data storage)
-        if not dataset_path:
-            errors.append("Missing dataset_path")
-            logger.error("Missing dataset_path")
-            raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing dataset_path", "errors": errors})
-        validate_hdf5_path(dataset_path)
+#         # Validate dataset_path (required for HDF5 data storage)
+#         if not dataset_path:
+#             errors.append("Missing dataset_path")
+#             logger.error("Missing dataset_path")
+#             raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing dataset_path", "errors": errors})
+#         validate_hdf5_path(dataset_path)
 
-        # Validate metadata_path (optional, can be empty)
-        if metadata_path:
-            validate_hdf5_path(metadata_path)
+#         # Validate metadata_path (optional, can be empty)
+#         if metadata_path:
+#             validate_hdf5_path(metadata_path)
 
-        # Convert curve_ids
-        converted_curve_ids = None
-        if curve_ids:
-            converted_curve_ids = []
-            for curve_id in curve_ids:
-                match = re.match(r"curve(\d+)", curve_id)
-                if not match:
-                    errors.append(f"Invalid curve_id format: {curve_id}")
-                    logger.error(f"Invalid curve_id: {curve_id}")
-                    raise HTTPException(status_code=400, detail={"status": "error", "message": f"Invalid curve_id: {curve_id}", "errors": errors})
-                converted_curve_ids.append(int(match.group(1)))
+#         # Convert curve_ids
+#         converted_curve_ids = None
+#         if curve_ids:
+#             converted_curve_ids = []
+#             for curve_id in curve_ids:
+#                 match = re.match(r"curve(\d+)", curve_id)
+#                 if not match:
+#                     errors.append(f"Invalid curve_id format: {curve_id}")
+#                     logger.error(f"Invalid curve_id: {curve_id}")
+#                     raise HTTPException(status_code=400, detail={"status": "error", "message": f"Invalid curve_id: {curve_id}", "errors": errors})
+#                 converted_curve_ids.append(int(match.group(1)))
 
-        # Fetch curve_ids if num_curves is provided
-        if not converted_curve_ids and num_curves is not None:
-            if not isinstance(num_curves, int) or num_curves <= 0:
-                errors.append("num_curves must be a positive integer")
-                raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid num_curves", "errors": errors})
-            with duckdb.connect(db_path) as conn:
-                curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
-                converted_curve_ids = [row[0] for row in curve_ids_result]
+#         # Fetch curve_ids if num_curves is provided
+#         if not converted_curve_ids and num_curves is not None:
+#             if not isinstance(num_curves, int) or num_curves <= 0:
+#                 errors.append("num_curves must be a positive integer")
+#                 raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid num_curves", "errors": errors})
+#             with duckdb.connect(db_path) as conn:
+#                 curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
+#                 converted_curve_ids = [row[0] for row in curve_ids_result]
 
-        # Validate level_names
-        if not all(isinstance(name, str) and name.strip() for name in level_names):
-            errors.append("All level names must be non-empty strings")
-            raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid level names", "errors": errors})
+#         # Validate level_names
+#         if not all(isinstance(name, str) and name.strip() for name in level_names):
+#             errors.append("All level names must be non-empty strings")
+#             raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid level names", "errors": errors})
 
-        # Validate metadata
-        for key, value in metadata.items():
-            if value and isinstance(value, str) and not value.strip():
-                errors.append(f"Metadata field {key} cannot be empty")
-        if errors:
-            raise HTTPException(status_code=400, detail={
-                "status": "error",
-                "message": "Invalid metadata",
-                "errors": errors
-            })
+#         # Validate metadata
+#         for key, value in metadata.items():
+#             if value and isinstance(value, str) and not value.strip():
+#                 errors.append(f"Metadata field {key} cannot be empty")
+#         if errors:
+#             raise HTTPException(status_code=400, detail={
+#                 "status": "error",
+#                 "message": "Invalid metadata",
+#                 "errors": errors
+#             })
 
-        logger.info(f"Starting HDF5 export to {export_hdf5_path} with {len(converted_curve_ids or [])} curves")
-        os.makedirs(os.path.dirname(export_hdf5_path), exist_ok=True)
-        num_exported = export_from_duckdb_to_hdf5(
-            db_path=db_path,
-            output_path=export_hdf5_path,  # Fixed: Use output_path instead of export_hdf5_path
-            curve_ids=converted_curve_ids,
-            dataset_path=dataset_path,  # Pass dataset_path for HDF5 data storage
-            level_names=level_names,
-            metadata_path=metadata_path,
-            metadata=metadata
-        )
+#         logger.info(f"Starting HDF5 export to {export_hdf5_path} with {len(converted_curve_ids or [])} curves")
+#         os.makedirs(os.path.dirname(export_hdf5_path), exist_ok=True)
+#         num_exported = export_from_duckdb_to_hdf5(
+#             db_path=db_path,
+#             output_path=export_hdf5_path,  # Fixed: Use output_path instead of export_hdf5_path
+#             curve_ids=converted_curve_ids,
+#             dataset_path=dataset_path,  # Pass dataset_path for HDF5 data storage
+#             level_names=level_names,
+#             metadata_path=metadata_path,
+#             metadata=metadata
+#         )
 
-        return {
-            "status": "success",
-            "message": f"Successfully exported {num_exported} curves",
-            "export_hdf5_path": export_hdf5_path,
-            "exported_curves": num_exported
-        }
-    except Exception as e:
-        errors.append(str(e))
-        logger.error(f"Failed to export to HDF5: {str(e)}")
-        raise HTTPException(status_code=500, detail={
-            "status": "error",
-            "message": f"Failed to export: {str(e)}",
-            "export_hdf5_path": export_hdf5_path,
-            "errors": errors
-        })
+#         return {
+#             "status": "success",
+#             "message": f"Successfully exported {num_exported} curves",
+#             "export_hdf5_path": export_hdf5_path,
+#             "exported_curves": num_exported
+#         }
+#     except Exception as e:
+#         errors.append(str(e))
+#         logger.error(f"Failed to export to HDF5: {str(e)}")
+#         raise HTTPException(status_code=500, detail={
+#             "status": "error",
+#             "message": f"Failed to export: {str(e)}",
+#             "export_hdf5_path": export_hdf5_path,
+#             "errors": errors
+#         })
 
 
 # New endpoint to fetch all curves' fparams with progress streaming
@@ -805,9 +1048,7 @@ async def get_all_fparams_stream(data: Dict[str, Any]):
                     curves_data = graph_force_indentation["curves"]
                     if isinstance(curves_data, dict) and "curves_fparam" in curves_data:
                         batch_fparams = curves_data["curves_fparam"]
-                        # Adjust curve_index to be global
-                        for fparam in batch_fparams:
-                            fparam["curve_index"] += i  # Add the batch offset
+                        # ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ FIX: No longer need to adjust curve_index - it's now the actual curve_id (global)
                         all_fparams.extend(batch_fparams)
                         print(f"Batch {batch_num}: Found {len(batch_fparams)} fparams")
                 
@@ -1052,3 +1293,38 @@ async def serve_exported_file(file_path: str):
         logger.error(f"File not found: {full_path}")
         raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(full_path, filename=os.path.basename(full_path))
+
+
+# Cache management endpoint
+@app.delete("/clear-cache")
+async def clear_cache_endpoint(cache_type: str = None):
+    """
+    Clear cache tables. Can clear all caches or specific cache types.
+    
+    Query Parameters:
+        cache_type: Optional. One of: "contact_points", "indentations", "elspectra"
+                    If not provided, clears all cache tables.
+    
+    Returns:
+        Dictionary with counts of deleted rows for each cache table
+    """
+    try:
+        conn = get_conn()
+        results = clear_cache(conn, cache_type)
+        
+        return {
+            "status": "success",
+            "message": f"Cache cleared successfully",
+            "deleted_rows": results
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={
+            "status": "error",
+            "message": str(e)
+        })
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail={
+            "status": "error",
+            "message": f"Failed to clear cache: {str(e)}"
+        })

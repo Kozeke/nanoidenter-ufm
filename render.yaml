@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: nanoidenter-ufm-front-end
+    env: static
+    buildCommand: npm install && npm run build
+    rootDir: front-end
+    staticPublishPath: build

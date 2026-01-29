@@ -23,7 +23,17 @@ def calc_elspectra(
     x = np.asarray(z_values, dtype=np.float64)
     y = np.asarray(force_values, dtype=np.float64)
 
-    # Same early-exit as original
+    # DEBUG: Check force values units
+    # print(f"DEBUG FORCE VALUES UNITS:", tip_radius, tip_geometry, tip_angle)
+    # print(f"  force_values range: [{y.min():.6e}, {y.max():.6e}]")
+    # print(f"  force_values mean: {y.mean():.6e}")
+    # print(f"  force_values std: {y.std():.6e}")
+    # print(f"  z_values range: [{x.min():.6e}, {x.max():.6e}] m")
+    # print(f"  Expected: Force should be in Newtons (N), typical range: 1e-9 to 1e-6 N")
+    # print(f"  If values are ~1e-3 to 1e0, they might be in milliNewtons (mN)")
+    # print(f"  If values are ~1e-6 to 1e-3, they might be in microNewtons (uN)")
+
+    # Early exit check from nano.py - check on length of indentation
     if x.size < 2:
         return None
 
@@ -33,25 +43,30 @@ def calc_elspectra(
         x_min = float(x.min())
         x_max = float(x.max())
 
-        # Preserve original min bound logic
+        # Preserve original min bound logic (same as nano.py)
         min_x = x_min if x_min > 1e-9 else 1.0e-9
         max_x = x_max
 
         # Same 1 nm grid step and range semantics as original
         xx = np.arange(min_x, max_x, 1.0e-9, dtype=np.float64)
-        # If range collapses, behave like original savgol path (will fail length check later)
+        # If range collapses to empty array, return early
         if xx.size == 0:
-            yy = np.empty(0, dtype=np.float64)
-            ddt = 1.0e-9
-        else:
-            yy = yi(xx)
-            ddt = 1.0e-9
+            print(f"  WARNING: Empty array after interpolation (min_x={min_x:.6e}, max_x={max_x:.6e})")
+            return None
+        
+        yy = yi(xx)
+        ddt = 1.0e-9
     else:
         # Original skipping of the first point
         xx = x[1:]
         yy = y[1:]
         # Same finite-difference spacing definition
         ddt = (x[-1] - x[1]) / (x.size - 2)
+
+    # Additional safety check: ensure arrays are not empty after processing
+    if xx.size == 0 or yy.size == 0:
+        print(f"  WARNING: Empty arrays after processing (xx.size={xx.size}, yy.size={yy.size})")
+        return None
 
     # --- Contact radius / geometry (same formulas as original) ---
     geom = tip_geometry
@@ -76,7 +91,7 @@ def calc_elspectra(
     if win % 2 == 0:
         win += 1
 
-    # Same length check as original
+    # Same length check as original (from nano.py line 189)
     if yy.size <= win:
         return False
 
@@ -92,5 +107,26 @@ def calc_elspectra(
     else:
         Ex = xx[dwin:-dwin]
         Ey = Ey[dwin:-dwin]
+
+    # DEBUG: Print unit information before returning (with safety checks like nano.py)
+    # print(f"DEBUG ELASTICITY UNITS:")
+    # print(f"  tip_radius: {tip_radius:.6e} m")
+    # if aradius.size > 0:
+    #     print(f"  aradius range: [{aradius.min():.6e}, {aradius.max():.6e}] m")
+    #     print(f"  coeff range: [{coeff.min():.6e}, {coeff.max():.6e}]")
+    # else:
+    #     print(f"  aradius: empty array (no data)")
+    # if deriv.size > 0:
+    #     print(f"  deriv range: [{deriv.min():.6e}, {deriv.max():.6e}]")
+    # if Ey.size > 0:
+    #     print(f"  Ey range: [{Ey.min():.6e}, {Ey.max():.6e}] Pa")
+    # else:
+    #     print(f"  Ey range: EMPTY ARRAY (no data after trimming)")
+    # print(f"  ddt: {ddt:.6e} m")
+
+    # Final safety check before returning
+    if Ex.size == 0 or Ey.size == 0:
+        print(f"  WARNING: Empty result arrays (Ex.size={Ex.size}, Ey.size={Ey.size})")
+        return None
 
     return [Ex.tolist(), Ey.tolist()]

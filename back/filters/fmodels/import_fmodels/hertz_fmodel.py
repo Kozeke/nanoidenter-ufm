@@ -11,7 +11,8 @@ class HertzFmodel(FmodelBase):
     def create(self):
         """Define the filter's parameters for the UI."""
         self.add_parameter("poisson", "float", "Poisson ratio", 0.5, options={"min": -1, "max": 0.5})
-
+        self.add_parameter('maxInd','float','Max indentation [nm]',800)
+        self.add_parameter('minInd','float','Min indentation [nm]',0)
     def theory(self, x, elastic):
         """
         Hertz model for various tip geometries.

@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useDashboardStore } from "../state/useDashboardStore";
-
+import { useAuthStore } from "../state/useAuthStore";
+import { normalizeForceStats, normalizeElasticityStats  } from "../utils/elasticityMapper"
 // Exposes dashboard curve data and WebSocket helpers to the presentation layer.
 export const useDashboardWebSocket = () => {
   // Stores Force–Z curve batches received from the backend.
@@ -40,6 +41,9 @@ export const useDashboardWebSocket = () => {
     yMax: null,
   });
 
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const token = useAuthStore((s) => s.token);
+
   // Stores metadata columns and sample rows for file operations.
   const [metadataObject, setMetadataObject] = useState({
     columns: [],
@@ -72,6 +76,12 @@ export const useDashboardWebSocket = () => {
   const prevNumCurvesRef = useRef(10);
   // Flags when the caller explicitly wants to re-request curves.
   const [forceRequest, setForceRequest] = useState(false);
+  // Tracks whether get_metadata operation is in progress
+  const metadataInProgressRef = useRef(false);
+  // Tracks whether compute_stats operation is in progress
+  const statsInProgressRef = useRef(false);
+  // Tracks the last status we saw to determine which operation a "complete" belongs to
+  const lastStatusRef = useRef(null);
 
   // Exposes the centralized dashboard store for shared state access.
   const dashboardStore = useDashboardStore();
@@ -111,11 +121,16 @@ export const useDashboardWebSocket = () => {
 
   // Sends a curve metadata request through the active WebSocket channel.
   const sendCurveRequest = useCallback(() => {
+    console.log("sendCurveReq")
     // Avoid sending requests when the socket is unavailable.
     if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
       return;
     }
+    console.log("sendCurveReq2")
 
+    // Mark metadata operation as in progress
+    metadataInProgressRef.current = true;
+    
     // Flag loading so UI elements stay responsive.
     setLoadingMulti({ curves: true });
     // Flag curve-specific loading while waiting for batches.
@@ -127,30 +142,31 @@ export const useDashboardWebSocket = () => {
       setIsLoadingCurves(false);
     }, 30000);
     socketRef.current.loadingTimeout = loadingTimeout;
+    console.log("sendCurveReq3")
 
     // Compares previous and current filter snapshots for change detection.
-    const areFiltersEqual = (prev, current) => {
-      if (!prev || !current) {
-        return false;
-      }
-      return JSON.stringify(prev) === JSON.stringify(current);
-    };
+    // const areFiltersEqual = (prev, current) => {
+    //   if (!prev || !current) {
+    //     return false;
+    //   }
+    //   return JSON.stringify(prev) === JSON.stringify(current);
+    // };
 
     // Determines if any filter group has changed since the last request.
-    const filtersChanged = !areFiltersEqual(
-      {
-        regular: prevFiltersRef.current.regular,
-        cp: prevFiltersRef.current.cp,
-        f_models: prevFiltersRef.current.f_models,
-        e_models: prevFiltersRef.current.e_models,
-      },
-      {
-        regular: regularFilters,
-        cp: cpFilters,
-        f_models: forceModels,
-        e_models: elasticityModels,
-      }
-    );
+    // const filtersChanged = !areFiltersEqual(
+    //   {
+    //     regular: prevFiltersRef.current.regular,
+    //     cp: prevFiltersRef.current.cp,
+    //     f_models: prevFiltersRef.current.f_models,
+    //     e_models: prevFiltersRef.current.e_models,
+    //   },
+    //   {
+    //     regular: regularFilters,
+    //     cp: cpFilters,
+    //     f_models: forceModels,
+    //     e_models: elasticityModels,
+    //   }
+    // );
 
     // Determines whether the requested curve count changed.
     const numCurvesChanged = prevNumCurvesRef.current !== numCurves;
@@ -163,7 +179,7 @@ export const useDashboardWebSocket = () => {
       yMax: null,
     };
 
-    if (filtersChanged || numCurvesChanged || forceRequest) {
+    if (numCurvesChanged || forceRequest) {
       setForceData([]);
       setIndentationData({ curves_cp: [], curves_fparam: [] });
       setElspectraData({ curves: [], curves_elasticity_param: [] });
@@ -216,7 +232,63 @@ export const useDashboardWebSocket = () => {
     setLoadingMulti,
     setIsLoadingCurves,
   ]);
-
+  
+  
+  const sendModelStatsRequest = useCallback(() => {
+    if (!socketRef.current || socketRef.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
+  
+    // Mark stats operation as in progress
+    statsInProgressRef.current = true;
+    
+    // Ensure loading is shown if stats computation starts
+    setLoadingMulti({ curves: true });
+    setIsLoadingCurves(true);
+  
+    const requestData = {
+      action: "compute_stats",
+      compute_scope: "model_stats",
+      num_curves: numCurves,
+      filters: {
+        regular: regularFilters,
+        cp_filters: cpFilters,
+        f_models: forceModels,
+        e_models: elasticityModels,
+      },
+      elasticity_params: elasticityParams,
+      elastic_model_params: elasticModelParams,
+      force_model_params: forceModelParams,
+      set_zero_force: setZeroForce,
+      // IMPORTANT: DO NOT send curve_id
+    };
+  
+    socketRef.current.send(JSON.stringify(requestData));
+  }, [
+    numCurves,
+    regularFilters,
+    cpFilters,
+    forceModels,
+    elasticityModels,
+    elasticityParams,
+    elasticModelParams,
+    forceModelParams,
+    setZeroForce,
+  ]);
+  useEffect(() => {
+    // if (computeScope !== "model_stats") return;
+    console.log("sendModelStats", filters)
+    const hasForceModels =
+      filters?.f_models && Object.keys(filters.f_models).length > 0;
+    const hasElasticModels =
+      filters?.e_models && Object.keys(filters.e_models).length > 0;
+  
+    // Only trigger stats when a model is actually selected
+    if (hasForceModels || hasElasticModels) {
+      console.log("sendModelStatsREq")
+      sendModelStatsRequest();
+    }
+  }, [filters.f_models, filters.e_models, sendModelStatsRequest]);
   // Initializes the WebSocket connection and wires up lifecycle handlers.
   const initializeWebSocket = useCallback(() => {
     // Ensure any existing connection is gracefully closed first.
@@ -264,7 +336,13 @@ export const useDashboardWebSocket = () => {
       // Parses the incoming message payload for downstream handling.
       const response = JSON.parse(event.data);
 
+      // Track the previous status before processing current one
+      // This helps us determine which operation a "complete" belongs to
+      const previousStatus = lastStatusRef.current;
+      
       if (response.status === "batch" && response.data) {
+        // Track that we're receiving batch data (part of get_metadata operation)
+        lastStatusRef.current = "batch";
         const {
           graphForcevsZ,
           graphForceIndentation,
@@ -273,7 +351,9 @@ export const useDashboardWebSocket = () => {
           graphForceIndentationSingle,
           graphElspectraSingle,
         } = response.data;
-
+            
+        
+        console.log("graphForcevsZ", graphForcevsZ)
         const forceGraph =
           (graphForcevsZSingle?.curves?.length > 0
             ? graphForcevsZSingle
@@ -306,6 +386,13 @@ export const useDashboardWebSocket = () => {
           }
           const newCurves =
             indentationGraph.curves || { curves_cp: [], curves_fparam: [] };
+          // If incoming curves are empty, clear the data instead of appending
+          const hasNewCurves = (newCurves.curves_cp?.length > 0) || (newCurves.curves_fparam?.length > 0);
+          if (!hasNewCurves) {
+            // Reset domain when clearing curves
+            setIndentationDomain({ xMin: null, xMax: null, yMin: null, yMax: null });
+            return { curves_cp: [], curves_fparam: [] };
+          }
           return {
             curves_cp: [...(prevData.curves_cp || []), ...(newCurves.curves_cp || [])],
             curves_fparam: [
@@ -331,6 +418,13 @@ export const useDashboardWebSocket = () => {
           const newCurves = elspectraGraph.curves || [];
           const newElasticityParams =
             elspectraGraph.curves_elasticity_param || [];
+          // If incoming curves are empty, clear the data instead of appending
+          const hasNewCurves = (newCurves.length > 0) || (newElasticityParams.length > 0);
+          if (!hasNewCurves) {
+            // Reset domain when clearing curves
+            setElspectraDomain({ xMin: null, xMax: null, yMin: null, yMax: null });
+            return { curves: [], curves_elasticity_param: [] };
+          }
           return {
             curves: [...(prevData.curves || []), ...newCurves],
             curves_elasticity_param: [
@@ -404,6 +498,30 @@ export const useDashboardWebSocket = () => {
           }));
         }
       }
+      if (response.status === "model_stats" && response.data.stats) {
+        // Track that we're receiving model_stats (part of compute_stats operation)
+        lastStatusRef.current = "model_stats";
+        
+        const liveFilters = useDashboardStore.getState().filters;
+        // const liveElasticityModels = liveFilters.e_models;
+        const stats = response.data.stats
+        console.log("filters (LIVE)", liveFilters);
+        // console.log("elasticityModel (LIVE)", liveElasticityModels);
+        const normalizedForceStats = normalizeForceStats(stats, liveFilters);
+        const normalizedElasticStats = normalizeElasticityStats(stats, liveFilters);
+        
+        useDashboardStore.getState().setModelStats("force", normalizedForceStats);
+        useDashboardStore.getState().setModelStats("elasticity", normalizedElasticStats);
+        
+        // Note: Don't mark stats as complete here - wait for "complete" status
+      }
+      
+      if (response.status === "metadata") {
+        // Track that we're receiving metadata (part of get_metadata operation)
+        lastStatusRef.current = "metadata";
+        setMetadataObject(response.metadata);
+      }    
+      console.log("sendCurveReq5")
 
       // Handle filter defaults sent once on WebSocket handshake
       if (response.status === "filter_defaults" && response.data) {
@@ -447,21 +565,56 @@ export const useDashboardWebSocket = () => {
         setForceModelDefaults(cleanedFmodels);
         setElasticityModelDefaults(cleanedEmodels);
       }
-
-      if (response.status === "metadata") {
-        setMetadataObject(response.metadata);
-      }
+      console.log("sendCurveReq8")
 
       if (response.status === "complete") {
-        setLoadingMulti({ curves: false });
-        setIsLoadingCurves(false);
-        if (socketRef.current && socketRef.current.loadingTimeout) {
-          clearTimeout(socketRef.current.loadingTimeout);
-          socketRef.current.loadingTimeout = null;
+        // Determine which operation completed based on the previous status we saw
+        // If the previous status was "model_stats", this complete is for compute_stats
+        // If the previous status was "batch" or "metadata", this complete is for get_metadata
+        if (previousStatus === "model_stats") {
+          // This complete is for compute_stats
+          statsInProgressRef.current = false;
+          console.log("compute_stats completed");
+        } else if (previousStatus === "batch" || previousStatus === "metadata") {
+          // This complete is for get_metadata
+          metadataInProgressRef.current = false;
+          console.log("get_metadata completed");
+        } else {
+          // Fallback: if we're not sure, mark both as potentially done
+          // This handles edge cases where status tracking might be off
+          if (metadataInProgressRef.current) {
+            metadataInProgressRef.current = false;
+          }
+          if (statsInProgressRef.current) {
+            statsInProgressRef.current = false;
+          }
+        }
+        
+        // Reset last status after processing complete
+        lastStatusRef.current = null;
+        
+        // Only stop loading if BOTH operations are complete
+        if (!metadataInProgressRef.current && !statsInProgressRef.current) {
+          console.log("All operations completed, hiding spinner");
+          setLoadingMulti({ curves: false });
+          setIsLoadingCurves(false);
+          if (socketRef.current && socketRef.current.loadingTimeout) {
+            clearTimeout(socketRef.current.loadingTimeout);
+            socketRef.current.loadingTimeout = null;
+          }
+        } else {
+          console.log("Operations still in progress:", {
+            metadata: metadataInProgressRef.current,
+            stats: statsInProgressRef.current
+          });
         }
       }
 
       if (response.status === "error") {
+        // On error, mark both operations as not in progress
+        metadataInProgressRef.current = false;
+        statsInProgressRef.current = false;
+        
         setLoadingMulti({ curves: false });
         setIsLoadingCurves(false);
         if (socketRef.current && socketRef.current.loadingTimeout) {
@@ -481,6 +634,10 @@ export const useDashboardWebSocket = () => {
     socket.onclose = (event) => {
       console.warn("WebSocket connection closed", event);
       setConnectionStatus("disconnected");
+      // Reset both operation flags
+      metadataInProgressRef.current = false;
+      statsInProgressRef.current = false;
+      
       setLoadingMulti({ curves: false });
       setIsLoadingCurves(false);
       if (socketRef.current && socketRef.current.loadingTimeout) {
@@ -489,11 +646,16 @@ export const useDashboardWebSocket = () => {
       }
       initialRequestSent.current = false;
     };
+    console.log("sendCurveReq9")
 
     socket.onerror = (event) => {
       console.error("WebSocket error:", event);
       setConnectionStatus("error");
       setLastSocketError("WebSocket error");
+      // Reset both operation flags
+      metadataInProgressRef.current = false;
+      statsInProgressRef.current = false;
+      
       setLoadingMulti({ curves: false });
       setIsLoadingCurves(false);
       if (socketRef.current && socketRef.current.loadingTimeout) {
@@ -512,6 +674,16 @@ export const useDashboardWebSocket = () => {
 
   // Auto-initializes the WebSocket connection and tears it down on unmount.
   useEffect(() => {
+    if (!isAuthenticated || !token) {
+      // 🔐 Ensure socket is closed when logged out
+      if (socketRef.current) {
+        try {
+          socketRef.current.close();
+        } catch {}
+        socketRef.current = null;
+      }
+      return;
+    }
     initializeWebSocket();
     return () => {
       const s = socketRef.current;
@@ -520,13 +692,15 @@ export const useDashboardWebSocket = () => {
         s.close();
       }
     };
+    // socketRef.current = null;
     // We only want this to run once on mount/unmount,
     // not every time initializeWebSocket (and thus numCurves) changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAuthenticated, token]);
 
   // Forces a fresh WebSocket connection when the caller requests a hard reload.
   const resetAndReload = useCallback(() => {
+    console.log("resetAndReload")
     setForceRequest(true);
     initialRequestSent.current = false;
     initializeWebSocket();

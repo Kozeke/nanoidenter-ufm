@@ -336,14 +336,17 @@ const FileOpener = ({ onProcessSuccess, setIsLoading, renderTrigger }) => {
                 // Default: normal text field for all other metadata
                 return (
                   <TextField
-                    key={key}
-                    name={key}
-                    label={key.replace('_', ' ').toUpperCase()}
-                    value={value ?? ''}
-                    onChange={handleMetadataChange}
-                    fullWidth
-                    margin="normal"
-                  />
+                  key={key}
+                  name={key}
+                  label={key.replace('_', ' ').toUpperCase()}
+                  type={key === 'date' ? 'date' : 'text'}
+                  value={value ?? ''}
+                  onChange={handleMetadataChange}
+                  InputLabelProps={key === 'date' ? { shrink: true } : undefined}
+                  fullWidth
+                  margin="normal"
+                />
+
                 );
               })}
             </div>

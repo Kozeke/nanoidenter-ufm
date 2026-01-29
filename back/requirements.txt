@@ -8,3 +8,5 @@ numpy
 scipy
 pandas
 python-multipart
+python-jose[cryptography]
+bcrypt
