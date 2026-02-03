@@ -145,28 +145,28 @@ export const useDashboardWebSocket = () => {
     console.log("sendCurveReq3")
 
     // Compares previous and current filter snapshots for change detection.
-    // const areFiltersEqual = (prev, current) => {
-    //   if (!prev || !current) {
-    //     return false;
-    //   }
-    //   return JSON.stringify(prev) === JSON.stringify(current);
-    // };
+    const areFiltersEqual = (prev, current) => {
+      if (!prev || !current) {
+        return false;
+      }
+      return JSON.stringify(prev) === JSON.stringify(current);
+    };
 
     // Determines if any filter group has changed since the last request.
-    // const filtersChanged = !areFiltersEqual(
-    //   {
-    //     regular: prevFiltersRef.current.regular,
-    //     cp: prevFiltersRef.current.cp,
-    //     f_models: prevFiltersRef.current.f_models,
-    //     e_models: prevFiltersRef.current.e_models,
-    //   },
-    //   {
-    //     regular: regularFilters,
-    //     cp: cpFilters,
-    //     f_models: forceModels,
-    //     e_models: elasticityModels,
-    //   }
-    // );
+    const filtersChanged = !areFiltersEqual(
+      {
+        regular: prevFiltersRef.current.regular,
+        cp: prevFiltersRef.current.cp,
+        f_models: prevFiltersRef.current.f_models,
+        e_models: prevFiltersRef.current.e_models,
+      },
+      {
+        regular: regularFilters,
+        cp: cpFilters,
+        f_models: forceModels,
+        e_models: elasticityModels,
+      }
+    );
 
     // Determines whether the requested curve count changed.
     const numCurvesChanged = prevNumCurvesRef.current !== numCurves;
@@ -179,7 +179,7 @@ export const useDashboardWebSocket = () => {
       yMax: null,
     };
 
-    if (numCurvesChanged || forceRequest) {
+    if (filtersChanged || numCurvesChanged || forceRequest) {
       setForceData([]);
       setIndentationData({ curves_cp: [], curves_fparam: [] });
       setElspectraData({ curves: [], curves_elasticity_param: [] });
@@ -275,20 +275,7 @@ export const useDashboardWebSocket = () => {
     forceModelParams,
     setZeroForce,
   ]);
-  useEffect(() => {
-    // if (computeScope !== "model_stats") return;
-    console.log("sendModelStats", filters)
-    const hasForceModels =
-      filters?.f_models && Object.keys(filters.f_models).length > 0;
-    const hasElasticModels =
-      filters?.e_models && Object.keys(filters.e_models).length > 0;
-  
-    // Only trigger stats when a model is actually selected
-    if (hasForceModels || hasElasticModels) {
-      console.log("sendModelStatsREq")
-      sendModelStatsRequest();
-    }
-  }, [filters.f_models, filters.e_models, sendModelStatsRequest]);
+  // Removed automatic model stats request - now triggered only by "Update Curves" button
   // Initializes the WebSocket connection and wires up lifecycle handlers.
   const initializeWebSocket = useCallback(() => {
     // Ensure any existing connection is gracefully closed first.
@@ -724,6 +711,7 @@ export const useDashboardWebSocket = () => {
     metadataObject,
     setMetadataObject,
     sendCurveRequest,
+    sendModelStatsRequest,
     resetAndReload,
     filterDefaults,
     cpDefaults,
@@ -731,5 +719,3 @@ export const useDashboardWebSocket = () => {
     elasticityModelDefaults,
   };
 };
-
-
