@@ -111,6 +111,7 @@ const Dashboard = () => {
     metadataObject,
     setMetadataObject,
     sendCurveRequest,
+    sendModelStatsRequest,
     resetAndReload,
     filterDefaults,
     cpDefaults,
@@ -1259,6 +1260,7 @@ const Dashboard = () => {
              handleRemoveFilter={handleRemoveFilter}
              handleFilterChange={handleFilterChange}
              sendCurveRequest={sendCurveRequest}
+             sendModelStatsRequest={sendModelStatsRequest}
              activeTab={activeTab}
              canUseModels={isSingleCurveMode}
              onForceModelChange={(model) => {

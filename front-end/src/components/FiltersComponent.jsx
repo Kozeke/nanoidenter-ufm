@@ -225,6 +225,7 @@ const FiltersComponent = ({
   handleRemoveFilter,
   handleFilterChange,
   sendCurveRequest,
+  sendModelStatsRequest,
   activeTab,
   canUseModels,
   onForceModelChange,
@@ -327,11 +328,11 @@ const FiltersComponent = ({
   const handleElasticityChange = (event) => {
     const value = event.target.value || [];
     const next = value[0];
-  
+
     selectedElasticityModels.forEach((name) =>
       handleRemoveFilter(name, "elasticity")
     );
-  
+
     if (next) {
       handleAddFilter(next, "elasticity");
       onElasticityModelChange?.(next);
@@ -339,6 +340,20 @@ const FiltersComponent = ({
       onElasticityModelChange?.("");
     }
   };
+
+  // Handler for "Update Curves" button - sends curve request and model stats if models are selected
+  const handleUpdateCurves = useCallback(() => {
+    // Always send curve request
+    sendCurveRequest();
+    
+    // Check if any models are selected and send model stats request if needed
+    const hasForceModels = forceModels && Object.keys(forceModels).length > 0;
+    const hasElasticModels = elasticityModels && Object.keys(elasticityModels).length > 0;
+    
+    if ((hasForceModels || hasElasticModels) && sendModelStatsRequest) {
+      sendModelStatsRequest();
+    }
+  }, [sendCurveRequest, sendModelStatsRequest, forceModels, elasticityModels]);
         
 
   // Theme and media query to determine if content should shift on desktop
@@ -414,7 +429,7 @@ const FiltersComponent = ({
         <Box sx={{ display: "flex", gap: 1 }}>
           <Button
             variant="contained"
-            onClick={sendCurveRequest}
+            onClick={handleUpdateCurves}
             size="small"
             sx={primaryBtnSx}
             {...pressableHandlers}
