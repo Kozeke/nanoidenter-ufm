@@ -3,8 +3,12 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import { saveAs } from 'file-saver';
 import { useMetadata } from '../components/Dashboard';
 import { useDashboardStore } from '../state/useDashboardStore';
+import { useAuthStore } from '../state/useAuthStore';
 
 export const useExportDialog = (experimentDataOrFn = null) => {
+  // Get authentication token
+  const token = useAuthStore((s) => s.token);
+  
   const { metadataObject } = useMetadata();
   const {
     filters: dashboardFilters,
@@ -397,9 +401,14 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         poisson: forceModelParams?.poisson ?? hertzConfig.poisson ?? 0.5,
       };
 
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/calculate-softmech-metadata`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           curve_ids: curveIds.length > 0 ? curveIds : undefined,
           num_curves: curveIds.length > 0 ? undefined : numCurves,
@@ -601,9 +610,14 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         };
 
       // Call backend export endpoint
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
       const response = await fetch(`${process.env.REACT_APP_BACKEND_URL}/export/${selectedFormat}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify(payload),
       });
 
@@ -669,7 +683,15 @@ export const useExportDialog = (experimentDataOrFn = null) => {
       }
 
       // Fetch the exported file as a blob
-      const fileResponse = await fetch(`${process.env.REACT_APP_BACKEND_URL}/exports/${encodeURIComponent(exportPath)}`);
+      const fileHeaders = {};
+      if (token) {
+        fileHeaders['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const fileResponse = await fetch(
+        `${process.env.REACT_APP_BACKEND_URL}/exports/${encodeURIComponent(exportPath)}`,
+        { headers: fileHeaders }
+      );
       if (!fileResponse.ok) {
         throw new Error('Failed to download exported file');
       }

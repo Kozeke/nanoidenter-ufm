@@ -9,4 +9,5 @@ scipy
 pandas
 python-multipart
 python-jose[cryptography]
+pyjwt
 bcrypt

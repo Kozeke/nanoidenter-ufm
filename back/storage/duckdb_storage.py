@@ -1,17 +1,16 @@
-import os
-import duckdb
 from typing import Dict
 from models.force_curve import ForceCurve
+from db.connection import get_conn
 
-def save_to_duckdb(curves: Dict[str, ForceCurve], db_path: str) -> None:
+def save_to_duckdb(curves: Dict[str, ForceCurve], dataset_id: int) -> None:
     """Saves ForceCurve objects to DuckDB with one row per segment."""
     print("🚀 Saving transformed data to DuckDB...")
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    conn = duckdb.connect(db_path)
+    conn = get_conn()  # Use singleton connection
     try:
         conn.execute("DROP TABLE IF EXISTS force_vs_z")
         conn.execute("""
             CREATE TABLE force_vs_z (
+                dataset_id INTEGER NOT NULL,
                 curve_id INTEGER,
                 segment_type TEXT,
                 force_values DOUBLE[],
@@ -36,12 +35,13 @@ def save_to_duckdb(curves: Dict[str, ForceCurve], db_path: str) -> None:
                 emodel_name TEXT,
                 contact_point_z DOUBLE,
                 contact_point_force DOUBLE,
-                PRIMARY KEY (curve_id, segment_type)
+                PRIMARY KEY (dataset_id, curve_id, segment_type),
+                FOREIGN KEY (dataset_id) REFERENCES datasets(id)
             )
         """)
         batch_data = [
             (
-                # curve.curve_id,
+                dataset_id,
                 i,
                 segment.type,
                 segment.deflection.tolist(),
@@ -73,16 +73,16 @@ def save_to_duckdb(curves: Dict[str, ForceCurve], db_path: str) -> None:
         conn.executemany(
             """
             INSERT INTO force_vs_z (
-                curve_id, segment_type, force_values, z_values, indentation_values, elasticity_values,
+                dataset_id, curve_id, segment_type, force_values, z_values, indentation_values, elasticity_values,
                 file_id, date, instrument, sample, spring_constant, inv_ols, tip_geometry, tip_radius,
                 tip_angle, sampling_rate, velocity, no_points, fmodel_params, fmodel_name,
                 emodel_params, emodel_name, contact_point_z, contact_point_force
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             batch_data
         )
         row_count = conn.execute("SELECT COUNT(*) FROM force_vs_z").fetchone()[0]
-        print(f"✅ Inserted {row_count} rows into {db_path}!")
+        print(f"✅ Inserted {row_count} rows into database!")
 
         # Test query to verify data
         print("Testing query for curve_id = 0:")
@@ -95,26 +95,33 @@ def save_to_duckdb(curves: Dict[str, ForceCurve], db_path: str) -> None:
         """).fetchall()
         # print("Query result:", result)
 
-    except duckdb.Error as e:
+    except Exception as e:
         print(f"❌ DuckDB error: {e}")
         raise
-    finally:
-        conn.close()
 
-def update_curve_data(db_path: str, curve_id: int, updates: Dict) -> None:
+def update_curve_data(curve_id: int, updates: Dict, dataset_id: int = None) -> None:
     """Update specific fields for a curve in the database."""
-    conn = duckdb.connect(db_path)
+    conn = get_conn()  # Use singleton connection
     try:
+        # Build WHERE clause - include dataset_id if provided
+        if dataset_id is not None:
+            where_clause = "WHERE dataset_id = ? AND curve_id = ?"
+            where_params = [dataset_id, curve_id]
+        else:
+            where_clause = "WHERE curve_id = ?"
+            where_params = [curve_id]
+        
         for field, value in updates.items():
             if field in ['indentation_values', 'elasticity_values', 'fmodel_params', 'emodel_params']:
                 # Handle array fields
                 if value is not None:
-                    conn.execute(f"UPDATE force_vs_z SET {field} = ? WHERE curve_id = ?", [value, curve_id])
+                    conn.execute(f"UPDATE force_vs_z SET {field} = ? {where_clause}", [value] + where_params)
             elif field in ['fmodel_name', 'emodel_name']:
                 # Handle text fields
-                conn.execute(f"UPDATE force_vs_z SET {field} = ? WHERE curve_id = ?", [value, curve_id])
+                conn.execute(f"UPDATE force_vs_z SET {field} = ? {where_clause}", [value] + where_params)
             elif field in ['contact_point_z', 'contact_point_force']:
                 # Handle numeric fields
-                conn.execute(f"UPDATE force_vs_z SET {field} = ? WHERE curve_id = ?", [value, curve_id])
-    finally:
-        conn.close()
+                conn.execute(f"UPDATE force_vs_z SET {field} = ? {where_clause}", [value] + where_params)
+    except Exception as e:
+        print(f"❌ Error updating curve data: {e}")
+        raise

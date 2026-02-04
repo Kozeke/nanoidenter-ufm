@@ -73,6 +73,33 @@ def ensure_cache_tables(conn):
     init_cache_tables(conn)
 
 
+def init_datasets_table(conn: duckdb.DuckDBPyConnection) -> None:
+    """
+    Create the datasets table to store file uploads and metadata.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS datasets (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR NOT NULL,
+            description VARCHAR,
+            filename VARCHAR NOT NULL,
+            file_hash VARCHAR UNIQUE,
+            user_id BIGINT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            
+            -- Metadata from file
+            num_curves INTEGER DEFAULT 0,
+            spring_constant DOUBLE,
+            tip_radius DOUBLE,
+            tip_geometry VARCHAR,
+            
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+
+
 def init_experiment_tables(conn):
     conn.execute("""
         CREATE SEQUENCE IF NOT EXISTS experiments_id_seq
@@ -90,6 +117,7 @@ def init_experiment_tables(conn):
             name VARCHAR,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
+            dataset_id INTEGER,
             spring_constant DOUBLE,
             curve_id VARCHAR,
             tip_radius DOUBLE,
@@ -106,34 +134,7 @@ def init_experiment_tables(conn):
             youngs_modulus_std DOUBLE,
             elasticity_params JSON,
 
-            FOREIGN KEY (user_id) REFERENCES users(id)
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (dataset_id) REFERENCES datasets(id)
         )
     """)
-
-
-def migrate_database(conn: duckdb.DuckDBPyConnection) -> None:
-    """
-    Apply database migrations to update schema without losing data.
-    Uses a schema_version table to track which migrations have been applied.
-    """
-    # Initialize schema version table if it doesn't exist
-    try:
-        result = conn.execute("SELECT version FROM schema_version").fetchone()
-        current_version = result[0] if result else 0
-    except:
-        conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER)")
-        conn.execute("INSERT INTO schema_version VALUES (0)")
-        current_version = 0
-    
-    # Apply migrations in order
-    # Migration 1: Example - add a new column to users table
-    # if current_version < 1:
-    #     conn.execute("ALTER TABLE users ADD COLUMN new_field VARCHAR")
-    #     conn.execute("UPDATE schema_version SET version = 1")
-    
-    # Migration 2: Example - add a new column to experiments table
-    # if current_version < 2:
-    #     conn.execute("ALTER TABLE experiments ADD COLUMN another_field DOUBLE")
-    #     conn.execute("UPDATE schema_version SET version = 2")
-    
-    # Add future migrations here following the same pattern

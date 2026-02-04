@@ -40,6 +40,28 @@ export async function getMe(token) {
   return res.json();
 }
 
+export async function getLastAccessedDataset(token) {
+  try {
+    const res = await fetch(`${API_URL}/datasets/last-accessed`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    
+    if (!res.ok) return null;
+    
+    const data = await res.json();
+    if (data.status === 'success') {
+      return {
+        dataset_id: data.dataset_id,
+        filename: data.name || data.filename  // Use name (custom) if available, otherwise filename (file path)
+      };
+    }
+    return null;
+  } catch (err) {
+    console.warn('Failed to load last accessed dataset:', err);
+    return null;
+  }
+}
+
 export async function changePassword(token, payload) {
     const res = await fetch(
       `${API_URL}/auth/change-password`,

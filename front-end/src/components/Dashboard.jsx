@@ -60,6 +60,14 @@ const Dashboard = () => {
     numCurves,
     // Updates the curve count while respecting valid bounds.
     setNumCurves,
+    // Stores the current dataset ID from the most recently loaded file.
+    datasetId,
+    // Updates the dataset ID when a new file is loaded.
+    setDatasetId,
+    // Stores the current dataset filename.
+    filename,
+    // Updates the dataset filename.
+    setFilename,
     // Tracks which dashboard tab is currently active.
     activeTab,
     // Updates the active tab selection.
@@ -131,7 +139,6 @@ const Dashboard = () => {
       : connectionStatus === 'error'
       ? 'Error'
       : 'Disconnected';
-  const [filename, setFilename] = useState("");
   // Exposes regular filter configurations tracked in the shared store.
   const regularFilters = filters.regular;
   // Exposes contact point filter configurations tracked in the shared store.
@@ -339,14 +346,27 @@ const Dashboard = () => {
         },
       };
     });
-  };   const handleProcessSuccess = (result) => {
+  };
+  
+  const handleProcessSuccess = (result) => {
     // console.log('File processed successfully:', result);
     // Set numCurves: if loaded data has fewer than 10 curves, use that value; otherwise use 10
     if (result.curves) {
       setNumCurves(Math.min(result.curves, 10));
     }
-    setFilename(result.filename || ""); // Set filename from result
+    // Store dataset_id and filename in the dashboard store - Zustand updates are synchronous
+    if (result.dataset_id !== undefined) {
+      setDatasetId(result.dataset_id);
+      console.log("Dataset ID set to:", result.dataset_id);
+    }
+    // Filename will be fetched via useEffect when dataset_id changes
+    // But also set it directly from result if available for immediate display
+    if (result.filename) {
+      setFilename(result.filename);
+      console.log("Filename set to:", result.filename);
+    }
     // Force a fresh WebSocket request after import
+    // The datasetId should be available since Zustand updates are synchronous
     resetAndReload();
   };
 
@@ -1381,7 +1401,7 @@ const Dashboard = () => {
           setSelectedCurveIds={setSelectedCurveIds}
           setGraphType={setGraphType}
           graphType={graphType}
-          filename={filename} // Pass filename
+          filename={filename || "No file selected"} // Pass filename
                        onExportCurveIdsChange={handleExportCurveIdsChange} // Pass the handler
              selectedExportCurveIds={selectedExportCurveIds}
              activeTab={activeTab}

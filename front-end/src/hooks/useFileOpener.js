@@ -1,9 +1,10 @@
 // Manages file opening workflow, validation, and metadata entry for experiment files (JSON, HDF5, CSV, TXT).
 import { useState, useEffect, useCallback } from 'react';
+import { useAuthStore } from '../state/useAuthStore';
 
 // Defines validation rules for metadata fields to ensure data integrity.
 const metadataValidationRules = {
-  file_id: { required: 'boolean', label: 'File ID', type: 'text' },
+  file_id: { required: 'boolean', label: 'File Name', type: 'text' },
   date: {
     required: 'boolean',
     label: 'Date',
@@ -95,6 +96,9 @@ const navigateToFirstSegment = (initialGroup, initialPath = []) => {
 };
 
 export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
+  // Get authentication token
+  const token = useAuthStore((s) => s.token);
+  
   // Controls whether the file opener dialog is currently visible.
   const [open, setOpen] = useState(false);
   // Tracks the current step index in the file opening wizard.
@@ -180,10 +184,16 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
       formData.append('file', file);
 
       try {
+        const headers = {};
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        
         const response = await fetch(
           `${process.env.REACT_APP_BACKEND_URL}/experiment/load-experiment`,
           {
             method: 'POST',
+            headers,
             body: formData,
           }
         );
@@ -391,7 +401,14 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
         const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 
         const initializedMetadata = Object.keys(activeValidationRules).reduce((acc, key) => {
-          acc[key] = key === 'date' ? today : '';
+          if (key === 'date') {
+            acc[key] = today;
+          } else if (key === 'file_id' && filePath) {
+            // Auto-populate file_id with filename from file path
+            acc[key] = filePath.split('/').pop() || filePath.split('\\').pop() || filePath;
+          } else {
+            acc[key] = '';
+          }
           return acc;
         }, {});
 
@@ -466,7 +483,14 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
 
         const initializedMetadata = Object.keys(activeValidationRules).reduce(
           (acc, key) => {
-            acc[key] = key === 'date' ? today : '';
+            if (key === 'date') {
+              acc[key] = today;
+            } else if (key === 'file_id' && filePath) {
+              // Auto-populate file_id with filename from file path
+              acc[key] = filePath.split('/').pop() || filePath.split('\\').pop() || filePath;
+            } else {
+              acc[key] = '';
+            }
             return acc;
           },
           {}
@@ -489,7 +513,7 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
         setErrors([`Invalid metadata location: ${path}. ${error.message}`]);
       }
     },
-    [fileType, currentGroup, structure]
+    [fileType, currentGroup, structure, filePath]
   );
 
   // Handles changes to metadata input fields and clears related validation errors.
@@ -552,11 +576,16 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
         }
       });
       console.log("processedMetadata",processedMetadata)
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
       const response = await fetch(
         `${process.env.REACT_APP_BACKEND_URL}/experiment/process-file`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             file_path: filePath,
             file_type: fileType,

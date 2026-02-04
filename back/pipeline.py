@@ -37,35 +37,7 @@ def _hash_dict(d: Dict) -> str:
     payload = json.dumps(d, sort_keys=True, separators=(",", ":"))
     return hashlib.md5(payload.encode("utf-8")).hexdigest()
 
-# Ensure cache tables exist for hash-based curve caching
-# def ensure_cache_tables(conn: duckdb.DuckDBPyConnection) -> None:
-#     """
-#     Ensure cache tables exist (contact_points, indentations, elspectra).
-#     Delegates to _ensure_extended_cache_tables which defines the canonical schema.
-#     """
-#     _ensure_extended_cache_tables(conn)
 
-# Singleton connection to ensure consistent DuckDB configuration
-# _conn_singleton = None
-
-# def get_conn():
-#     """
-#     Return a module-level singleton DuckDB connection with consistent configuration.
-#     This ensures all code paths use the same connection config to avoid
-#     DuckDB's "different configuration" error.
-    
-#     Returns:
-#         duckdb.DuckDBPyConnection: A DuckDB connection with consistent config
-#     """
-#     global _conn_singleton
-#     if _conn_singleton is None:
-#         # Use read/write to match WebSocket connection config (DuckDB constraint: same config per process)
-#         _conn_singleton = duckdb.connect(DB_PATH)
-#         # Register filters on first connection
-#         register_filters(_conn_singleton)
-#         # Ensure cache tables exist
-#         ensure_cache_tables(_conn_singleton)
-#     return _conn_singleton
 
 def _json_hash(obj) -> str:
     """Create a stable hash from a JSON-serializable object."""
@@ -111,7 +83,7 @@ def _json_hash(obj) -> str:
 #         )
 #     """)
 
-def get_metadata_for_curves(conn: duckdb.DuckDBPyConnection, curve_ids: List[str]) -> Dict:
+def get_metadata_for_curves(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], dataset_id: int = None) -> Dict:
     """
     Retrieve metadata (spring_constant, tip_radius, tip_geometry) for the given curves.
     Returns a dictionary with metadata values, using the first curve's values as representative.
@@ -146,12 +118,20 @@ def get_metadata_for_curves(conn: duckdb.DuckDBPyConnection, curve_ids: List[str
     
     try:
         # Get metadata from the first curve (assuming all curves have same metadata)
-        result = conn.execute(f"""
-            SELECT spring_constant, tip_radius, tip_geometry
-            FROM force_vs_z 
-            WHERE curve_id = {numeric_curve_ids[0]}
-            LIMIT 1
-        """).fetchone()
+        if dataset_id is not None:
+            result = conn.execute(f"""
+                SELECT spring_constant, tip_radius, tip_geometry
+                FROM force_vs_z 
+                WHERE dataset_id = {dataset_id} AND curve_id = {numeric_curve_ids[0]}
+                LIMIT 1
+            """).fetchone()
+        else:
+            result = conn.execute(f"""
+                SELECT spring_constant, tip_radius, tip_geometry
+                FROM force_vs_z 
+                WHERE curve_id = {numeric_curve_ids[0]}
+                LIMIT 1
+            """).fetchone()
         
         if result:
             spring_constant, tip_radius, tip_geometry = result
@@ -176,7 +156,7 @@ def get_metadata_for_curves(conn: duckdb.DuckDBPyConnection, curve_ids: List[str
 
 
 
-def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict, single = False, metadata: Dict = None, set_zero_force: bool = True, elasticity_params: Dict = None, elastic_model_params: Dict = None, force_model_params: Dict = None, compute_elspectra: bool = True, force_model_population: bool = False, elastic_model_population: bool = False) -> Tuple[List[Dict], Dict]:
+def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict, single = False, metadata: Dict = None, set_zero_force: bool = True, elasticity_params: Dict = None, elastic_model_params: Dict = None, force_model_params: Dict = None, compute_elspectra: bool = True, force_model_population: bool = False, elastic_model_population: bool = False, dataset_id: int = None) -> Tuple[List[Dict], Dict]:
     """
     Fetches a batch of curve data from DuckDB and applies filters dynamically in SQL.
     
@@ -290,11 +270,19 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             cp_params_hash = _json_hash(cp_hash_payload)
             break
     
-    base_query = """
-        SELECT curve_id, z_values, force_values 
-        FROM force_vs_z 
-        WHERE curve_id IN ({})
-    """.format(",".join(map(str, numeric_curve_ids)))
+    # Build base query with dataset_id filter
+    if dataset_id is not None:
+        base_query = """
+            SELECT curve_id, z_values, force_values 
+            FROM force_vs_z 
+            WHERE dataset_id = {} AND curve_id IN ({})
+        """.format(dataset_id, ",".join(map(str, numeric_curve_ids)))
+    else:
+        base_query = """
+            SELECT curve_id, z_values, force_values 
+            FROM force_vs_z 
+            WHERE curve_id IN ({})
+        """.format(",".join(map(str, numeric_curve_ids)))
 
     # --- Graph 1: Force vs Z (Regular Filters) ---
     query_regular = apply(base_query, regular_filters, curve_ids)
@@ -804,6 +792,8 @@ def _select_curve_ids(conn, filters: Dict, num_curves: Optional[int] = None) -> 
         List of curve ID strings (e.g., ["0", "1", "2"])
     """
     # Build query - for now, simple selection; can be enhanced with filter logic
+    # Note: This function doesn't have dataset_id parameter, but it's used in contexts where
+    # dataset filtering might not be needed. If needed, this should be updated.
     q = "SELECT DISTINCT curve_id FROM force_vs_z ORDER BY curve_id"
     if num_curves:
         q += f" LIMIT {int(num_curves)}"

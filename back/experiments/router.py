@@ -21,6 +21,7 @@ class SaveExperimentRequest(BaseModel):
     force_model_params: Dict
     results: Dict
     curve_id: Optional[str] = None
+    dataset_id: Optional[int] = None
 
 
 @router.post("")
@@ -55,6 +56,7 @@ def save_experiment(
         elasticity_params=data.elasticity_params,
         force_model_params=data.force_model_params,
         results=data.results,
+        dataset_id=data.dataset_id,
     )
 
     message = "Experiment saved successfully" if has_results else "Experiment saved (pending results)"

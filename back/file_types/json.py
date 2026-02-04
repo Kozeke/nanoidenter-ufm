@@ -265,16 +265,16 @@ def validate_and_fill_metadata(metadata: Dict, curve_name: str) -> Dict:
     
     for key, default in defaults.items():
         if key not in validated_metadata or validated_metadata[key] is None:
-            logger.warning(f"Missing metadata field {key} for {curve_name}, using default: {default}")
+            # logger.warning(f"Missing metadata field {key} for {curve_name}, using default: {default}")
             validated_metadata[key] = default
         elif key in ["spring_constant", "inv_ols", "tip_radius", "sampling_rate", "velocity"]:
             try:
                 validated_metadata[key] = float(validated_metadata[key])
                 if validated_metadata[key] <= 0:
-                    logger.warning(f"Invalid {key} for {curve_name}: {validated_metadata[key]}, using default: {default}")
+                    # logger.warning(f"Invalid {key} for {curve_name}: {validated_metadata[key]}, using default: {default}")
                     validated_metadata[key] = default
             except (ValueError, TypeError):
-                logger.warning(f"Invalid type for {key} in {curve_name}: {validated_metadata[key]}, using default: {default}")
+                # logger.warning(f"Invalid type for {key} in {curve_name}: {validated_metadata[key]}, using default: {default}")
                 validated_metadata[key] = default
 
     # Optional: Infer sampling_rate from JSON attributes if available

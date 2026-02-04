@@ -1,5 +1,5 @@
 # FastAPI application exposing REST and WebSocket endpoints for curve analytics streaming.
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 import json
@@ -14,7 +14,7 @@ import asyncio
 from db.connection import get_conn
 from db.init_db import ensure_cache_tables
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
 from utils.stats import format_stat, is_valid_param_vector
 from utils.cache import warmup_cp_cache, clear_cache
 
@@ -35,7 +35,7 @@ app.add_middleware(
 
 # Paths
 HDF5_FILE_PATH = "data/all.hdf5"  # HDF5 file path
-DB_PATH = "data/experiment.db"  # DuckDB database file
+DB_PATH = "data/all.db"  # DuckDB database file
 BATCH_SIZE = 10  # Process 10 curves per batch (adjust based on your needs)
 MAX_WORKERS = 8  # Number of parallel workers (tune based on CPU cores)
 
@@ -72,23 +72,17 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
     """
     print(f"[Worker] Processing {len(curve_ids)} curves...")
     
-    # Each worker gets its own read-only connection (separate process, won't conflict with main process)
-    # Use DB_PATH from environment or default
-    db_path = os.environ.get("DB_PATH", "data/experiment.db")
-    conn = duckdb.connect(db_path, read_only=True)
+    # Each worker gets its own connection via singleton (separate process, won't conflict with main process)
+    from db.connection import get_conn
+    conn = get_conn()
     try:
         # Let DuckDB parallelize *inside* each query too (tune as you like)
         conn.execute(f"PRAGMA threads = {max(1, (os.cpu_count() or 2) // 4)};")  # Limit threads per worker
 
         # Every process must (re)register UDFs
         register_filters(conn)
-        # Ensure cache tables exist (may fail in read-only mode; main process handles this)
-        try:
-            ensure_cache_tables(conn)
-        except Exception as _:
-            # Likely read-only; skip creating cache tables in worker
-            # Main process will handle cache table creation
-            pass
+        # Ensure cache tables exist
+        ensure_cache_tables(conn)
 
         # Per-batch metadata (spring_constant, tip_radius, tip_geometry)
         metadata = get_metadata_for_curves(conn, curve_ids)
@@ -187,7 +181,15 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
 @app.websocket("/ws/data")
 async def websocket_data_stream(websocket: WebSocket):
     """WebSocket endpoint to stream batches of curve data from DuckDB and send filter defaults."""
-    print("WebSocket connected")
+    # Validate token and extract user information
+    is_valid, user_id, user, error_message = await validate_token(websocket)
+    
+    if not is_valid:
+        print(f"WebSocket connection rejected: {error_message}")
+        await websocket.close(code=1008, reason=error_message or "Authentication required")
+        return
+    
+    # Accept the WebSocket connection after authentication
     await websocket.accept()
     conn = duckdb.connect(DB_PATH)
     print(f"Connected to database: {DB_PATH}")
@@ -293,6 +295,21 @@ async def websocket_data_stream(websocket: WebSocket):
                 request = await websocket.receive_text()
                 request_data = json.loads(request)
 
+                # Extract dataset_id from request
+                dataset_id = request_data.get("dataset_id")
+                
+                # Validate dataset exists
+                is_valid, error_message = await validate_dataset(conn, dataset_id, user_id)
+                if not is_valid:
+                    await websocket.send_text(json.dumps({
+                        "status": "error",
+                        "message": error_message
+                    }))
+                    continue
+                
+                # Update last accessed timestamp
+                update_dataset_last_accessed(conn, dataset_id)
+
                 # --- New: action / compute_scope handling ---
                 # Identifies requested operation for downstream handling
                 action = request_data.get("action")
@@ -300,9 +317,9 @@ async def websocket_data_stream(websocket: WebSocket):
                 compute_scope = request_data.get("compute_scope")
 
                 # If client asked for metadata, send it,
-                # but DO NOT skip curve processing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ we still fall through.
+                # but DO NOT skip curve processing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å" we still fall through.
                 if action == "get_metadata":
-                    await get_metadata(conn, websocket)
+                    await get_metadata(conn, websocket, dataset_id=dataset_id)
 
                 # Derive compute_scope if not explicitly passed
                 if compute_scope is None:
@@ -336,12 +353,13 @@ async def websocket_data_stream(websocket: WebSocket):
                     "minInd": 0,
                     "poisson": 0.5
                 })  # Extract force model parameters
-                print(f"Received request: num_curves={num_curves}, curve_id={curve_id}, filters={filters}")
+                print(f"Received request: num_curves={num_curves}, dataset_id={dataset_id}, curve_id={curve_id}, filters={filters}")
 
                 # --- Population stats ignore curve_id ---
                 if compute_scope == "model_stats":
                     curve_ids_result = conn.execute(
-                        "SELECT curve_id FROM force_vs_z"
+                        "SELECT curve_id FROM force_vs_z WHERE dataset_id = ?",
+                        (dataset_id,)
                     ).fetchall()
                     curve_ids = [str(row[0]) for row in curve_ids_result]
                     # Added before using cp_filters
@@ -364,7 +382,8 @@ async def websocket_data_stream(websocket: WebSocket):
                         curve_ids = [curve_id]
                     else:
                         curve_ids_result = conn.execute(
-                            "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
+                            "SELECT curve_id FROM force_vs_z WHERE dataset_id = ? LIMIT ?", 
+                            (dataset_id, num_curves,)
                         ).fetchall()
                         curve_ids = [str(row[0]) for row in curve_ids_result]
 
@@ -505,6 +524,7 @@ async def websocket_data_stream(websocket: WebSocket):
                             compute_scope=compute_scope,
                             global_force_params=global_force_params,
                             global_elastic_params=global_elastic_params,
+                            dataset_id=dataset_id,
                         )
                         await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
                 
@@ -570,10 +590,140 @@ async def websocket_data_stream(websocket: WebSocket):
         # print("WebSocket connection closed")
 
 
-async def get_metadata(conn, websocket):
+async def validate_token(websocket: WebSocket) -> Tuple[bool, Optional[int], Optional[dict], str]:
+    """
+    Validate WebSocket token and extract user information.
+    
+    Args:
+        websocket: WebSocket connection with token in query params
+        
+    Returns:
+        Tuple of (is_valid, user_id, user_dict, error_message)
+        If valid, returns (True, user_id, user_dict, None)
+        If invalid, returns (False, None, None, error_message)
+    """
+    from auth.security import decode_token
+    from db.users import get_user_by_email
+    
+    # Extract token from query parameters
+    token = websocket.query_params.get("token")
+    
+    if not token:
+        return False, None, None, "No token provided"
+    
+    try:
+        # Decode token
+        payload = decode_token(token)
+        email = payload.get("sub")
+        
+        if not email:
+            return False, None, None, "Invalid token payload"
+        
+        # Get user by email
+        user = get_user_by_email(email)
+        if not user:
+            return False, None, None, f"User not found for email {email}"
+        
+        user_id = user["id"]
+        print(f"Token validated: User ID {user_id} ({email})")
+        return True, user_id, user, None
+        
+    except Exception as e:
+        error_msg = f"Token validation failed: {str(e)}"
+        print(f"WebSocket connection rejected: {error_msg}")
+        return False, None, None, error_msg
+
+
+async def validate_dataset(conn: duckdb.DuckDBPyConnection, dataset_id: int, user_id: int = None) -> Tuple[bool, str]:
+    """
+    Validate that a dataset exists and optionally belongs to the user.
+    
+    Args:
+        conn: DuckDB connection
+        dataset_id: The dataset ID to validate
+        user_id: Optional user ID to verify ownership
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+        If valid, returns (True, None)
+        If invalid, returns (False, error_message)
+    """
+    if dataset_id is None:
+        return False, "dataset_id is required"
+    
+    try:
+        # Check if dataset exists
+        if user_id is not None:
+            # Verify dataset exists and belongs to user
+            result = conn.execute(
+                "SELECT id FROM datasets WHERE id = ? AND user_id = ?",
+                (dataset_id, user_id)
+            ).fetchone()
+            if not result:
+                return False, f"Dataset {dataset_id} not found or access denied"
+        else:
+            # Just check if dataset exists
+            result = conn.execute(
+                "SELECT id FROM datasets WHERE id = ?",
+                (dataset_id,)
+            ).fetchone()
+            if not result:
+                return False, f"Dataset {dataset_id} not found"
+        
+        return True, None
+    except Exception as e:
+        return False, f"Error validating dataset: {str(e)}"
+
+
+def update_dataset_last_accessed(conn: duckdb.DuckDBPyConnection, dataset_id: int) -> None:
+    """
+    Update the last_accessed_at timestamp for a dataset.
+    
+    Args:
+        conn: DuckDB connection
+        dataset_id: The dataset ID to update
+    """
+    try:
+        conn.execute(
+            "UPDATE datasets SET last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (dataset_id,)
+        )
+    except Exception as e:
+        logger.warning(f"Failed to update last_accessed_at for dataset {dataset_id}: {str(e)}")
+
+
+async def get_metadata(conn, websocket, dataset_id: int = None):
     try:
         # Execute query to fetch one row from force_vs_z
-        cursor = conn.execute("SELECT * FROM force_vs_z LIMIT 1")
+        # Rename file_id to file_name and exclude: instrument, inv_ols, no_points, sample, sampling_rate, tip_angle, velocity
+        query = """
+            SELECT 
+                dataset_id,
+                curve_id,
+                segment_type,
+                force_values,
+                z_values,
+                indentation_values,
+                elasticity_values,
+                file_id AS file_name,
+                date,
+                spring_constant,
+                tip_geometry,
+                tip_radius,
+                fmodel_params,
+                fmodel_name,
+                emodel_params,
+                emodel_name,
+                contact_point_z,
+                contact_point_force
+            FROM force_vs_z
+        """
+        if dataset_id is not None:
+            query += " WHERE dataset_id = ? LIMIT 1"
+            cursor = conn.execute(query, (dataset_id,))
+        else:
+            query += " LIMIT 1"
+            cursor = conn.execute(query)
         row = cursor.fetchone()
         
         # Get column names from cursor description
@@ -617,15 +767,16 @@ async def process_and_stream_batch(
     compute_scope: str = "full",  # NEW
     global_force_params: list = None,
     global_elastic_params: list = None,
+    dataset_id: int = None,
 ) -> None:
     """
     Process a batch of curve IDs and optionally a single curve ID, fetch data from DuckDB,
     and stream results via WebSocket.
 
     compute_scope:
-        - "full"         ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ compute all graphs (current behaviour)
-        - "fmodel_only"  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ update only force-model overlay (indentation graph)
-        - "emodel_only"  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ update only elasticity-model overlay (elspectra graph)
+        - "full"         compute all graphs (current behaviour)
+        - "fmodel_only"   update only force-model overlay (indentation graph)
+        - "emodel_only"   update only elasticity-model overlay (elspectra graph)
     """
     try:
         loop = asyncio.get_running_loop()
@@ -688,7 +839,7 @@ async def process_and_stream_batch(
         # Use ThreadPoolExecutor for blocking DuckDB ops
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             from pipeline import get_metadata_for_curves
-            metadata = get_metadata_for_curves(conn, batch_ids)
+            metadata = get_metadata_for_curves(conn, batch_ids, dataset_id=dataset_id)
             print(f"DEBUG: Retrieved metadata: {metadata}")
 
             # ---- SINGLE-CURVE PATH (models / targeted updates) ----
@@ -706,6 +857,7 @@ async def process_and_stream_batch(
                     elastic_model_params=elastic_model_params,
                     force_model_params=force_model_params,
                     compute_elspectra=compute_elspectra_flag,
+                    dataset_id=dataset_id,
                 )
 
             # ---- BATCH PATH (full graphs) ----
@@ -731,6 +883,7 @@ async def process_and_stream_batch(
                         compute_elspectra=compute_elspectra_flag,
                         force_model_population=run_force_population,
                         elastic_model_population=run_elastic_population,
+                        dataset_id=dataset_id,
                     ),
                 )
 
@@ -841,7 +994,9 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from routers.opener import router as experiment_router
 from routers.exporter import router as exporter_router
+from routers.datasets import router as datasets_router
 from auth.router import router as auth_router
+from auth.dependencies import get_current_user
 from experiments.router import router as experiments_router
 
 # Configure logging
@@ -856,6 +1011,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 app.include_router(experiment_router)
 app.include_router(exporter_router)
+app.include_router(datasets_router)
 app.include_router(experiments_router)
 app.include_router(auth_router)
 
@@ -879,104 +1035,6 @@ def validate_hdf5_path(path: str) -> None:
     if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_/]*[a-zA-Z0-9]$', path):
         raise ValueError("HDF5 path contains invalid characters")
 
-# @app.post("/export-hdf5")
-# async def export_hdf5_endpoint(data: Dict[str, Any]):
-#     """Export curves from DuckDB to an HDF5 file with custom level names and metadata."""
-#     export_hdf5_path = data.get("export_hdf5_path")
-#     curve_ids = data.get("curve_ids", [])
-#     dataset_path = data.get("dataset_path")
-#     num_curves = data.get("num_curves")
-#     level_names = data.get("level_names", ["curve0", "segment0"])
-#     metadata_path = data.get("metadata_path", "")
-#     metadata = data.get("metadata", {})
-#     db_path = "data/experiment.db"
-#     errors = []
-
-#     # Validate export_hdf5_path
-#     if not export_hdf5_path:
-#         errors.append("Missing export_hdf5_path")
-#         logger.error("Missing export_hdf5_path")
-#         raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing export_hdf5_path", "errors": errors})
-
-#     try:
-#         # Sanitize file system path
-#         export_hdf5_path = sanitize_file_path(export_hdf5_path)
-
-#         # Validate dataset_path (required for HDF5 data storage)
-#         if not dataset_path:
-#             errors.append("Missing dataset_path")
-#             logger.error("Missing dataset_path")
-#             raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing dataset_path", "errors": errors})
-#         validate_hdf5_path(dataset_path)
-
-#         # Validate metadata_path (optional, can be empty)
-#         if metadata_path:
-#             validate_hdf5_path(metadata_path)
-
-#         # Convert curve_ids
-#         converted_curve_ids = None
-#         if curve_ids:
-#             converted_curve_ids = []
-#             for curve_id in curve_ids:
-#                 match = re.match(r"curve(\d+)", curve_id)
-#                 if not match:
-#                     errors.append(f"Invalid curve_id format: {curve_id}")
-#                     logger.error(f"Invalid curve_id: {curve_id}")
-#                     raise HTTPException(status_code=400, detail={"status": "error", "message": f"Invalid curve_id: {curve_id}", "errors": errors})
-#                 converted_curve_ids.append(int(match.group(1)))
-
-#         # Fetch curve_ids if num_curves is provided
-#         if not converted_curve_ids and num_curves is not None:
-#             if not isinstance(num_curves, int) or num_curves <= 0:
-#                 errors.append("num_curves must be a positive integer")
-#                 raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid num_curves", "errors": errors})
-#             with duckdb.connect(db_path) as conn:
-#                 curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
-#                 converted_curve_ids = [row[0] for row in curve_ids_result]
-
-#         # Validate level_names
-#         if not all(isinstance(name, str) and name.strip() for name in level_names):
-#             errors.append("All level names must be non-empty strings")
-#             raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid level names", "errors": errors})
-
-#         # Validate metadata
-#         for key, value in metadata.items():
-#             if value and isinstance(value, str) and not value.strip():
-#                 errors.append(f"Metadata field {key} cannot be empty")
-#         if errors:
-#             raise HTTPException(status_code=400, detail={
-#                 "status": "error",
-#                 "message": "Invalid metadata",
-#                 "errors": errors
-#             })
-
-#         logger.info(f"Starting HDF5 export to {export_hdf5_path} with {len(converted_curve_ids or [])} curves")
-#         os.makedirs(os.path.dirname(export_hdf5_path), exist_ok=True)
-#         num_exported = export_from_duckdb_to_hdf5(
-#             db_path=db_path,
-#             output_path=export_hdf5_path,  # Fixed: Use output_path instead of export_hdf5_path
-#             curve_ids=converted_curve_ids,
-#             dataset_path=dataset_path,  # Pass dataset_path for HDF5 data storage
-#             level_names=level_names,
-#             metadata_path=metadata_path,
-#             metadata=metadata
-#         )
-
-#         return {
-#             "status": "success",
-#             "message": f"Successfully exported {num_exported} curves",
-#             "export_hdf5_path": export_hdf5_path,
-#             "exported_curves": num_exported
-#         }
-#     except Exception as e:
-#         errors.append(str(e))
-#         logger.error(f"Failed to export to HDF5: {str(e)}")
-#         raise HTTPException(status_code=500, detail={
-#             "status": "error",
-#             "message": f"Failed to export: {str(e)}",
-#             "export_hdf5_path": export_hdf5_path,
-#             "errors": errors
-#         })
 
 
 # New endpoint to fetch all curves' fparams with progress streaming
@@ -1285,7 +1343,7 @@ async def get_all_elasticity_params(data: Dict[str, Any]):
 
 # File-serving endpoint
 @app.get("/exports/{file_path:path}")
-async def serve_exported_file(file_path: str):
+async def serve_exported_file(file_path: str, user=Depends(get_current_user)):
     """Serve an exported file from the exports directory."""
     full_path = os.path.join("", file_path)
     print(full_path)

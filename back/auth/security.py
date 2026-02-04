@@ -2,8 +2,10 @@ from datetime import datetime, timedelta
 from jose import jwt, JWTError
 import bcrypt
 import hashlib
+import os
 
-SECRET_KEY = "CHANGE_ME_IN_ENV"
+# Get SECRET_KEY from environment variable, fallback to default (should be changed in production)
+SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_ME_IN_ENV")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 1 day
 
