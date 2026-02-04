@@ -7,9 +7,9 @@ def save_to_duckdb(curves: Dict[str, ForceCurve], dataset_id: int) -> None:
     print("🚀 Saving transformed data to DuckDB...")
     conn = get_conn()  # Use singleton connection
     try:
-        conn.execute("DROP TABLE IF EXISTS force_vs_z")
+        # Create table if it doesn't exist (don't drop existing data)
         conn.execute("""
-            CREATE TABLE force_vs_z (
+            CREATE TABLE IF NOT EXISTS force_vs_z (
                 dataset_id INTEGER NOT NULL,
                 curve_id INTEGER,
                 segment_type TEXT,
@@ -19,16 +19,9 @@ def save_to_duckdb(curves: Dict[str, ForceCurve], dataset_id: int) -> None:
                 elasticity_values DOUBLE[],
                 file_id TEXT,
                 date TEXT,
-                instrument TEXT,
-                sample TEXT,
                 spring_constant DOUBLE,
-                inv_ols DOUBLE,
                 tip_geometry TEXT,
                 tip_radius DOUBLE,
-                tip_angle DOUBLE,
-                sampling_rate DOUBLE,
-                velocity DOUBLE,
-                no_points INTEGER,
                 fmodel_params DOUBLE[],
                 fmodel_name TEXT,
                 emodel_params DOUBLE[],
@@ -50,16 +43,9 @@ def save_to_duckdb(curves: Dict[str, ForceCurve], dataset_id: int) -> None:
                 None,  # elasticity_values - will be calculated later
                 curve.file_id,
                 curve.date,
-                curve.instrument,
-                curve.sample,
                 curve.spring_constant,
-                curve.inv_ols,
                 curve.tip_geometry,
                 curve.tip_radius,
-                getattr(curve, 'tip_angle', 30.0),  # Default tip angle
-                segment.sampling_rate,
-                segment.velocity,
-                segment.no_points,
                 None,  # fmodel_params - will be calculated later
                 None,  # fmodel_name - will be set later
                 None,  # emodel_params - will be calculated later
@@ -74,10 +60,9 @@ def save_to_duckdb(curves: Dict[str, ForceCurve], dataset_id: int) -> None:
             """
             INSERT INTO force_vs_z (
                 dataset_id, curve_id, segment_type, force_values, z_values, indentation_values, elasticity_values,
-                file_id, date, instrument, sample, spring_constant, inv_ols, tip_geometry, tip_radius,
-                tip_angle, sampling_rate, velocity, no_points, fmodel_params, fmodel_name,
-                emodel_params, emodel_name, contact_point_z, contact_point_force
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                file_id, date, spring_constant, tip_geometry, tip_radius,
+                fmodel_params, fmodel_name, emodel_params, emodel_name, contact_point_z, contact_point_force
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             batch_data
         )
