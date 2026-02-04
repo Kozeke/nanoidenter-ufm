@@ -14,6 +14,7 @@ def create_experiment(
     elasticity_params: dict,
     force_model_params: dict,
     results: dict,
+    dataset_id: Optional[int] = None,
 ):
     conn = get_conn()
 
@@ -22,6 +23,7 @@ def create_experiment(
         INSERT INTO experiments (
             user_id,
             name,
+            dataset_id,
             spring_constant,
             curve_id,
             tip_radius,
@@ -34,11 +36,12 @@ def create_experiment(
             youngs_modulus_mean,
             youngs_modulus_std
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
             name,
+            dataset_id,
             spring_constant,
             curve_id,
             tip_radius,
@@ -100,19 +103,22 @@ def get_experiment(exp_id: int, user_id: int) -> Optional[dict]:
     row = conn.execute(
         """
         SELECT
-            id,
-            name,
-            curve_id,
-            spring_constant,
-            tip_radius,
-            tip_geometry,
-            filters_json,
-            elasticity_params_json,
-            force_model_params_json,
-            youngs_modulus_mean,
-            youngs_modulus_std
-        FROM experiments
-        WHERE id = ? AND user_id = ?
+            e.id,
+            e.name,
+            e.dataset_id,
+            e.curve_id,
+            e.spring_constant,
+            e.tip_radius,
+            e.tip_geometry,
+            e.filters_json,
+            e.elasticity_params_json,
+            e.force_model_params_json,
+            e.youngs_modulus_mean,
+            e.youngs_modulus_std,
+            d.name as dataset_name
+        FROM experiments e
+        LEFT JOIN datasets d ON e.dataset_id = d.id
+        WHERE e.id = ? AND e.user_id = ?
         """,
         (exp_id, user_id),
     ).fetchone()
@@ -123,17 +129,19 @@ def get_experiment(exp_id: int, user_id: int) -> Optional[dict]:
     return {
         "id": row[0],
         "name": row[1],
-        "curve_id": row[2],
+        "dataset_id": row[2],
+        "curve_id": row[3],
         "metadata": {
-            "spring_constant": row[3],
-            "tip_radius": row[4],
-            "tip_geometry": row[5],
+            "spring_constant": row[4],
+            "tip_radius": row[5],
+            "tip_geometry": row[6],
         },
-        "filters": json.loads(row[6]),
-        "elasticity_params": json.loads(row[7]),
-        "force_model_params": json.loads(row[8]),
-        "youngs_modulus_mean": row[9],
-        "youngs_modulus_std": row[10]
+        "filters": json.loads(row[7]),
+        "elasticity_params": json.loads(row[8]),
+        "force_model_params": json.loads(row[9]),
+        "youngs_modulus_mean": row[10],
+        "youngs_modulus_std": row[11],
+        "dataset_name": row[12]  # The name from the datasets table (saved from metadata file_id)
     }
 
 

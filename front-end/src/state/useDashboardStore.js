@@ -82,6 +82,14 @@ export const useDashboardStore = create(
         set({
           numCurves: Number.isNaN(+value) ? 10 : parseInt(value, 10),
         }),
+      // Stores the current dataset ID from the most recently loaded file.
+      datasetId: null,
+      // Updates the dataset ID when a new file is loaded.
+      setDatasetId: (id) => set({ datasetId: id }),
+      // Stores the current dataset filename.
+      filename: null,
+      // Updates the dataset filename.
+      setFilename: (name) => set({ filename: name }),
       // Records which main dashboard tab is currently active.
       activeTab: "forceDisplacement",
       // Updates the active tab selection shared across components.
@@ -203,6 +211,8 @@ export const useDashboardStore = create(
           elasticModelParams: createDefaultElasticModelParams(),
           forceModelParams: createDefaultForceModelParams(),
           numCurves: 10,
+          datasetId: null,
+          filename: null,
           activeTab: "forceDisplacement",
           graphType: "line",
           selectedCurveIds: [],

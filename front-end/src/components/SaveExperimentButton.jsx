@@ -28,6 +28,7 @@ export default function SaveExperimentButton() {
         elasticity_params: dashboard.elasticityParams,
         force_model_params: dashboard.forceModelParams,
         curve_id: dashboard.selectedCurveId,
+        dataset_id: dashboard.datasetId,
         results: {
           youngs_modulus_mean: dashboard.modelStats?.force[0]?.mean,
           youngs_modulus_std: dashboard.modelStats?.force[0]?.std

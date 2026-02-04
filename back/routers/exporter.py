@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
 from typing import Dict, Any, List
 import os
@@ -8,6 +8,7 @@ from pathlib import Path
 import duckdb
 
 from exporters import get_exporter  # Assuming exporters package similar to openers
+from auth.dependencies import get_current_user
 
 router = APIRouter(prefix="", tags=["export"])
 
@@ -24,7 +25,7 @@ def sanitize_file_path(path: str) -> str:
     return str(path)
 
 @router.post("/export/{extension}")
-async def export_endpoint(extension: str, data: Dict[str, Any]):
+async def export_endpoint(extension: str, data: Dict[str, Any], user=Depends(get_current_user)):
     """Export curves from DuckDB to a file with custom level names and metadata."""
     extension = extension.lower()
     if extension not in SUPPORTED_EXPORT_EXTENSIONS:
@@ -47,7 +48,7 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
     # Stores force model parameters (maxInd, minInd, poisson) used for Hertz fit calculations.
     force_model_params = data.get("force_model_params")
     
-    db_path = "data/experiment.db"
+    db_path = "data/all.db"
     errors = []
 
     # Validate export_path
@@ -181,7 +182,7 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
         })
 
 @router.post("/calculate-softmech-metadata")
-async def calculate_softmech_metadata(data: Dict[str, Any]):
+async def calculate_softmech_metadata(data: Dict[str, Any], user=Depends(get_current_user)):
     """Calculate SoftMech-style metadata for preview in frontend."""
     try:
         curve_ids = data.get("curve_ids", [])
@@ -192,7 +193,7 @@ async def calculate_softmech_metadata(data: Dict[str, Any]):
         loose = data.get("loose", 100)
         filters = data.get("filters", {})
         
-        db_path = "data/experiment.db"
+        db_path = "data/all.db"
         
         # Convert curve_ids
         converted_curve_ids = None
@@ -281,7 +282,7 @@ async def calculate_softmech_metadata(data: Dict[str, Any]):
         })
 
 @router.get("/exports/{file_path:path}")
-async def serve_exported_file(file_path: str):
+async def serve_exported_file(file_path: str, user=Depends(get_current_user)):
     """Serve an exported file from the exports directory."""
     # Strip leading 'exports/' if present to fix double prefix issue
     if file_path.startswith("exports/"):

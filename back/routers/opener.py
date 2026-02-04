@@ -1,12 +1,14 @@
 from storage.duckdb_storage import save_to_duckdb
 from transform.transform import transform_data
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from typing import Dict, Any
 import os
 import logging
 from openers import get_opener
 from db.connection import get_conn
+from db.datasets import create_dataset, update_dataset
 from utils.cache import clear_cache
+from auth.dependencies import get_current_user
 
 SUPPORTED_EXTENSIONS = [".json", ".hdf5", ".csv", ".txt"]
 
@@ -22,8 +24,9 @@ router = APIRouter(prefix="/experiment", tags=["experiment"])  # Prefix for grou
 
 logger = logging.getLogger(__name__)  # Or import a shared logger
 
+
 @router.post("/load-experiment")  # Updated decorator to match the client's requested path
-async def load_experiment_endpoint(file: UploadFile = File(...)):
+async def load_experiment_endpoint(file: UploadFile = File(...), user=Depends(get_current_user)):
     """Handle file upload and return file structure."""
     file_path = os.path.join("uploads", file.filename)
     os.makedirs("uploads", exist_ok=True)
@@ -55,7 +58,7 @@ async def load_experiment_endpoint(file: UploadFile = File(...)):
         })
 
 @router.post("/process-file")
-async def process_file_endpoint(data: Dict[str, Any]):
+async def process_file_endpoint(data: Dict[str, Any], user=Depends(get_current_user)):
     """Process file with user-selected dataset paths and metadata."""
     file_path = data.get("file_path")
     file_type = data.get("file_type")
@@ -135,10 +138,24 @@ async def process_file_endpoint(data: Dict[str, Any]):
         curves = opener.process(file_path, force_path, z_path, processed_metadata)
         logging.info("info2")
 
+        # Create dataset record
+        # Use file_id from metadata as name if provided, otherwise use basename of file_path
+        dataset_name = processed_metadata.get("file_id") or os.path.basename(file_path)
+        dataset_id = create_dataset(
+            user_id=user["id"],
+            name=dataset_name,
+            filename=file_path,
+            num_curves=len(curves),
+            spring_constant=processed_metadata.get("spring_constant"),
+            tip_radius=processed_metadata.get("tip_radius"),
+            tip_geometry=processed_metadata.get("tip_geometry"),
+        )
+        logger.info(f"Created dataset record with ID: {dataset_id}, name: {dataset_name}")
+        logger.info(f"Created dataset record with ID: {dataset_id}")
+
         transformed_curves = transform_data(curves)
-        db_path = "data/experiment.db"
-        save_to_duckdb(transformed_curves, db_path)
-        logger.info(f"Saved {len(curves)} curves to DuckDB at {db_path}")
+        save_to_duckdb(transformed_curves, dataset_id)
+        logger.info(f"Saved {len(curves)} curves to DuckDB with dataset_id={dataset_id}")
         
         # Clear all caches since we're loading a new experiment
         # This ensures old cached contact points, indentations, and elspectra
@@ -162,7 +179,8 @@ async def process_file_endpoint(data: Dict[str, Any]):
             "status": "success",
             "message": f"{file_type.upper()} file processed",
             "curves": len(curves),
-            "filename": file_path,
+            "filename": dataset_name,  # Return the custom name (from file_id) or basename
+            "dataset_id": dataset_id,
             "duckdb_status": "saved",
             "spring_constant": float(metadata.get("spring_constant", 0.1)),
             # "tip_radius_um": float(metadata.get("tip_radius", 10)) / 1000,  # Convert nm to μm for display

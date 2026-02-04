@@ -17,7 +17,7 @@ import duckdb
 
 def get_db_path():
     """Get the database path from environment or use default."""
-    return os.environ.get("DB_PATH", "data/experiment.db")
+    return os.environ.get("DB_PATH", "data/all.db")
 
 
 def inspect_cache(conn):
@@ -182,7 +182,7 @@ Examples:
     
     parser.add_argument(
         "--db-path",
-        help=f"Path to DuckDB database (default: from DB_PATH env or data/experiment.db)"
+        help=f"Path to DuckDB database (default: from DB_PATH env or data/all.db)"
     )
     
     args = parser.parse_args()

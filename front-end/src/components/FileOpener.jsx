@@ -20,6 +20,36 @@ import {
 } from '@mui/material';
 import { useFileOpener } from '../hooks/useFileOpener';
 
+// Import validation rules to get field labels
+const activeValidationRules = {
+  file_id: { required: 'boolean', label: 'File Name', type: 'text' },
+  date: {
+    required: 'boolean',
+    label: 'Date',
+    type: 'text',
+    regex: /^\d{4}-\d{2}-\d{2}$/,
+    regexError: 'Date must be in YYYY-MM-DD format',
+  },
+  spring_constant: {
+    required: 'number',
+    label: 'Spring Constant (N/m)',
+    type: 'number',
+    min: 0,
+  },
+  tip_geometry: {
+    required: 'boolean',
+    label: 'Tip Geometry',
+    type: 'select',
+    options: ['cylinder', 'cone', 'sphere', 'pyramid'],
+  },
+  tip_radius: {
+    required: 'boolean',
+    label: 'Tip Radius (nm)',
+    type: 'number',
+    min: 0,
+  },
+};
+
 // same styles as before
 // Applies consistent button styling matching the application's design system.
 const actionBtnStyle = (variant = 'primary', disabled = false) => {
@@ -334,11 +364,15 @@ const FileOpener = ({ onProcessSuccess, setIsLoading, renderTrigger }) => {
                 }
 
                 // Default: normal text field for all other metadata
+                // Get label from validation rules if available, otherwise generate from key
+                const validationRule = activeValidationRules[key];
+                const fieldLabel = validationRule?.label || key.replace('_', ' ').toUpperCase();
+                
                 return (
                   <TextField
                   key={key}
                   name={key}
-                  label={key.replace('_', ' ').toUpperCase()}
+                  label={fieldLabel}
                   type={key === 'date' ? 'date' : 'text'}
                   value={value ?? ''}
                   onChange={handleMetadataChange}
@@ -352,7 +386,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading, renderTrigger }) => {
             </div>
           )}
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, gap: 8 }}>
+        <DialogActions sx={{ px: 3, pb: 2, gap: 2 }}>
           <button
             onClick={() => setOpen(false)}
             disabled={loading}

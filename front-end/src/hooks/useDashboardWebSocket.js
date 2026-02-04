@@ -99,6 +99,8 @@ export const useDashboardWebSocket = () => {
   const { selectedCurveId } = dashboardStore;
   // Reports whether zero-force correction should be applied server-side.
   const { setZeroForce } = dashboardStore;
+  // Provides the current dataset ID from the most recently loaded file.
+  const { datasetId } = dashboardStore;
   // Exposes the multi-loading indicator dispatcher.
   const { setLoadingMulti, loadingMulti } = dashboardStore;
   // Exposes the flag that toggles curve-level loading indicators.
@@ -189,9 +191,13 @@ export const useDashboardWebSocket = () => {
     }
 
     // Builds the payload describing which curves and metadata to retrieve.
+    // Get fresh datasetId from store to ensure we have the latest value
+    const currentDatasetId = useDashboardStore.getState().datasetId;
+    console.log("sendCurveRequest - datasetId from store:", currentDatasetId);
     const requestData = {
       action: "get_metadata",
       num_curves: numCurves,
+      dataset_id: currentDatasetId,
       filters: {
         regular: regularFilters,
         cp_filters: cpFilters,
@@ -229,6 +235,7 @@ export const useDashboardWebSocket = () => {
     forceModelParams,
     setZeroForce,
     selectedCurveId,
+    datasetId,
     setLoadingMulti,
     setIsLoadingCurves,
   ]);
@@ -246,10 +253,14 @@ export const useDashboardWebSocket = () => {
     setLoadingMulti({ curves: true });
     setIsLoadingCurves(true);
   
+    // Get fresh datasetId from store to ensure we have the latest value
+    const currentDatasetId = useDashboardStore.getState().datasetId;
+    console.log("sendModelStatsRequest - datasetId from store:", currentDatasetId);
     const requestData = {
       action: "compute_stats",
       compute_scope: "model_stats",
       num_curves: numCurves,
+      dataset_id: currentDatasetId,
       filters: {
         regular: regularFilters,
         cp_filters: cpFilters,
@@ -266,6 +277,7 @@ export const useDashboardWebSocket = () => {
     socketRef.current.send(JSON.stringify(requestData));
   }, [
     numCurves,
+    datasetId,
     regularFilters,
     cpFilters,
     forceModels,
@@ -297,7 +309,10 @@ export const useDashboardWebSocket = () => {
       wsBase = backend.replace(/^http/, "ws");
     }
 
-    const wsUrl = `${wsBase}/ws/data`;
+    // Include JWT token in WebSocket URL query parameter
+    const wsUrl = token 
+      ? `${wsBase}/ws/data?token=${encodeURIComponent(token)}`
+      : `${wsBase}/ws/data`;
     console.log("Connecting WebSocket to:", wsUrl);
 
     // Update status before attempting the connection
@@ -657,6 +672,7 @@ export const useDashboardWebSocket = () => {
     setConnectionStatus,
     setLastSocketError,
     setSelectedCurveIds,
+    token,
   ]);
 
   // Auto-initializes the WebSocket connection and tears it down on unmount.
