@@ -172,11 +172,21 @@ const ForceDisplacementDataSet = ({
   const yScaledRange = useMemo(() => (domainRange.yMax - domainRange.yMin) * yScaleFactor, [domainRange.yMax, domainRange.yMin, yScaleFactor]);
   const yDecimals = useMemo(() => yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0, [yScaledRange]);
 
-  const xExponent = useMemo(() => Math.log10(xScaleFactor), [xScaleFactor]);
-  const xUnit = useMemo(() => xExponent === 0 ? 'm' : `×10^{-${Math.round(xExponent)}} m`, [xExponent]);
+  // Helper function to convert number to superscript
+  const toSuperscript = (num) => {
+    const superscriptMap = {
+      '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+      '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+      '-': '⁻'
+    };
+    return String(num).split('').map(char => superscriptMap[char] || char).join('');
+  };
 
-  const yExponent = useMemo(() => Math.log10(yScaleFactor), [yScaleFactor]);
-  const yUnit = useMemo(() => yExponent === 0 ? 'N' : `×10^{-${Math.round(yExponent)}} N`, [yExponent]);
+  const xExponent = useMemo(() => Math.round(Math.log10(xScaleFactor)), [xScaleFactor]);
+  const yExponent = useMemo(() => Math.round(Math.log10(yScaleFactor)), [yScaleFactor]);
+
+  const xUnit = useMemo(() => xExponent === 0 ? 'm' : `10${toSuperscript(xExponent)} m`, [xExponent]);
+  const yUnit = useMemo(() => yExponent === 0 ? 'N' : `10${toSuperscript(yExponent)} N`, [yExponent]);
 
   // Generate series data - memoized to avoid recomputing point mappings on every render
   // Downsample when there are many curves to improve rendering performance
@@ -253,6 +263,11 @@ const ForceDisplacementDataSet = ({
       ? { show: false } // Disable tooltips when there are many curves to improve performance
       : {
           trigger: "axis",
+          axisPointer: {
+            type: "cross",
+            axis: "x",
+            snap: true
+          },
           // Format tooltip to show each series cleanly with curve ID, x, and y values
           formatter: (params) => {
             const list = Array.isArray(params) ? params : [params];
@@ -270,8 +285,8 @@ const ForceDisplacementDataSet = ({
 
                 return [
                   `<b>${curveId}</b>`,
-                  `x: ${x}`,
-                  `y: ${y}`,
+                  `x: ${x.toFixed(2)}`,
+                  `y: ${y.toFixed(2)}`,
                 ].join('<br/>');
               })
               .join('<br/><br/>');

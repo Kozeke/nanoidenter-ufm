@@ -1,5 +1,6 @@
 from .filter_registry import FILTER_REGISTRY  # Assuming a registry exists
 from typing import List, Dict
+import re
 
 def apply(query: str, filters: Dict, curve_ids: List[str]) -> str:
     """
@@ -37,30 +38,51 @@ def apply(query: str, filters: Dict, curve_ids: List[str]) -> str:
             else:  # Filters that take both z_values and force_values
                 filter_chain = f"{function_name}({z_col}, {filter_chain}{param_string})"
 
-    # Extract numeric curve IDs from strings like "curve0" -> 0
-    # Convert to integers for proper SQL type handling (curve_id is INTEGER in database)
-    numeric_curve_ids = []
-    for cid in curve_ids:
-        if isinstance(cid, str) and cid.startswith('curve'):
-            try:
-                numeric_id = int(cid[5:])  # Remove "curve" prefix
-                numeric_curve_ids.append(numeric_id)
-            except ValueError:
-                continue
-        else:
-            # Convert string to integer if it's a numeric string
-            try:
-                numeric_curve_ids.append(int(cid))
-            except (ValueError, TypeError):
-                continue
+    # Use the base query passed in (which already has dataset_id filter if provided)
+    # and modify it to apply the filter chain to force_values
+    # The base_query should be something like:
+    # "SELECT curve_id, z_values, force_values FROM force_vs_z WHERE dataset_id = X AND curve_id IN (...)"
+    # or "SELECT curve_id, z_values, force_values FROM force_vs_z WHERE curve_id IN (...)"
     
-    # Construct the final SQL query with integer curve_ids
-    query = f"""
-        SELECT curve_id, 
-               {z_col}, 
-               {filter_chain} AS force_values
-        FROM force_vs_z 
-        WHERE curve_id IN ({','.join(map(str, numeric_curve_ids))})
-    """
+    # Replace force_values in the SELECT clause only (not in WHERE clause)
+    # Split query at FROM to separate SELECT and WHERE parts
+    if "FROM" in query.upper():
+        parts = query.split("FROM", 1)
+        select_part = parts[0]
+        from_where_part = parts[1] if len(parts) > 1 else ""
+        
+        # Replace force_values in SELECT clause only
+        # Handle both "force_values" and "force_values AS ..." patterns
+        # Pattern to match force_values in SELECT (with optional alias)
+        pattern = r'\bforce_values\b(?:\s+AS\s+\w+)?'
+        # Replace with filter_chain and add AS force_values alias
+        select_part = re.sub(pattern, f"{filter_chain} AS force_values", select_part, count=1)
+        
+        # Reconstruct query
+        query = select_part + "FROM" + from_where_part
+    else:
+        # Fallback: if query format is unexpected, build a new one (shouldn't happen)
+        numeric_curve_ids = []
+        for cid in curve_ids:
+            if isinstance(cid, str) and cid.startswith('curve'):
+                try:
+                    numeric_id = int(cid[5:])  # Remove "curve" prefix
+                    numeric_curve_ids.append(numeric_id)
+                except ValueError:
+                    continue
+            else:
+                try:
+                    numeric_curve_ids.append(int(cid))
+                except (ValueError, TypeError):
+                    continue
+        
+        query = f"""
+            SELECT curve_id, 
+                   {z_col}, 
+                   {filter_chain} AS force_values
+            FROM force_vs_z 
+            WHERE curve_id IN ({','.join(map(str, numeric_curve_ids))})
+        """
+    
     print(f"Generated query: {query}")
     return query

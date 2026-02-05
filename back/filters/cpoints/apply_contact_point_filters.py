@@ -78,6 +78,16 @@ def apply_cp_filters(query: str, filters: Dict, curve_ids: List[str], metadata: 
             except (ValueError, TypeError):
                 continue
     
+    # Extract WHERE clause from base query to preserve dataset_id filter
+    where_clause = f"curve_id IN ({','.join(map(str, numeric_curve_ids))})"
+    if query and "WHERE" in query.upper():
+        # Extract the WHERE clause from the base query
+        where_start = query.upper().find("WHERE")
+        base_where = query[where_start + 5:].strip()  # Skip "WHERE"
+        # Combine base WHERE clause with curve_id filter
+        # The base_where should already include dataset_id if present
+        where_clause = f"{base_where} AND curve_id IN ({','.join(map(str, numeric_curve_ids))})"
+    
     # If cp_col stayed "NULL" (no valid filter found), this query will just return no rows
     query = f"""
         WITH cp_calc AS (
@@ -90,7 +100,7 @@ def apply_cp_filters(query: str, filters: Dict, curve_ids: List[str], metadata: 
                 {tip_radius_val} AS tip_radius,
                 '{tip_geometry_sql}' AS tip_geometry
             FROM force_vs_z
-            WHERE curve_id IN ({','.join(map(str, numeric_curve_ids))})
+            WHERE {where_clause}
         )
         SELECT * FROM cp_calc
         WHERE cp_values IS NOT NULL
