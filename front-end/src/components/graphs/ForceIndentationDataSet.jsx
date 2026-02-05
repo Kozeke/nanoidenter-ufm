@@ -204,6 +204,18 @@ const ForceIndentationDataSet = ({
   const allCurves = useMemo(() => {
     return [...finalCp, ...finalFp];
   }, [finalCp, finalFp]);
+
+  // Count unique base curves (excluding model overlays like _hertz)
+  const uniqueCurveCount = useMemo(() => {
+    const uniqueIds = new Set();
+    finalCp.forEach(c => {
+      // Only count curves that are not model overlays
+      if (!c.curve_id.includes('_hertz')) {
+        uniqueIds.add(c.curve_id);
+      }
+    });
+    return uniqueIds.size;
+  }, [finalCp]);
   
   // console.log("forceData (Indentation):", validForceData);
   // console.log("curves_cp:", curvesCpData);
@@ -231,11 +243,21 @@ const ForceIndentationDataSet = ({
   const yScaledRange = useMemo(() => (domainRange.yMax - domainRange.yMin) * yScaleFactor, [domainRange.yMax, domainRange.yMin, yScaleFactor]);
   const yDecimals = useMemo(() => yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0, [yScaledRange]);
 
-  const xExponent = useMemo(() => Math.log10(xScaleFactor), [xScaleFactor]);
-  const xUnit = useMemo(() => xExponent === 0 ? 'm' : `×10^{-${Math.round(xExponent)}} m`, [xExponent]);
+  // Helper function to convert number to superscript
+  const toSuperscript = (num) => {
+    const superscriptMap = {
+      '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+      '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+      '-': '⁻'
+    };
+    return String(num).split('').map(char => superscriptMap[char] || char).join('');
+  };
 
-  const yExponent = useMemo(() => Math.log10(yScaleFactor), [yScaleFactor]);
-  const yUnit = useMemo(() => yExponent === 0 ? 'N' : `×10^{-${Math.round(yExponent)}} N`, [yExponent]);
+  const xExponent = useMemo(() => Math.round(Math.log10(xScaleFactor)), [xScaleFactor]);
+  const yExponent = useMemo(() => Math.round(Math.log10(yScaleFactor)), [yScaleFactor]);
+
+  const xUnit = useMemo(() => xExponent === 0 ? 'm' : `10${toSuperscript(xExponent)} m`, [xExponent]);
+  const yUnit = useMemo(() => yExponent === 0 ? 'N' : `10${toSuperscript(yExponent)} N`, [yExponent]);
 
   // Debug: Log curve data before building chartOptions
   console.log("FI curves_cp len:", curvesCpData[0]?.x?.length, "fparams len:", curvesFparamData.length, "domain:", domainRange);
@@ -309,11 +331,41 @@ const ForceIndentationDataSet = ({
       ? { show: false } // Disable tooltips when there are many curves to improve performance
       : {
           trigger: "axis",
+          axisPointer: {
+            type: "cross",
+            axis: "x",
+            snap: true
+          },
           // Format tooltip to show each series cleanly with curve ID, x, and y values
           formatter: (params) => {
             const list = Array.isArray(params) ? params : [params];
 
-            return list
+            // Filter and deduplicate tooltip entries
+            const seen = new Set();
+            const validEntries = list
+              .filter(p => {
+                // Filter out entries with invalid data
+                if (!p || p.value === null || p.value === undefined) return false;
+                
+                // Handle value as array or single value
+                const value = Array.isArray(p.value) ? p.value : [p.value];
+                const x = value[0];
+                const y = value[1];
+                
+                // Filter out entries with invalid coordinates
+                if (x === null || x === undefined || y === null || y === undefined) return false;
+                if (isNaN(x) || isNaN(y)) return false;
+                
+                // Extract curve ID from series name or data
+                const curveId = p.seriesName || p.name || (p.data && p.data.curve_id);
+                if (!curveId) return false;
+                
+                // Deduplicate by curve_id
+                if (seen.has(curveId)) return false;
+                seen.add(curveId);
+                
+                return true;
+              })
               .map(p => {
                 // Extract curve ID from series name or data
                 const curveId = p.seriesName || p.name || (p.data && p.data.curve_id);
@@ -326,11 +378,14 @@ const ForceIndentationDataSet = ({
 
                 return [
                   `<b>${curveId}</b>`,
-                  `x: ${x}`,
-                  `y: ${y}`,
+                  `x: ${x.toFixed(2)}`,
+                  `y: ${y.toFixed(2)}`,
                 ].join('<br/>');
-              })
-              .join('<br/><br/>');
+              });
+
+            return validEntries.length > 0 
+              ? validEntries.join('<br/><br/>')
+              : '';
           },
         },
     xAxis: {
@@ -460,7 +515,7 @@ const ForceIndentationDataSet = ({
       <div style={toolbarCardStyle}>
         <div style={leftWrapStyle}>
           <div style={titleStyle}>Force–Indentation</div>
-          <div style={chipStyle}>{allCurves.length} series</div>
+          <div style={chipStyle}>{uniqueCurveCount} series</div>
           <div style={unitChipStyle}>X: {xUnit}</div>
           <div style={unitChipStyle}>Y: {yUnit}</div>
         </div>

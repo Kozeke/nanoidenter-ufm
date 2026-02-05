@@ -15,6 +15,7 @@ const ElasticitySpectra = ({
 }) => {
   const chartRef = useRef(null);
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
+  const [hoveredCurveId, setHoveredCurveId] = useState(null);
   const lastNonEmptyDataRef = useRef([]);
 
   useEffect(() => {
@@ -108,6 +109,18 @@ const ElasticitySpectra = ({
   // Keep validForceData for backward compatibility with existing code
   const validForceData = processedCurves;
 
+  // Count unique base curves (excluding elastic model overlays)
+  const uniqueCurveCount = useMemo(() => {
+    const uniqueIds = new Set();
+    validForceData.forEach(c => {
+      // Only count curves that are not elastic model overlays
+      if (!isElasticId(c.curve_id)) {
+        uniqueIds.add(c.curve_id);
+      }
+    });
+    return uniqueIds.size;
+  }, [validForceData]);
+
   // Debug: Log the data to see what we're getting
   // console.log("SpectraElasticity - forceData:", forceData);
   // console.log("SpectraElasticity - validForceData:", validForceData);
@@ -139,11 +152,21 @@ const ElasticitySpectra = ({
     [yScaledRange]
   );
 
-  const xExponent = useMemo(() => Math.log10(xScaleFactor), [xScaleFactor]);
-  const yExponent = useMemo(() => Math.log10(yScaleFactor), [yScaleFactor]);
+  // Helper function to convert number to superscript
+  const toSuperscript = (num) => {
+    const superscriptMap = {
+      '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+      '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+      '-': '⁻'
+    };
+    return String(num).split('').map(char => superscriptMap[char] || char).join('');
+  };
 
-  const xUnit = useMemo(() => xExponent === 0 ? "m" : `×10^{-${Math.round(xExponent)}} m`, [xExponent]);
-  const yUnit = useMemo(() => yExponent === 0 ? "Pa" : `×10^{-${Math.round(yExponent)}} Pa`, [yExponent]);
+  const xExponent = useMemo(() => Math.round(Math.log10(xScaleFactor)), [xScaleFactor]);
+  const yExponent = useMemo(() => Math.round(Math.log10(yScaleFactor)), [yScaleFactor]);
+
+  const xUnit = useMemo(() => xExponent === 0 ? "m" : `10${toSuperscript(xExponent)} m`, [xExponent]);
+  const yUnit = useMemo(() => yExponent === 0 ? "Pa" : `10${toSuperscript(yExponent)} Pa`, [yExponent]);
 
   // ---------- Toolbar styles ----------
   const toolbarCardStyle = {
@@ -245,15 +268,18 @@ const ElasticitySpectra = ({
         [x, y] = downsampleXY(x, y);
       }
       
-      const color = elastic ? "yellow" : "#5470C6";
       const showCurve =
         isShownWithPartner(id, selectedCurveIds) &&
         Array.isArray(x) &&
         Array.isArray(y) &&
         x.length === y.length;
 
+      // Check hover state
+      const isHovered = hoveredCurveId === id;
+      const isDimmed = hoveredCurveId !== null && hoveredCurveId !== id;
+
       // Debug: Log each curve being processed
-      // console.log(`SpectraElasticity - Processing curve: ${id}, elastic: ${elastic}, showCurve: ${showCurve}, color: ${color}`);
+      // console.log(`SpectraElasticity - Processing curve: ${id}, elastic: ${elastic}, showCurve: ${showCurve}`);
 
       return {
         name: id,
@@ -266,20 +292,22 @@ const ElasticitySpectra = ({
         triggerEvent: true,
         // keep elastic on top
         z: elastic ? 3 : 2,
+        // Only set color for elastic model overlays (yellow), let ECharts auto-assign colors for others
+        itemStyle: elastic 
+          ? { color: 'yellow', opacity: isDimmed ? 0.25 : 1 }
+          : { opacity: isDimmed ? 0.25 : 1 },
         lineStyle:
           graphType === "line"
-            ? { color, width: elastic ? 4 : 2, opacity: 1 }
+            ? elastic 
+              ? { color: 'yellow', width: isHovered ? 5 : 4, opacity: isDimmed ? 0.25 : 1 }
+              : { width: isHovered ? 3 : 1.5, opacity: isDimmed ? 0.25 : 1 }
             : undefined,
-        itemStyle: graphType === "scatter" ? { color } : undefined,
         data: showCurve
-          ? x.map((vx, i) => [
-              vx * xScaleFactor,
-              (y[i] ?? 0) * yScaleFactor,
-            ])
+          ? x.map((vx, i) => [vx * xScaleFactor, (y[i] ?? 0) * yScaleFactor])
           : [],
       };
     }).filter(Boolean); // Remove null entries
-  }, [processedCurves, graphType, selectedCurveIds, xScaleFactor, yScaleFactor, showElasticModelOverlay]);
+  }, [processedCurves, graphType, selectedCurveIds, xScaleFactor, yScaleFactor, showElasticModelOverlay, hoveredCurveId]);
   
   // Determine if there are too many series for tooltips (performance optimization)
   const tooManySeries = processedCurves.length > 40;
@@ -289,29 +317,62 @@ const ElasticitySpectra = ({
     tooltip: tooManySeries
       ? { show: false } // Disable tooltips when there are many curves to improve performance
       : {
-          trigger: "axis",
-          // Format tooltip to show each series cleanly with curve ID, x, and y values
+          trigger: "axis", // Keep axis trigger for reliability across all chart types
+          axisPointer: {
+            type: "cross",
+            axis: "x",
+            snap: true
+          },
+          // Tooltip is passive (read-only) - only displays hoveredCurveId, never sets it
           formatter: (params) => {
+            // If no curve is hovered, don't show tooltip
+            if (!hoveredCurveId) return '';
+            
             const list = Array.isArray(params) ? params : [params];
-
-            return list
-              .map(p => {
-                // Extract curve ID from series name or data
-                const curveId = p.seriesName || p.name || (p.data && p.data.curve_id);
-
-                // Handle value as array or single value
-                const value = Array.isArray(p.value) ? p.value : [p.value];
-
-                const x = value[0];
-                const y = value[1];
-
-                return [
-                  `<b>${curveId}</b>`,
-                  `x: ${x}`,
-                  `y: ${y}`,
-                ].join('<br/>');
-              })
-              .join('<br/><br/>');
+            
+            // Filter out invalid entries
+            const validEntries = list.filter(p => {
+              if (!p || p.value === null || p.value === undefined) return false;
+              const value = Array.isArray(p.value) ? p.value : [p.value];
+              const x = value[0];
+              const y = value[1];
+              if (x === null || x === undefined || y === null || y === undefined) return false;
+              if (isNaN(x) || isNaN(y)) return false;
+              return true;
+            });
+            
+            if (validEntries.length === 0) return '';
+            
+            // Find the entry that matches the hoveredCurveId
+            const hoveredEntry = validEntries.find(p => {
+              const curveId = p.seriesName || p.name;
+              return curveId === hoveredCurveId;
+            });
+            
+            // If we found the hovered curve, show its data
+            if (hoveredEntry) {
+              const value = Array.isArray(hoveredEntry.value) ? hoveredEntry.value : [hoveredEntry.value];
+              const x = value[0];
+              const y = value[1];
+              
+              return [
+                `<b>${hoveredCurveId}</b>`,
+                `x: ${x.toFixed(2)}`,
+                `y: ${y.toFixed(2)}`,
+              ].join('<br/>');
+            }
+            
+            // Fallback: show first valid entry if hovered curve not found
+            const firstEntry = validEntries[0];
+            const value = Array.isArray(firstEntry.value) ? firstEntry.value : [firstEntry.value];
+            const x = value[0];
+            const y = value[1];
+            
+            return [
+              `<b>${hoveredCurveId}</b>`,
+              `x: ${x.toFixed(2)}`,
+              `y: ${y.toFixed(2)}`,
+            ].join('<br/>');
           },
         },
     xAxis: {
@@ -348,9 +409,20 @@ const ElasticitySpectra = ({
     ],
     animation: false,
     progressive: 5000,
-  }), [tooManySeries, series, xScaleFactor, yScaleFactor, xDecimals, yDecimals, xUnit, yUnit, domainRange]);
+    }), [tooManySeries, series, xScaleFactor, yScaleFactor, xDecimals, yDecimals, xUnit, yUnit, domainRange, hoveredCurveId]);
 
   const onChartEvents = {
+    mouseover: (params) => {
+      if (params.componentType === "series") {
+        const curveId = params.seriesName || params.name;
+        if (curveId) {
+          setHoveredCurveId(curveId);
+        }
+      }
+    },
+    mouseout: (params) => {
+      setHoveredCurveId(null);
+    },
     click: (params) => {
       if (params.componentType === "series") {
         const selectedCurve = validForceData[params.seriesIndex];
@@ -373,7 +445,7 @@ const ElasticitySpectra = ({
       <div style={toolbarCardStyle}>
         <div style={leftWrapStyle}>
           <div style={titleStyle}>Elasticity Spectra</div>
-          <div style={chipStyle}>{validForceData.length} series</div>
+          <div style={chipStyle}>{uniqueCurveCount} series</div>
           <div style={unitChipStyle}>X: {xUnit}</div>
           <div style={unitChipStyle}>Y: {yUnit}</div>
         </div>
