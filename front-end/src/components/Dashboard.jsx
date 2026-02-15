@@ -433,7 +433,8 @@ const Dashboard = () => {
     regularFilters,
     cpFilters,
     activeFmodel,
-    numCurves
+    numCurves,
+    datasetId
   });
 
   // Function to fetch all fparams with progress tracking
@@ -475,6 +476,7 @@ const Dashboard = () => {
             e_models: elasticityModels,
           },
           num_curves: numCurves,
+          dataset_id: datasetId,
         }),
         signal: fparamsAbortRef.current.signal
       });
@@ -552,7 +554,7 @@ const Dashboard = () => {
     showParameters, activeTab, selectedForceModel,
     fparamsCacheKey, lastFparamsKey, allFparams.length,
     regularFilters, cpFilters, forceModels, elasticityModels, numCurves,
-    stableStringify
+    datasetId, stableStringify
   ]);
 
   // Fetch or reuse cache whenever dependencies indicate it's needed
@@ -608,7 +610,8 @@ const Dashboard = () => {
     regularFilters,
     cpFilters,
     activeEmodel,
-    numCurves
+    numCurves,
+    datasetId
   });
 
   function YoungsModulusBadge({ value }) {
@@ -681,6 +684,7 @@ const Dashboard = () => {
             f_models: forceModels,
             e_models: elasticityModels,
           },
+          dataset_id: datasetId,
         }),
         signal: eparamsAbortRef.current.signal
       });
@@ -749,6 +753,7 @@ const Dashboard = () => {
               f_models: forceModels,
               e_models: elasticityModels,
             },
+            dataset_id: datasetId,
           }),
           signal: eparamsAbortRef.current.signal
         });
@@ -776,7 +781,7 @@ const Dashboard = () => {
     showElasticityParameters, selectedElasticityModel, activeTab,
     lastElasticityKey, eparamsCacheKey, allElasticityParams.length,
     regularFilters, cpFilters, forceModels, elasticityModels,
-    stableStringify
+    datasetId, stableStringify
   ]);
 
   // Effect to fetch elasticity params when checkbox is checked

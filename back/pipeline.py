@@ -779,7 +779,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     return graph_force_vs_z, graph_force_indentation, graph_elspectra
 
 
-def _select_curve_ids(conn, filters: Dict, num_curves: Optional[int] = None) -> List[str]:
+def _select_curve_ids(conn, filters: Dict, num_curves: Optional[int] = None, dataset_id: Optional[int] = None) -> List[str]:
     """
     Select curve IDs from database after applying filters.
     
@@ -787,14 +787,16 @@ def _select_curve_ids(conn, filters: Dict, num_curves: Optional[int] = None) -> 
         conn: DuckDB connection
         filters: Filter dictionary
         num_curves: Optional limit on number of curves
+        dataset_id: Optional dataset ID to filter curves by
     
     Returns:
-        List of curve ID strings (e.g., ["0", "1", "2"])
+        List of curve ID strings (e.g., ["curve0", "curve1"])
     """
-    # Build query - for now, simple selection; can be enhanced with filter logic
-    # Note: This function doesn't have dataset_id parameter, but it's used in contexts where
-    # dataset filtering might not be needed. If needed, this should be updated.
-    q = "SELECT DISTINCT curve_id FROM force_vs_z ORDER BY curve_id"
+    # Build query with optional dataset_id filter
+    if dataset_id is not None:
+        q = f"SELECT DISTINCT curve_id FROM force_vs_z WHERE dataset_id = {dataset_id} ORDER BY curve_id"
+    else:
+        q = "SELECT DISTINCT curve_id FROM force_vs_z ORDER BY curve_id"
     if num_curves:
         q += f" LIMIT {int(num_curves)}"
     result = conn.execute(q).fetchall()
@@ -808,7 +810,8 @@ async def compute_elasticity_params_batched(
     num_curves: Optional[int] = None, 
     batch_size: int = 50,
     elasticity_params: Optional[Dict] = None,
-    elastic_model_params: Optional[Dict] = None
+    elastic_model_params: Optional[Dict] = None,
+    dataset_id: Optional[int] = None
 ) -> AsyncGenerator[Tuple[int, int, int, int, List[Dict]], None]:
     """
     Async generator yielding batches of elasticity parameters with progress.
@@ -819,8 +822,8 @@ async def compute_elasticity_params_batched(
         - curve_index: int
         - elasticity_param: List[float] (parameter values)
     """
-    # Select curve IDs
-    curve_ids = _select_curve_ids(conn, filters, num_curves)
+    # Select curve IDs (optionally filtered by dataset_id)
+    curve_ids = _select_curve_ids(conn, filters, num_curves, dataset_id=dataset_id)
     total = len(curve_ids)
     
     if total == 0:
@@ -836,7 +839,7 @@ async def compute_elasticity_params_batched(
         batch_ids = curve_ids[i * batch_size:(i + 1) * batch_size]
         
         # Get metadata for this batch
-        metadata = get_metadata_for_curves(conn, batch_ids)
+        metadata = get_metadata_for_curves(conn, batch_ids, dataset_id=dataset_id)
         
         # Compute elasticity params for this batch using existing pipeline
         g_fvz, g_fi, g_el = fetch_curves_batch(
@@ -847,7 +850,8 @@ async def compute_elasticity_params_batched(
             metadata=metadata,
             compute_elspectra=True,
             elasticity_params=elasticity_params,
-            elastic_model_params=elastic_model_params
+            elastic_model_params=elastic_model_params,
+            dataset_id=dataset_id
         )
         
         # Extract elasticity params from result

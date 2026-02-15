@@ -1048,6 +1048,7 @@ async def get_all_fparams_stream(data: Dict[str, Any]):
         try:
             # Extract parameters from request
             filters = data.get("filters", {})
+            dataset_id = data.get("dataset_id")
             
             # Ensure we have fmodels to calculate fparams
             if not filters.get("f_models"):
@@ -1067,9 +1068,12 @@ async def get_all_fparams_stream(data: Dict[str, Any]):
                 else:
                     raise
             
-            # Get ALL curve IDs (no limit)
-            curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z").fetchall()
-            curve_ids = [str(row[0]) for row in curve_ids_result]
+            # Get curve IDs (optionally filtered by dataset_id)
+            if dataset_id is not None:
+                curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z WHERE dataset_id = ?", (dataset_id,)).fetchall()
+            else:
+                curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z").fetchall()
+            curve_ids = [f"curve{row[0]}" if isinstance(row[0], int) else str(row[0]) for row in curve_ids_result]
             
             total_curves = len(curve_ids)
             print(f"Found {total_curves} total curves in database")
@@ -1098,7 +1102,7 @@ async def get_all_fparams_stream(data: Dict[str, Any]):
                 # Fetch curves with fparam calculation (use single=True to get fparams)
                 # Skip elspectra calculation for fparams endpoint to improve performance
                 graph_force_vs_z, graph_force_indentation, graph_elspectra = fetch_curves_batch(
-                    conn, batch_curve_ids, filters, single=True, compute_elspectra=False
+                    conn, batch_curve_ids, filters, single=True, compute_elspectra=False, dataset_id=dataset_id
                 )
                 
                 # Extract fparams from this batch
@@ -1157,6 +1161,7 @@ async def get_all_emodels_stream(req: Request):
     body = await req.json()
     filters = (body or {}).get("filters", {})
     num_curves = (body or {}).get("num_curves")
+    dataset_id = (body or {}).get("dataset_id")
     elasticity_params = (body or {}).get("elasticity_params", {"interpolate": True, "order": 2, "window": 61})
     elastic_model_params = (body or {}).get("emodel_params", {"maxInd": 800, "minInd": 0})
     
@@ -1179,7 +1184,8 @@ async def get_all_emodels_stream(req: Request):
                 num_curves=num_curves,
                 batch_size=50,
                 elasticity_params=elasticity_params,
-                elastic_model_params=elastic_model_params
+                elastic_model_params=elastic_model_params,
+                dataset_id=dataset_id
             )
             
             total_batches = None
