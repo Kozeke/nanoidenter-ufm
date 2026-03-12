@@ -99,7 +99,7 @@ def create_fmodel_udf(fmodel_name: str, conn: duckdb.DuckDBPyConnection):
             return None
 
         except Exception as e:
-            print(f"Error in UDF for {fmodel_name}: {e}")
+            # print(f"Error in UDF for {fmodel_name}: {e}")
             return None
 
     return_type = duckdb.list_type(duckdb.list_type('DOUBLE'))
@@ -111,13 +111,15 @@ def create_fmodel_udf(fmodel_name: str, conn: duckdb.DuckDBPyConnection):
             return_type=return_type,
             null_handling='SPECIAL'
         )
-    except duckdb.CatalogException as e:
-        if "already exists" in str(e):
-            print(f"Function '{udf_name}' already exists. Skipping creation.")
+    except (duckdb.CatalogException, duckdb.NotImplementedException) as e:
+        msg = str(e).lower()
+        if "already exists" in msg or "already created" in msg:
+            # print(f"Function '{udf_name}' already exists. Skipping creation.")
+            pass
         else:
             raise
 
-    print(f"UDF {udf_name} registered.")
+    # print(f"UDF {udf_name} registered.")
     
 def save_fmodel_to_db(fmodel_class, conn: duckdb.DuckDBPyConnection):
     """Save fmodel metadata to the database."""

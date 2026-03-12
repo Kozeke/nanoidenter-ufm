@@ -50,7 +50,7 @@ def create_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
             result = filter_instance.calculate(x_values, y_values)
             return result if result is not None else None
         except Exception as e:
-            print(f"Error in UDF for {filter_name}: {e}")
+            # print(f"Error in UDF for {filter_name}: {e}")
             return None
 
     # Consistent return type: DOUBLE[]
@@ -64,12 +64,14 @@ def create_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
             return_type=return_type,
             null_handling='SPECIAL'
         )
-    except duckdb.CatalogException as e:
-        if "already exists" in str(e):
-            print(f"Function '{udf_name}' already exists. Skipping creation.")
+    except (duckdb.CatalogException, duckdb.NotImplementedException) as e:
+        msg = str(e).lower()
+        if "already exists" in msg or "already created" in msg:
+            # print(f"Function '{udf_name}' already exists. Skipping creation.")
+            pass
         else:
             raise
-    print(f"UDF {udf_name} registered with types: {udf_param_types}, return type: {return_type}")
+    # print(f"UDF {udf_name} registered with types: {udf_param_types}, return type: {return_type}")
     
 
 

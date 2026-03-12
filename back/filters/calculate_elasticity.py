@@ -83,7 +83,7 @@ def calc_elspectra(
         # 0.709 * xx * tan(angle)
         aradius = 0.709 * xx * np.tan(ang_rad)
     else:
-        return False  # invalid geometry (kept)
+        return None  # invalid geometry – None is the correct DuckDB UDF sentinel
 
     coeff = 3.0 / (8.0 * aradius)
 
@@ -91,9 +91,11 @@ def calc_elspectra(
     if win % 2 == 0:
         win += 1
 
-    # Same length check as original (from nano.py line 189)
+    # Same length check as original (from nano.py line 189).
+    # Return None (not False) – DuckDB UDFs registered as DOUBLE[][] must never
+    # return a Python boolean; None is the correct "no result" sentinel.
     if yy.size <= win:
-        return False
+        return None
 
     # Derivative via Savitzky–Golay (identical call signature)
     deriv = savgol_filter(yy, win, order, delta=ddt, deriv=1)

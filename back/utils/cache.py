@@ -69,7 +69,7 @@ def warmup_cp_cache(
     missing_ids = [cid for cid in curve_ids if cid not in cached_ids]
     
     if not missing_ids:
-        print(f"✅ CP cache: All {len(curve_ids)} curves already cached")
+        # print(f"✅ CP cache: All {len(curve_ids)} curves already cached")
         return 0
     
     print(f"🔥 Warming up CP cache for {len(missing_ids)}/{len(curve_ids)} curves...")
@@ -156,8 +156,8 @@ def get_cached_indentations(
         
         cached = {row[0]: (row[1], row[2]) for row in results}
         
-        if cached:
-            print(f"📦 Indentation cache: {len(cached)}/{len(curve_ids)} hits")
+        # if cached:
+            # print(f"📦 Indentation cache: {len(cached)}/{len(curve_ids)} hits")
         
         return cached
     

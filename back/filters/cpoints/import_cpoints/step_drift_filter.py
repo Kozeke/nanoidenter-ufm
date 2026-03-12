@@ -37,7 +37,7 @@ class StepDriftFilter(CpointBase):
             j_rov = np.argmin((x - zz_x[rov_best_ind])**2)
             return [[float(x[j_rov]), float(y[j_rov])]]
         except Exception as e:
-            print(f"StepDrift error: {e}")
+            # print(f"StepDrift error: {e}")
             return None
 
     def getRange(self, x, y):

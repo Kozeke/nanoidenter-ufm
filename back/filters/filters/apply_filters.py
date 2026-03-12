@@ -84,5 +84,5 @@ def apply(query: str, filters: Dict, curve_ids: List[str]) -> str:
             WHERE curve_id IN ({','.join(map(str, numeric_curve_ids))})
         """
     
-    print(f"Generated query: {query}")
+    # print(f"Generated query: {query}")
     return query

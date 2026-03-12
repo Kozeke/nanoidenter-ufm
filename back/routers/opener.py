@@ -81,53 +81,15 @@ async def process_file_endpoint(data: Dict[str, Any], user=Depends(get_current_u
         opener = get_opener(file_type)
         logger.info("info22")
 
-        # Convert tip_radius to meters for internal processing
+        # tip_radius is always stored and processed in metres (SI units).
+        # The UI field is labelled in metres, HDF5 files use SI units, and the
+        # elasticity / contact-point UDFs all expect metres.  No conversion is
+        # performed here – what the user submits is what is stored.
         processed_metadata = metadata.copy()
         if "tip_radius" in processed_metadata:
             tip_radius_input = float(processed_metadata["tip_radius"])
-            unit = metadata.get("unit", "").lower()  # Get unit if provided (um, nm, m, etc.)
-            
-            # DEBUG: Log the input value to diagnose unit issues
-            logger.info(f"DEBUG tip_radius conversion: input={tip_radius_input:.6e}, unit={unit}")
-            
-            # Convert based on explicit unit if provided, otherwise auto-detect
-            if unit == "um" or unit == "μm" or unit == "micrometer" or unit == "micrometers":
-                # Convert micrometers to meters: 1 um = 1e-6 m
-                # BUT: if value is very small (< 1e-3), it's likely already in meters
-                # (frontend might send value in meters but label with "um" for display)
-                if tip_radius_input < 1e-3:
-                    # Value is likely already in meters (e.g., 0.00001 m = 10 um)
-                    logger.warning(f"tip_radius input ({tip_radius_input:.6e}) with unit '{unit}' is very small. "
-                                 f"Assuming value is already in meters (not converting).")
-                    processed_metadata["tip_radius"] = tip_radius_input
-                else:
-                    # Convert micrometers to meters: 1 um = 1e-6 m
-                    processed_metadata["tip_radius"] = tip_radius_input * 1e-6
-                    logger.info(f"tip_radius input ({tip_radius_input:.6e} {unit}) converted to {processed_metadata['tip_radius']:.6e} m")
-            elif unit == "nm" or unit == "nanometer" or unit == "nanometers":
-                # Convert nanometers to meters: 1 nm = 1e-9 m
-                processed_metadata["tip_radius"] = tip_radius_input * 1e-9
-                logger.info(f"tip_radius input ({tip_radius_input:.6e} {unit}) converted to {processed_metadata['tip_radius']:.6e} m")
-            elif unit == "m" or unit == "meter" or unit == "meters":
-                # Already in meters, use as-is
-                processed_metadata["tip_radius"] = tip_radius_input
-                logger.info(f"tip_radius input ({tip_radius_input:.6e} {unit}) already in meters, using as-is")
-            else:
-                # No unit specified or unknown unit - auto-detect based on value magnitude
-                # Typical tip radii: 10-1000 nm = 1e-8 to 1e-6 m
-                # If input is <= 1e-5, it's likely already in meters (covers up to 10 um = 1e-5 m)
-                # If input is > 1e-5, it's likely in nanometers and needs conversion
-                if tip_radius_input <= 1e-5:
-                    # Already in meters (e.g., 1e-8 m = 10 nm, 1e-5 m = 10 um)
-                    logger.info(f"tip_radius input ({tip_radius_input:.6e}, no unit) appears to be in meters, using as-is")
-                    processed_metadata["tip_radius"] = tip_radius_input
-                else:
-                    # Assume nanometers, convert to meters
-                    # e.g., 10 nm -> 1e-8 m, 100 nm -> 1e-7 m, 1000 nm -> 1e-6 m
-                    logger.info(f"tip_radius input ({tip_radius_input:.6e}, no unit) assumed to be in nanometers, converting to meters")
-                    processed_metadata["tip_radius"] = tip_radius_input * 1e-9  # Convert nm to m
-            
-            logger.info(f"DEBUG tip_radius after conversion: {processed_metadata['tip_radius']:.6e} m")
+            processed_metadata["tip_radius"] = tip_radius_input
+            logger.info(f"tip_radius received: {tip_radius_input:.6e} m (used as-is)")
 
         if not opener.validate_metadata(processed_metadata):
             errors.append("Invalid or incomplete metadata")

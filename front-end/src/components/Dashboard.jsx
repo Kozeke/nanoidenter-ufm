@@ -430,6 +430,7 @@ const Dashboard = () => {
     ? { [selectedForceModel]: forceModels?.[selectedForceModel] || {} }
     : {};
   const fparamsCacheKey = stableStringify({
+    datasetId,
     regularFilters,
     cpFilters,
     activeFmodel,
@@ -469,6 +470,7 @@ const Dashboard = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          dataset_id: datasetId || null,
           filters: {
             regular: regularFilters,
             cp_filters: cpFilters,
@@ -553,8 +555,8 @@ const Dashboard = () => {
   }, [
     showParameters, activeTab, selectedForceModel,
     fparamsCacheKey, lastFparamsKey, allFparams.length,
-    regularFilters, cpFilters, forceModels, elasticityModels, numCurves,
-    datasetId, stableStringify
+    regularFilters, cpFilters, forceModels, elasticityModels, numCurves, datasetId,
+    stableStringify
   ]);
 
   // Fetch or reuse cache whenever dependencies indicate it's needed
@@ -607,11 +609,13 @@ const Dashboard = () => {
     ? { [selectedElasticityModel]: elasticityModels?.[selectedElasticityModel] || {} }
     : {};
   const eparamsCacheKey = stableStringify({
+    datasetId,
     regularFilters,
     cpFilters,
     activeEmodel,
     numCurves,
-    datasetId
+    elasticityParams,
+    elasticModelParams
   });
 
   function YoungsModulusBadge({ value }) {
@@ -671,20 +675,22 @@ const Dashboard = () => {
       eparamsAbortRef.current = new AbortController();
 
       // Prefer the SSE endpoint (same format as fmodel); fall back to JSON if unavailable
-      const streamUrl = `${process.env.REACT_APP_BACKEND_URL}/get-all-emodels-stream`;
+      const streamUrl = `${process.env.REACT_APP_BACKEND_URL}/get-all-eparams-stream`;
       let response = await fetch(streamUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          dataset_id: datasetId || null,
           filters: {
             regular: regularFilters,
             cp_filters: cpFilters,
             f_models: forceModels,
             e_models: elasticityModels,
           },
-          dataset_id: datasetId,
+          elasticity_params: elasticityParams,
+          emodel_params: elasticModelParams,
         }),
         signal: eparamsAbortRef.current.signal
       });
@@ -747,13 +753,15 @@ const Dashboard = () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            dataset_id: datasetId || null,
             filters: {
               regular: regularFilters,
               cp_filters: cpFilters,
               f_models: forceModels,
               e_models: elasticityModels,
             },
-            dataset_id: datasetId,
+            elasticity_params: elasticityParams,
+            emodel_params: elasticModelParams,
           }),
           signal: eparamsAbortRef.current.signal
         });
@@ -780,8 +788,9 @@ const Dashboard = () => {
   }, [
     showElasticityParameters, selectedElasticityModel, activeTab,
     lastElasticityKey, eparamsCacheKey, allElasticityParams.length,
-    regularFilters, cpFilters, forceModels, elasticityModels,
-    datasetId, stableStringify
+    regularFilters, cpFilters, forceModels, elasticityModels, datasetId,
+    elasticityParams, elasticModelParams,
+    stableStringify
   ]);
 
   // Effect to fetch elasticity params when checkbox is checked

@@ -26,7 +26,7 @@ const metadataValidationRules = {
   },
   tip_radius: {
     required: 'boolean',
-    label: 'Tip Radius (nm)',
+    label: 'Tip Radius (m)',
     type: 'number',
     min: 0,
   },

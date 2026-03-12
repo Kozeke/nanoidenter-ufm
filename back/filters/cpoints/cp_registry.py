@@ -106,8 +106,9 @@ def create_contact_point_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
             return_type=return_type,
             null_handling="SPECIAL"  # All contact point filters can return None
         )
-    except duckdb.CatalogException as e:
-        if "already exists" in str(e):
+    except (duckdb.CatalogException, duckdb.NotImplementedException) as e:
+        msg = str(e).lower()
+        if "already exists" in msg or "already created" in msg:
             print(f"Function {udf_name} already exists. Skipping creation.")
         else:
             raise

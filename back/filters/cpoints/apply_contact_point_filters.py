@@ -31,13 +31,12 @@ def apply_cp_filters(query: str, filters: Dict, curve_ids: List[str], metadata: 
 
     # Take values from metadata (with safe defaults)
     spring_constant_val = _safe_meta(metadata, "spring_constant", 1.0)
-    # tip_radius_val = _safe_meta(metadata, "tip_radius", 1e-5, positive=True)
-    tip_radius_val = 1e-5
+    tip_radius_val = _safe_meta(metadata, "tip_radius", 1e-5, positive=True)
     tip_geometry_val = metadata.get("tip_geometry") or "sphere"
     tip_geometry_sql = str(tip_geometry_val).replace("'", "''")
 
-    print(f"DEBUG: apply_cp_filters - metadata: {metadata}")
-    print(f"DEBUG: using spring_constant={spring_constant_val}, tip_radius={tip_radius_val}, tip_geometry='{tip_geometry_sql}'")
+    # print(f"DEBUG: apply_cp_filters - metadata: {metadata}")
+    # print(f"DEBUG: using spring_constant={spring_constant_val}, tip_radius={tip_radius_val}, tip_geometry='{tip_geometry_sql}'")
 
     cp_col = "NULL"
     for filter_name in filters:
@@ -105,5 +104,5 @@ def apply_cp_filters(query: str, filters: Dict, curve_ids: List[str], metadata: 
         SELECT * FROM cp_calc
         WHERE cp_values IS NOT NULL
     """
-    print(f"Generated query (optimized): {query}")
+    # print(f"Generated query (optimized): {query}")
     return query

@@ -95,43 +95,50 @@ def get_metadata_for_curves(conn: duckdb.DuckDBPyConnection, curve_ids: List[str
             'tip_geometry': 'sphere'
         }
     
-    # Convert curve_ids to numeric format
-    numeric_curve_ids = curve_ids
+    # Convert "curveN" strings to plain integers for safe SQL parameterisation.
+    numeric_curve_ids = []
+    for cid in curve_ids:
+        if isinstance(cid, str) and cid.startswith('curve'):
+            try:
+                numeric_curve_ids.append(int(cid[5:]))
+            except ValueError:
+                continue
+        else:
+            try:
+                numeric_curve_ids.append(int(cid))
+            except (ValueError, TypeError):
+                continue
 
-    # numeric_curve_ids = []
-    # for cid in curve_ids:
-    #     if isinstance(cid, str) and cid.startswith('curve'):
-    #         try:
-    #             numeric_id = int(cid[5:])
-    #             numeric_curve_ids.append(str(numeric_id))
-    #         except ValueError:
-    #             continue
-    #     else:
-    #         numeric_curve_ids.append(cid)
-    
     if not numeric_curve_ids:
         return {
             'spring_constant': 1.0,
             'tip_radius': 1e-5,
             'tip_geometry': 'sphere'
         }
-    
+
     try:
-        # Get metadata from the first curve (assuming all curves have same metadata)
+        # Get metadata from the first curve (assuming all curves share the same metadata).
+        # Use parameterised queries (?) so the values are never interpolated as SQL identifiers.
         if dataset_id is not None:
-            result = conn.execute(f"""
+            result = conn.execute(
+                """
                 SELECT spring_constant, tip_radius, tip_geometry
-                FROM force_vs_z 
-                WHERE dataset_id = {dataset_id} AND curve_id = {numeric_curve_ids[0]}
+                FROM force_vs_z
+                WHERE dataset_id = ? AND curve_id = ?
                 LIMIT 1
-            """).fetchone()
+                """,
+                (dataset_id, numeric_curve_ids[0]),
+            ).fetchone()
         else:
-            result = conn.execute(f"""
+            result = conn.execute(
+                """
                 SELECT spring_constant, tip_radius, tip_geometry
-                FROM force_vs_z 
-                WHERE curve_id = {numeric_curve_ids[0]}
+                FROM force_vs_z
+                WHERE curve_id = ?
                 LIMIT 1
-            """).fetchone()
+                """,
+                (numeric_curve_ids[0],),
+            ).fetchone()
         
         if result:
             spring_constant, tip_radius, tip_geometry = result
@@ -211,6 +218,16 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         elastic_model_params = {"maxInd": 800, "minInd": 0}
     if force_model_params is None:
         force_model_params = {"maxInd": 800, "minInd": 0, "poisson": 0.5}
+
+    # Propagate the actual tip_radius into elastic_model_params so that geometry-
+    # aware emodels (e.g. BilayerModel) use the same R that calc_elspectra used
+    # when building the elastic spectrum for each curve.
+    elastic_model_params = {**elastic_model_params, "tip_radius": r_default}
+    
+    # Also propagate tip_radius into force_model_params so that geometry-aware
+    # fmodels (e.g. HertzFmodel, DriftedHertzModel) use the same R that was used
+    # for indentation and elspectra calculations.
+    force_model_params = {**force_model_params, "tip_radius": r_default}
     # print(f"Fetching batch of {len(curve_ids)} curves...")
     
     # Extract regular and cp_filters from the input
@@ -320,27 +337,27 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         cached_ids = {row[0] for row in conn.execute(cp_cached_check).fetchall()}
         missing_ids = [cid for cid in numeric_curve_ids if cid not in cached_ids]
         # âš ï¸ ADD THIS DEBUG BLOCK
-        print(f"ðŸ” DEBUG CP Cache Check:")
-        print(f"  method: {cp_method}")
-        print(f"  params_hash: {cp_params_hash}")
-        print(f"  params: {cp_filters.get(cp_method, {})}")
-        print(f"  cached_ids found: {cached_ids}")
-        print(f"  missing_ids: {missing_ids}")
-        print(f"CP Cache: {len(cached_ids)} hits, {len(missing_ids)} misses out of {len(numeric_curve_ids)} curves")
+        # print(f"ðŸ” DEBUG CP Cache Check:")
+        # print(f"  method: {cp_method}")
+        # print(f"  params_hash: {cp_params_hash}")
+        # print(f"  params: {cp_filters.get(cp_method, {})}")
+        # print(f"  cached_ids found: {cached_ids}")
+        # print(f"  missing_ids: {missing_ids}")
+        # print(f"CP Cache: {len(cached_ids)} hits, {len(missing_ids)} misses out of {len(numeric_curve_ids)} curves")
         
         # Also check what's ACTUALLY in the cache for these curves (regardless of method)
-        debug_check = f"""
-        SELECT curve_id, method, params_hash, spring_constant, tip_radius, tip_geometry
-        FROM contact_points
-        WHERE curve_id IN ({ids_csv})
-        """
-        debug_results = conn.execute(debug_check).fetchall()
-        print(f"  ALL cache entries for these curves:")
-        for row in debug_results:
-            print(f"    curve_id={row[0]}, method={row[1]}, params_hash={row[2][:8]}...")
+        # debug_check = f"""
+        # SELECT curve_id, method, params_hash, spring_constant, tip_radius, tip_geometry
+        # FROM contact_points
+        # WHERE curve_id IN ({ids_csv})
+        # """
+        # debug_results = conn.execute(debug_check).fetchall()
+        # print(f"  ALL cache entries for these curves:")
+        # for row in debug_results:
+        #     print(f"    curve_id={row[0]}, method={row[1]}, params_hash={row[2][:8]}...")
         # âš ï¸ END DEBUG BLOCK
 
-        print(f"CP Cache: {len(cached_ids)} hits, {len(missing_ids)} misses out of {len(numeric_curve_ids)} curves")
+        # print(f"CP Cache: {len(cached_ids)} hits, {len(missing_ids)} misses out of {len(numeric_curve_ids)} curves")
         # 2) Only compute for missing IDs
         if missing_ids:
             query_cp = apply_cp_filters(base_query, cp_filters, [str(cid) for cid in missing_ids], metadata)
@@ -396,7 +413,8 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             missing_indent_ids = numeric_curve_ids
         
         if cached_indents:
-            print(f"ðŸ“¦ Indentation cache: {len(cached_indents)}/{len(numeric_curve_ids)} hits, {len(missing_indent_ids)} to compute")
+            # print(f"ðŸ"¦ Indentation cache: {len(cached_indents)}/{len(numeric_curve_ids)} hits, {len(missing_indent_ids)} to compute")
+            pass
         
         # Build indentation CTE with cache optimization
         if missing_indent_ids and cached_indents:
@@ -491,18 +509,18 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             win = elasticity_params.get("window", 61)
             order = elasticity_params.get("order", 2)
             interp = elasticity_params.get("interpolate", True)
-            print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ Using elasticity parameters from frontend: win={win}, order={order}, interp={interp}")
+            # print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ # Using elasticity parameters from frontend: win={win}, order={order}, interp={interp}")
         else:
             win = 61
             order = 2
             interp = True
-            print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ Using default elasticity parameters: win={win}, order={order}, interp={interp}")
+            # print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ Using default elasticity parameters: win={win}, order={order}, interp={interp}")
         
         # Log elastic model parameters
-        print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ Using elastic model parameters: maxInd={elastic_model_params.get('maxInd', 800)}, minInd={elastic_model_params.get('minInd', 0)}")
+        # print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ # Using elastic model parameters: maxInd={elastic_model_params.get('maxInd', 800)}, minInd={elastic_model_params.get('minInd', 0)}")
         
         # Log force model parameters  
-        print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ Using force model parameters: maxInd={force_model_params.get('maxInd', 800)}, minInd={force_model_params.get('minInd', 0)}, poisson={force_model_params.get('poisson', 0.5)}")
+        # print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ # Using force model parameters: maxInd={force_model_params.get('maxInd', 800)}, minInd={force_model_params.get('minInd', 0)}, poisson={force_model_params.get('poisson', 0.5)}")
         
         tip_angle = 30.0
         
@@ -753,10 +771,11 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             # Use optimized batch caching
             cached_count = cache_indentations_batch(conn, indent_cache_rows)
             if cached_count > 0:
-                print(f"ðŸ’¾ Cached {cached_count} new indentations")
+                # print(f"ðŸ'¾ Cached {cached_count} new indentations")
+                pass
 
-        print("cp filters applied, batch indentation and elspectra calculated")
-        print("curves_elasticity_param count:", len(curves_elasticity_param))
+        # print("cp filters applied, batch indentation and elspectra calculated")
+        # print("curves_elasticity_param count:", len(curves_elasticity_param))
         all_curves_data = {
                 "curves_cp": curves_cp,
                 "curves_fparam": curves_fparam,
@@ -787,19 +806,20 @@ def _select_curve_ids(conn, filters: Dict, num_curves: Optional[int] = None, dat
         conn: DuckDB connection
         filters: Filter dictionary
         num_curves: Optional limit on number of curves
-        dataset_id: Optional dataset ID to filter curves by
+        dataset_id: Optional dataset ID to restrict curves to a specific dataset
     
     Returns:
-        List of curve ID strings (e.g., ["curve0", "curve1"])
+        List of curve ID strings (e.g., ["0", "1", "2"])
     """
-    # Build query with optional dataset_id filter
+    params = []
     if dataset_id is not None:
-        q = f"SELECT DISTINCT curve_id FROM force_vs_z WHERE dataset_id = {dataset_id} ORDER BY curve_id"
+        q = "SELECT DISTINCT curve_id FROM force_vs_z WHERE dataset_id = ? ORDER BY curve_id"
+        params.append(dataset_id)
     else:
         q = "SELECT DISTINCT curve_id FROM force_vs_z ORDER BY curve_id"
     if num_curves:
         q += f" LIMIT {int(num_curves)}"
-    result = conn.execute(q).fetchall()
+    result = conn.execute(q, params).fetchall()
     # Convert to string format that fetch_curves_batch expects
     return [f"curve{row[0]}" if isinstance(row[0], int) else str(row[0]) for row in result]
 
@@ -811,7 +831,7 @@ async def compute_elasticity_params_batched(
     batch_size: int = 50,
     elasticity_params: Optional[Dict] = None,
     elastic_model_params: Optional[Dict] = None,
-    dataset_id: Optional[int] = None
+    dataset_id: Optional[int] = None,
 ) -> AsyncGenerator[Tuple[int, int, int, int, List[Dict]], None]:
     """
     Async generator yielding batches of elasticity parameters with progress.
@@ -822,7 +842,7 @@ async def compute_elasticity_params_batched(
         - curve_index: int
         - elasticity_param: List[float] (parameter values)
     """
-    # Select curve IDs (optionally filtered by dataset_id)
+    # Select curve IDs – optionally restricted to a specific dataset
     curve_ids = _select_curve_ids(conn, filters, num_curves, dataset_id=dataset_id)
     total = len(curve_ids)
     
@@ -838,7 +858,7 @@ async def compute_elasticity_params_batched(
     for i in range(total_batches):
         batch_ids = curve_ids[i * batch_size:(i + 1) * batch_size]
         
-        # Get metadata for this batch
+        # Get metadata for this batch (scoped to dataset when dataset_id provided)
         metadata = get_metadata_for_curves(conn, batch_ids, dataset_id=dataset_id)
         
         # Compute elasticity params for this batch using existing pipeline
@@ -850,8 +870,7 @@ async def compute_elasticity_params_batched(
             metadata=metadata,
             compute_elspectra=True,
             elasticity_params=elasticity_params,
-            elastic_model_params=elastic_model_params,
-            dataset_id=dataset_id
+            elastic_model_params=elastic_model_params
         )
         
         # Extract elasticity params from result

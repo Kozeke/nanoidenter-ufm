@@ -8,9 +8,10 @@ def apply_fmodels(query: str, fmodels: Dict, curve_ids: List[str], force_model_p
     Any keys provided in `force_model_params` override UI-model params.
     The UDF itself slices Zi/Fi by [minInd, maxInd] (converted to meters).
     """
-    print("apply_fmodels")
+    # print("apply_fmodels")
     if force_model_params:
-        print(f"🔧 Using force model parameters: {force_model_params}")
+        # print(f"🔧 Using force model parameters: {force_model_params}")
+        pass
 
     # Arrays from indentation computation (Zi, Fi)
     z_col = "indentation_result[1]"
@@ -79,7 +80,7 @@ def apply_fmodels(query: str, fmodels: Dict, curve_ids: List[str], force_model_p
             FROM indentation_data
             WHERE curve_id IN ({','.join(map(str, numeric_curve_ids))})
         """
-        print("Generated queryfmodel (no active/registered fmodel):\n", query)
+        # print("Generated queryfmodel (no active/registered fmodel):\n", query)
         return query
 
     query = f"""
@@ -90,5 +91,5 @@ def apply_fmodels(query: str, fmodels: Dict, curve_ids: List[str], force_model_p
         WHERE curve_id IN ({','.join(map(str, numeric_curve_ids))})
           
     """
-    print("Generated queryfmodel:\n", query)
+    # print("Generated queryfmodel:\n", query)
     return query

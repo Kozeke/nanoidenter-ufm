@@ -13,6 +13,7 @@ class HertzFmodel(FmodelBase):
         self.add_parameter("poisson", "float", "Poisson ratio", 0.5, options={"min": -1, "max": 0.5})
         self.add_parameter('maxInd','float','Max indentation [nm]',800)
         self.add_parameter('minInd','float','Min indentation [nm]',0)
+        self.add_parameter('tip_radius','float','Tip radius (m)',1e-5)
     def theory(self, x, elastic):
         """
         Hertz model for various tip geometries.
@@ -29,14 +30,15 @@ class HertzFmodel(FmodelBase):
 
         x = np.array(x)
         if geometry == "sphere":
-            # R = self.curve.tip["radius"]
-            R = 1e-05
+            # Tip radius comes from the experiment metadata (set via tip_radius parameter).
+            R = self.get_value("tip_radius")
             return (4.0 / 3.0) * (elastic / (1 - poisson ** 2)) * np.sqrt(R * x ** 3)
         elif geometry == "pyramid":
             ang = self.curve.tip["angle"]  # Angle in degrees
             return 0.7453 * ((elastic * np.tan(ang * np.pi / 180.0)) / (1 - poisson ** 2)) * x**2
         elif geometry == "cylinder":
-            R = self.curve.tip["radius"]
+            # Tip radius comes from the experiment metadata (set via tip_radius parameter).
+            R = self.get_value("tip_radius")
             return (2.0 / 1.0) * (elastic / (1 - poisson ** 2)) * (R * x)
         elif geometry == "cone":
             ang = self.curve.tip["angle"]  # Angle in degrees
@@ -71,5 +73,5 @@ class HertzFmodel(FmodelBase):
             # print("hertz res", len(x), len(y_fit))  # Debug output to match second
             return [x.tolist(), y_fit.tolist(), [elastic]]         
         except (RuntimeError, ValueError) as e:
-            print(f"Fitting failed: {str(e)}")
+            # print(f"Fitting failed: {str(e)}")
             return None

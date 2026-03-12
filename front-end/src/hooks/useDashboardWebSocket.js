@@ -80,8 +80,6 @@ export const useDashboardWebSocket = () => {
   const metadataInProgressRef = useRef(false);
   // Tracks whether compute_stats operation is in progress
   const statsInProgressRef = useRef(false);
-  // Tracks the last status we saw to determine which operation a "complete" belongs to
-  const lastStatusRef = useRef(null);
 
   // Exposes the centralized dashboard store for shared state access.
   const dashboardStore = useDashboardStore();
@@ -138,11 +136,18 @@ export const useDashboardWebSocket = () => {
     // Flag curve-specific loading while waiting for batches.
     setIsLoadingCurves(true);
 
-    // Prevent infinite loading states by timing out stale requests.
+    // Safety-net timeout: clears any stale loading state if neither "complete"
+    // message arrives within 5 minutes. Intentionally generous so that a slow
+    // compute_stats request (> 1 min) is never cut short by this timer.
+    if (socketRef.current.loadingTimeout) {
+      clearTimeout(socketRef.current.loadingTimeout);
+    }
     const loadingTimeout = setTimeout(() => {
+      metadataInProgressRef.current = false;
+      statsInProgressRef.current = false;
       setLoadingMulti({ curves: false });
       setIsLoadingCurves(false);
-    }, 30000);
+    }, 300000); // 5 minutes
     socketRef.current.loadingTimeout = loadingTimeout;
     console.log("sendCurveReq3")
 
@@ -252,6 +257,18 @@ export const useDashboardWebSocket = () => {
     // Ensure loading is shown if stats computation starts
     setLoadingMulti({ curves: true });
     setIsLoadingCurves(true);
+
+    // Reset the safety-net timeout so it starts counting from NOW, giving the
+    // stats operation its own full 5-minute window on top of get_metadata.
+    if (socketRef.current.loadingTimeout) {
+      clearTimeout(socketRef.current.loadingTimeout);
+    }
+    socketRef.current.loadingTimeout = setTimeout(() => {
+      metadataInProgressRef.current = false;
+      statsInProgressRef.current = false;
+      setLoadingMulti({ curves: false });
+      setIsLoadingCurves(false);
+    }, 300000); // 5 minutes from when stats request was sent
   
     // Get fresh datasetId from store to ensure we have the latest value
     const currentDatasetId = useDashboardStore.getState().datasetId;
@@ -338,13 +355,7 @@ export const useDashboardWebSocket = () => {
       // Parses the incoming message payload for downstream handling.
       const response = JSON.parse(event.data);
 
-      // Track the previous status before processing current one
-      // This helps us determine which operation a "complete" belongs to
-      const previousStatus = lastStatusRef.current;
-      
       if (response.status === "batch" && response.data) {
-        // Track that we're receiving batch data (part of get_metadata operation)
-        lastStatusRef.current = "batch";
         const {
           graphForcevsZ,
           graphForceIndentation,
@@ -501,9 +512,6 @@ export const useDashboardWebSocket = () => {
         }
       }
       if (response.status === "model_stats" && response.data.stats) {
-        // Track that we're receiving model_stats (part of compute_stats operation)
-        lastStatusRef.current = "model_stats";
-        
         const liveFilters = useDashboardStore.getState().filters;
         // const liveElasticityModels = liveFilters.e_models;
         const stats = response.data.stats
@@ -519,8 +527,6 @@ export const useDashboardWebSocket = () => {
       }
       
       if (response.status === "metadata") {
-        // Track that we're receiving metadata (part of get_metadata operation)
-        lastStatusRef.current = "metadata";
         setMetadataObject(response.metadata);
       }    
       console.log("sendCurveReq5")
@@ -570,32 +576,23 @@ export const useDashboardWebSocket = () => {
       console.log("sendCurveReq8")
 
       if (response.status === "complete") {
-        // Determine which operation completed based on the previous status we saw
-        // If the previous status was "model_stats", this complete is for compute_stats
-        // If the previous status was "batch" or "metadata", this complete is for get_metadata
-        if (previousStatus === "model_stats") {
-          // This complete is for compute_stats
+        // Use the action field sent by the backend to identify which operation
+        // finished. This is reliable regardless of message ordering.
+        if (response.action === "compute_stats") {
           statsInProgressRef.current = false;
           console.log("compute_stats completed");
-        } else if (previousStatus === "batch" || previousStatus === "metadata") {
-          // This complete is for get_metadata
+        } else if (response.action === "get_metadata") {
           metadataInProgressRef.current = false;
           console.log("get_metadata completed");
         } else {
-          // Fallback: if we're not sure, mark both as potentially done
-          // This handles edge cases where status tracking might be off
-          if (metadataInProgressRef.current) {
-            metadataInProgressRef.current = false;
-          }
-          if (statsInProgressRef.current) {
-            statsInProgressRef.current = false;
-          }
+          // Fallback for any other (or missing) action: mark both done to avoid
+          // an infinite loading state.
+          metadataInProgressRef.current = false;
+          statsInProgressRef.current = false;
+          console.log("unknown action completed – clearing all loading flags");
         }
-        
-        // Reset last status after processing complete
-        lastStatusRef.current = null;
-        
-        // Only stop loading if BOTH operations are complete
+
+        // Only hide the spinner once ALL in-flight operations have reported done.
         if (!metadataInProgressRef.current && !statsInProgressRef.current) {
           console.log("All operations completed, hiding spinner");
           setLoadingMulti({ curves: false });
@@ -607,7 +604,7 @@ export const useDashboardWebSocket = () => {
         } else {
           console.log("Operations still in progress:", {
             metadata: metadataInProgressRef.current,
-            stats: statsInProgressRef.current
+            stats: statsInProgressRef.current,
           });
         }
       }

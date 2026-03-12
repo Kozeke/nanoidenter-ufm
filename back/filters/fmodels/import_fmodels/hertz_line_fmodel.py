@@ -12,6 +12,7 @@ class DriftedHertzModel(FmodelBase):
     def create(self):
         """Define the filter's parameters for the UI."""
         self.add_parameter("poisson", "float", "Poisson ratio", 0.5, options={"min": -1, "max": 0.5})
+        self.add_parameter('tip_radius','float','Tip radius (m)',1e-5)
 
     def theory(self, x, *parameters):
         """
@@ -36,14 +37,15 @@ class DriftedHertzModel(FmodelBase):
         # print('passed')
         drift_term = m * x
         if geometry == "sphere":
-            # R = self.curve.tip["radius"]
-            R = 1e-05
+            # Tip radius comes from the experiment metadata (set via tip_radius parameter).
+            R = self.get_value("tip_radius")
             hertz_term = (4.0 / 3.0) * (E / (1 - poisson ** 2)) * np.sqrt(R * x ** 3)
         elif geometry == "pyramid":
             ang = self.curve.tip["angle"]  # Angle in degrees
             hertz_term = 0.7453 * ((E * np.tan(ang * np.pi / 180.0)) / (1 - poisson ** 2)) * x**2
         elif geometry == "cylinder":
-            R = self.curve.tip["radius"]
+            # Tip radius comes from the experiment metadata (set via tip_radius parameter).
+            R = self.get_value("tip_radius")
             hertz_term = (2.0 / 1.0) * (E / (1 - poisson ** 2)) * (R * x)
         elif geometry == "cone":
             ang = self.curve.tip["angle"]  # Angle in degrees
@@ -81,5 +83,5 @@ class DriftedHertzModel(FmodelBase):
             # print("i am ")
             return [x.tolist(), y_fit.tolist(), [E, m]]  # Return with parameters
         except (RuntimeError, ValueError) as e:
-            print(f"Fitting failed: {str(e)}")
+            # print(f"Fitting failed: {str(e)}")
             return None

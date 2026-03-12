@@ -3,8 +3,12 @@ from typing import Dict
 import json
 from pathlib import Path
 import numpy as np
+import threading
 
 EMODEL_REGISTRY: Dict[str, Dict] = {}
+
+# Threading lock to protect shared emodel instance state during UDF execution
+_emodel_lock = threading.Lock()
 
 def register_emodel(emodel_class):
     """Register an emodel class in the global registry."""
@@ -67,41 +71,45 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
     ]
 
     def udf_wrapper(ze_values, fe_values, param_values):
-        try:
-            # print(f"UDF wrapper called for {emodel_name} with ze_values length: {len(ze_values)}, fe_values length: {len(fe_values)}")
-            ze_values = np.array(ze_values, dtype=np.float64)
-            fe_values = np.array(fe_values, dtype=np.float64)
-            param_values = np.array(param_values, dtype=np.float64)  # Convert param_values to numpy array
-            
-            # Map param_values to expected parameters
-            expected_params = list(emodel_instance.parameters.keys())
-            param_dict = {}
-            for i, param_name in enumerate(expected_params):
-                if i < len(param_values):
-                    param_dict[param_name] = param_values[i]
-            
-            # print(f"Parameter mapping for {emodel_name}: {param_dict}")
-            
-            # Update instance parameters
-            for k, v in param_dict.items():
-                emodel_instance.parameters[k]["default"] = v
-            
-            ze_min = emodel_instance.get_value("minInd") * 1e-9 if "minInd" in emodel_instance.parameters else 0
-            ze_max = emodel_instance.get_value("maxInd") * 1e-9 if "maxInd" in emodel_instance.parameters else 800e-9
-  
-            x, y = getEizi(ze_min, ze_max, ze_values, fe_values)
-            # print(f"Filtered data for {emodel_name}: x length: {len(x)}, y length: {len(y)}")
-            
-            # Guard: if filtering resulted in empty arrays, return None immediately
-            if x.size == 0 or y.size == 0:
+        # Use threading lock to protect shared emodel instance state
+        # This is a belt-and-suspenders fix in addition to the closure pattern
+        # used in individual emodel calculate() methods
+        with _emodel_lock:
+            try:
+                # print(f"UDF wrapper called for {emodel_name} with ze_values length: {len(ze_values)}, fe_values length: {len(fe_values)}")
+                ze_values = np.array(ze_values, dtype=np.float64)
+                fe_values = np.array(fe_values, dtype=np.float64)
+                param_values = np.array(param_values, dtype=np.float64)  # Convert param_values to numpy array
+                
+                # Map param_values to expected parameters
+                expected_params = list(emodel_instance.parameters.keys())
+                param_dict = {}
+                for i, param_name in enumerate(expected_params):
+                    if i < len(param_values):
+                        param_dict[param_name] = param_values[i]
+                
+                # print(f"Parameter mapping for {emodel_name}: {param_dict}")
+                
+                # Update instance parameters
+                for k, v in param_dict.items():
+                    emodel_instance.parameters[k]["default"] = v
+                
+                ze_min = emodel_instance.get_value("minInd") * 1e-9 if "minInd" in emodel_instance.parameters else 0
+                ze_max = emodel_instance.get_value("maxInd") * 1e-9 if "maxInd" in emodel_instance.parameters else 800e-9
+      
+                x, y = getEizi(ze_min, ze_max, ze_values, fe_values)
+                # print(f"Filtered data for {emodel_name}: x length: {len(x)}, y length: {len(y)}")
+                
+                # Guard: if filtering resulted in empty arrays, return None immediately
+                if x.size == 0 or y.size == 0:
+                    return None
+                
+                result = emodel_instance.calculate(x, y)
+                # print(f"Result for {emodel_name}: {result}")
+                return result if result is not None else None
+            except Exception as e:
+                # print(f"Error in UDF for {emodel_name}: {e}")
                 return None
-            
-            result = emodel_instance.calculate(x, y)
-            # print(f"Result for {emodel_name}: {result}")
-            return result if result is not None else None
-        except Exception as e:
-            print(f"Error in UDF for {emodel_name}: {e}")
-            return None
 
     return_type = duckdb.list_type(duckdb.list_type('DOUBLE'))
         # Remove existing function if it exists
@@ -121,10 +129,13 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
             return_type=return_type,
             null_handling='SPECIAL'
         )
-    except duckdb.CatalogException as e:
-        if "already exists" in str(e):
-            print(f"Function '{udf_name}' already exists. Skipping creation.")
+    except (duckdb.CatalogException, duckdb.NotImplementedException) as e:
+        msg = str(e).lower()
+        if "already exists" in msg or "already created" in msg:
+            # print(f"Function '{udf_name}' already exists. Skipping creation.")
+            pass
         else:
+            raise
             raise
 
     # print(f"UDF {udf_name} registered with types: {udf_param_types}, return type: {return_type}")
