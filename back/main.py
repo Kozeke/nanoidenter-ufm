@@ -14,7 +14,7 @@ from pipeline import fetch_curves_batch, get_metadata_for_curves, compute_elasti
 import asyncio
 from db.connection import get_conn
 from db.init_db import ensure_cache_tables
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any, Optional
 from utils.stats import format_stat, is_valid_param_vector
 from utils.cache import warmup_cp_cache, clear_cache
@@ -42,6 +42,131 @@ MAX_WORKERS = 8  # Number of parallel workers (tune based on CPU cores)
 
 # Ensure the DB directory exists
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+
+def _get_container_cpu_count() -> int:
+    """
+    Return the number of CPUs available to THIS process, respecting
+    Linux cgroup v2 and cgroup v1 quota limits set by Docker / k8s.
+    Falls back to os.cpu_count() when running on Windows or when the
+    cgroup files are absent / unreadable.
+    """
+    cpu_count = os.cpu_count() or 1
+    if platform.system() == 'Windows':
+        return cpu_count
+    # cgroup v2
+    try:
+        with open('/sys/fs/cgroup/cpu.max') as f:
+            quota_str, period_str = f.read().strip().split()
+        if quota_str != 'max':
+            return max(1, int(float(quota_str) / float(period_str)))
+    except Exception:
+        pass
+    # cgroup v1
+    try:
+        with open('/sys/fs/cgroup/cpu/cpu.quota_us') as qf:
+            quota = int(qf.read().strip())
+        with open('/sys/fs/cgroup/cpu/cpu.period_us') as pf:
+            period = int(pf.read().strip())
+        if quota > 0:
+            return max(1, int(quota / period))
+    except Exception:
+        pass
+    return cpu_count
+
+
+def _get_available_ram_gb() -> float:
+    """
+    Return the available RAM in GB, honouring cgroup memory limits so
+    that a container with 512 MB limit does not appear to have the
+    host's full RAM.
+    """
+    try:
+        import psutil
+        available_gb = psutil.virtual_memory().available / (1024 ** 3)
+    except ImportError:
+        available_gb = 0.5  # conservative fallback
+
+    if platform.system() == 'Windows':
+        return available_gb
+
+    # On Linux, cap available_gb by the cgroup memory limit (v2 then v1).
+    for cgroup_mem_file in (
+        '/sys/fs/cgroup/memory.max',                    # cgroup v2
+        '/sys/fs/cgroup/memory/memory.limit_in_bytes',  # cgroup v1
+    ):
+        try:
+            with open(cgroup_mem_file) as f:
+                raw = f.read().strip()
+            if raw not in ('max', ''):
+                limit_gb = int(raw) * 0.70 / (1024 ** 3)  # use 70% of limit
+                available_gb = min(available_gb, limit_gb)
+                break
+        except Exception:
+            continue
+
+    return available_gb
+
+
+def _get_parallelism_config():
+    """
+    Inspect available CPU cores and free RAM (container-aware on Linux),
+    then decide:
+      - whether parallel processing is worthwhile
+      - how many worker threads to use
+      - what batch size to assign each worker
+
+    Uses ThreadPoolExecutor on ALL platforms.  ProcessPoolExecutor is
+    intentionally avoided because on Linux it relies on fork(), which
+    inherits the parent's open DuckDB file handles and causes worker
+    processes to be OOM-killed or crash immediately.
+
+    Container-aware: reads cgroup v1/v2 quotas on Linux so a 1-CPU /
+    0.5-GB container is not mis-identified as a multi-core machine.
+
+    Returns:
+        (can_parallelize: bool, max_workers: int, worker_batch_size: int)
+    """
+    cpu_count    = _get_container_cpu_count()
+    available_gb = _get_available_ram_gb()
+
+    # ── Thresholds ──────────────────────────────────────────────────────────
+    # Need at least 2 logical CPUs **and** 1 GB free RAM before spawning
+    # extra threads.  On a 1-CPU / 0.5-GB container the overhead of context-
+    # switching threads + each thread opening its own DuckDB connection makes
+    # parallel processing slower (or impossible) compared to sequential.
+    MIN_CPUS_FOR_PARALLEL = 2
+    MIN_RAM_GB_FOR_PARALLEL = 1.0
+
+    can_parallelize = (cpu_count >= MIN_CPUS_FOR_PARALLEL and
+                       available_gb >= MIN_RAM_GB_FOR_PARALLEL)
+
+    if not can_parallelize:
+        print(f"⚠️  Parallel processing disabled — "
+              f"CPUs: {cpu_count} (need ≥{MIN_CPUS_FOR_PARALLEL}), "
+              f"free RAM: {available_gb:.2f} GB (need ≥{MIN_RAM_GB_FOR_PARALLEL} GB). "
+              f"Running sequentially.")
+        return False, 1, BATCH_SIZE
+
+    # ── Worker count ────────────────────────────────────────────────────────
+    # Cap workers at half the logical CPUs (leave headroom for DuckDB's own
+    # internal threading and the asyncio event loop).
+    max_workers = max(1, min(cpu_count // 2, 4))  # hard cap at 4
+
+    # ── Per-worker batch size ────────────────────────────────────────────────
+    # Each worker opens its own DuckDB connection and loads curve data; be
+    # conservative with RAM.  Scale down when memory is tight.
+    if available_gb < 2.0:
+        worker_batch_size = 25
+    elif available_gb < 4.0:
+        worker_batch_size = 50
+    else:
+        worker_batch_size = 100
+
+    print(f"ℹ️  Parallel config — workers: {max_workers}, "
+          f"batch: {worker_batch_size} curves/worker, "
+          f"free RAM: {available_gb:.2f} GB, CPUs: {cpu_count}")
+    return True, max_workers, worker_batch_size
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -417,135 +542,115 @@ async def websocket_data_stream(websocket: WebSocket):
                 has_fmodel = bool(filters.get("f_models", {}))
                 has_emodel = bool(filters.get("e_models", {}))
                 
-                # Check if parallel processing is feasible based on system resources
-                try:
-                    import psutil
-                    available_memory_gb = psutil.virtual_memory().available / (1024**3)
-                except ImportError:
-                    # psutil not available - assume constrained environment
-                    print("⚠️ psutil not available, assuming constrained environment")
-                    available_memory_gb = 0.5  # Conservative estimate
-                
-                cpu_count = os.cpu_count() or 1
-                
-                # Require at least 1.5GB free RAM and 2+ CPU cores for parallel processing
-                can_parallelize = (
-                    available_memory_gb >= 1.5 and 
-                    cpu_count >= 2
-                )
-                
-                if not can_parallelize:
-                    print(f"⚠️ Parallel processing disabled: insufficient resources")
-                    print(f"   Available RAM: {available_memory_gb:.1f} GB (need 1.5+ GB)")
-                    print(f"   CPU cores: {cpu_count} (need 2+)")
-                    print(f"   Using sequential processing instead...")
-                
-                # Optimization: Use parallel processing for model_stats (only if resources available)
-                if compute_scope == "model_stats" and len(curve_ids) > BATCH_SIZE and can_parallelize:
-                    print(f"ðŸš€ Using parallel processing for {len(curve_ids)} curves...")
-                    
-                    # Create larger batches for parallel processing (100 curves per worker)
-                    parallel_batch_size = 100
-                    parallel_batches = [
-                        curve_ids[i:i+parallel_batch_size] 
-                        for i in range(0, len(curve_ids), parallel_batch_size)
-                    ]
-                    
-                    # On Windows use threads (DuckDB releases GIL, threads share the
-                    # process-level file handle so no exclusive-lock conflict).
-                    # On Linux use processes (fork inherits the open fd, no conflict either).
-                    max_workers = min(os.cpu_count() or 2, len(parallel_batches))
-                    ExecutorClass = ThreadPoolExecutor if IS_WINDOWS else ProcessPoolExecutor
-                    
-                    with ExecutorClass(max_workers=max_workers) as executor:
-                        # Submit all batches
-                        futures = []
-                        for batch in parallel_batches:
-                            # Create compute spec for worker.
-                            # "both" tells the worker to run force AND elastic models together.
-                            if has_fmodel and has_emodel:
-                                compute_mode = "both"
-                            elif has_fmodel:
-                                compute_mode = "fparams"
-                            else:
-                                compute_mode = "elasticity"
+                # ── Resource check (centralised) ─────────────────────────────────────
+                can_parallelize, max_par_workers, par_batch_size = _get_parallelism_config()
 
-                            compute_spec = {
-                                "compute": compute_mode,
-                                "emodel_params": elastic_model_params,
-                                "elasticity_params": elasticity_params if has_emodel else None,
-                                "force_model_params": force_model_params,
-                                "set_zero_force": set_zero_force,
-                                "dataset_id": dataset_id,
-                            }
-                            
-                            future = executor.submit(
-                                _parallel_worker, 
-                                batch, 
-                                filters, 
-                                compute_spec
-                            )
-                            futures.append((future, batch))
-                        
-                        # Collect results as they complete
-                        completed = 0
-                        for future, batch in futures:
-                            try:
-                                success, result = future.result()
-                                
-                                if success:
-                                    # Extract force params
-                                    if has_fmodel and "fparams" in result:
-                                        for r in result["fparams"]:
-                                            if is_valid_param_vector(r.get("fparam")):
-                                                global_force_params.append(r["fparam"])
-                                    
-                                    # Extract elastic params
-                                    if has_emodel and "elasticity_params" in result:
-                                        for r in result["elasticity_params"]:
-                                            if is_valid_param_vector(r.get("elasticity_param")):
-                                                global_elastic_params.append(r["elasticity_param"])
-                                
-                                completed += len(batch)
-                                progress = (completed / len(curve_ids)) * 100
-                                print(f"  ðŸ“Š Progress: {completed}/{len(curve_ids)} curves ({progress:.1f}%)")
-                            
-                            except Exception as e:
-                                print(f"  âŒ Error processing batch: {e}")
-                                continue
-                    
-                    print(f"âœ… Parallel processing complete: {len(global_force_params)} force params, {len(global_elastic_params)} elastic params")
-                
+                # Build the compute spec once (reused for every parallel batch)
+                if has_fmodel and has_emodel:
+                    compute_mode = "both"
+                elif has_fmodel:
+                    compute_mode = "fparams"
                 else:
-                    # Sequential processing for small datasets, constrained resources, or non-model_stats
-                    # Adjust batch size based on available resources (use variable from resource check above)
+                    compute_mode = "elasticity"
+
+                compute_spec = {
+                    "compute": compute_mode,
+                    "emodel_params": elastic_model_params,
+                    "elasticity_params": elasticity_params if has_emodel else None,
+                    "force_model_params": force_model_params,
+                    "set_zero_force": set_zero_force,
+                    "dataset_id": dataset_id,
+                }
+
+                # ── Parallel path (model_stats only, adequate resources) ──────────────
+                parallel_succeeded = False
+                if compute_scope == "model_stats" and len(curve_ids) > BATCH_SIZE and can_parallelize:
+                    print(
+                        f"Using parallel processing for {len(curve_ids)} curves "
+                        f"({max_par_workers} workers, {par_batch_size} curves/batch)..."
+                    )
+
+                    parallel_batches = [
+                        curve_ids[i:i + par_batch_size]
+                        for i in range(0, len(curve_ids), par_batch_size)
+                    ]
+                    effective_workers = min(max_par_workers, len(parallel_batches))
+
+                    try:
+                        # Always use ThreadPoolExecutor on every platform.
+                        # ProcessPoolExecutor is intentionally avoided: on Linux it uses
+                        # fork() which inherits the parent's open DuckDB file handles and
+                        # causes worker processes to be terminated abruptly (SIGKILL / OOM).
+                        # Each _parallel_worker creates its own duckdb.connect() so threads
+                        # are safe here — DuckDB releases the GIL during I/O.
+                        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                            futures = [
+                                (executor.submit(_parallel_worker, batch, filters, compute_spec), batch)
+                                for batch in parallel_batches
+                            ]
+
+                            completed = 0
+                            batch_errors = 0
+                            for future, batch in futures:
+                                try:
+                                    success, result = future.result(timeout=300)
+                                    if success:
+                                        if has_fmodel and "fparams" in result:
+                                            for r in result["fparams"]:
+                                                if is_valid_param_vector(r.get("fparam")):
+                                                    global_force_params.append(r["fparam"])
+                                        if has_emodel and "elasticity_params" in result:
+                                            for r in result["elasticity_params"]:
+                                                if is_valid_param_vector(r.get("elasticity_param")):
+                                                    global_elastic_params.append(r["elasticity_param"])
+                                    completed += len(batch)
+                                    pct = (completed / len(curve_ids)) * 100
+                                    print(f"  Progress: {completed}/{len(curve_ids)} curves ({pct:.1f}%)")
+                                except Exception as e:
+                                    batch_errors += 1
+                                    print(f"  Error processing batch: {e}")
+
+                        if batch_errors < len(parallel_batches):
+                            parallel_succeeded = True
+                            print(
+                                f"Parallel processing complete: "
+                                f"{len(global_force_params)} force params, "
+                                f"{len(global_elastic_params)} elastic params"
+                            )
+                        else:
+                            print("All parallel batches failed -- falling back to sequential.")
+
+                    except Exception as e:
+                        print(f"Parallel executor failed ({e}) -- falling back to sequential.")
+
+                # ── Sequential path ───────────────────────────────────────────────────
+                # Runs when: dataset is small, resources are constrained, compute_scope
+                # is not model_stats, OR all parallel workers failed.
+                if not parallel_succeeded:
+                    try:
+                        import psutil
+                        available_memory_gb = psutil.virtual_memory().available / (1024 ** 3)
+                    except ImportError:
+                        available_memory_gb = 0.5
+
+                    cpu_count_seq = os.cpu_count() or 1
+
                     if available_memory_gb < 1.0:
-                        # Very constrained - use smaller batches
                         batch_size_to_use = 5
-                        print(f"⚠️ Low memory detected ({available_memory_gb:.1f} GB), using batch size: {batch_size_to_use}")
+                        print(f"Very low memory ({available_memory_gb:.1f} GB) -- batch size: {batch_size_to_use}")
                     elif available_memory_gb < 2.0:
-                        # Moderately constrained - medium batches
                         batch_size_to_use = 10
-                        print(f"ℹ️ Moderate resources ({available_memory_gb:.1f} GB, {cpu_count} CPU), using batch size: {batch_size_to_use}")
-                    elif cpu_count == 1:
-                        # Single CPU but good memory - larger batches for efficiency
+                        print(f"Moderate memory ({available_memory_gb:.1f} GB) -- batch size: {batch_size_to_use}")
+                    elif cpu_count_seq == 1:
                         batch_size_to_use = 20
-                        print(f"ℹ️ Single CPU with good memory ({available_memory_gb:.1f} GB), using batch size: {batch_size_to_use}")
+                        print(f"Single CPU, good memory ({available_memory_gb:.1f} GB) -- batch size: {batch_size_to_use}")
                     else:
-                        # Normal batch size
                         batch_size_to_use = BATCH_SIZE
-                        print(f"ℹ️ Using standard batch size: {batch_size_to_use}")
-                    
-                    total_batches = (len(curve_ids) + batch_size_to_use - 1) // batch_size_to_use
-                    
-                    # Process in batches
+                        print(f"Using standard batch size: {batch_size_to_use}")
+
                     for i in range(0, len(curve_ids), batch_size_to_use):
                         batch_ids = curve_ids[i:i + batch_size_to_use]
-                        batch_num = i // batch_size_to_use + 1
-                        
-                        # if compute_scope == "model_stats":
-                            # print(f"📊 Sequential processing: batch {batch_num}/{total_batches} ({len(batch_ids)} curves)")
-                        
+
                         await process_and_stream_batch(
                             conn,
                             batch_ids,
@@ -1324,30 +1429,53 @@ async def get_all_fparams(data: Dict[str, Any]):
             }
         
         print(f"Found {len(all_ids)} total curves in database")
-        
-        # Process curves in batches with process-level parallelism
-        batch_size = 100  # Process 100 curves per batch (tune as you like)
-        batches = [all_ids[i:i+batch_size] for i in range(0, len(all_ids), batch_size)]
-        
+
+        can_parallelize, max_par_workers, par_batch_size = _get_parallelism_config()
+
+        batches = [all_ids[i:i + par_batch_size]
+                   for i in range(0, len(all_ids), par_batch_size)]
+
         all_fparams = []
-        # Windows: threads share the process file handle (no exclusive-lock conflict).
-        # Linux: processes use fork and inherit the open fd.
-        ExecutorClass = ThreadPoolExecutor if IS_WINDOWS else ProcessPoolExecutor
-        with ExecutorClass(max_workers=(os.cpu_count() // 2) or 2) as ex:
-            futs = [ex.submit(_parallel_worker, b, filters, "fparams") for b in batches]
-            for fut in as_completed(futs):
-                res = fut.result()
+
+        if can_parallelize and len(batches) > 1:
+            # ── Parallel path (ThreadPoolExecutor on ALL platforms) ──────────
+            # ProcessPoolExecutor is intentionally avoided: on Linux it forks
+            # the process, inheriting DuckDB file handles, which causes workers
+            # to be OOM-killed or crash immediately.
+            effective_workers = min(max_par_workers, len(batches))
+            print(f"  Using ThreadPoolExecutor: {effective_workers} workers, "
+                  f"{par_batch_size} curves/batch")
+            try:
+                with ThreadPoolExecutor(max_workers=effective_workers) as ex:
+                    futs = [ex.submit(_parallel_worker, b, filters, "fparams")
+                            for b in batches]
+                    for fut in as_completed(futs):
+                        res = fut.result()
+                        if res and "fparams" in res:
+                            all_fparams.extend(res["fparams"])
+            except Exception as par_err:
+                print(f"  Parallel path failed ({par_err}), falling back to sequential.")
+                all_fparams = []
+                can_parallelize = False  # trigger sequential below
+
+        if not can_parallelize or len(batches) <= 1:
+            # ── Sequential path ──────────────────────────────────────────────
+            print(f"  Using sequential processing: {len(batches)} batch(es), "
+                  f"{par_batch_size} curves/batch")
+            _seq_conn = get_conn()
+            for b in batches:
+                res = _parallel_worker(b, filters, "fparams")
                 if res and "fparams" in res:
                     all_fparams.extend(res["fparams"])
-        
+
         print(f"Total fparams found: {len(all_fparams)}")
-        
+
         return {
             "status": "success",
             "fparams": all_fparams,
             "message": f"Retrieved fparams for {len(all_fparams)} curves"
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to fetch fparams: {str(e)}")
         raise HTTPException(status_code=500, detail={
@@ -1359,37 +1487,65 @@ async def get_all_fparams(data: Dict[str, Any]):
 # New endpoint to fetch all curves' elasticity parameters
 @app.post("/get-all-elasticity-params")
 async def get_all_elasticity_params(data: Dict[str, Any]):
-    """HTTP endpoint to fetch elasticity parameters for all curves with current filters using process-level parallelism."""
+    """HTTP endpoint to fetch elasticity parameters for all curves.
+
+    Uses ThreadPoolExecutor on all platforms (never ProcessPoolExecutor).
+    Automatically falls back to sequential processing on resource-constrained
+    environments (e.g. 1-CPU / 0.5 GB Linux containers).
+    """
     try:
         filters = data.get("filters", {})
         if not filters.get("e_models"):
             filters["e_models"] = {"constant_filter_array": {"model": "constant"}}
 
-        # Use consistent connection to avoid DuckDB configuration conflicts
+        # Use consistent singleton connection to avoid DuckDB config conflicts.
         conn = get_conn()
-        try:
-            # Let DuckDB parallelize scans/CTEs within queries
-            conn.execute(f"PRAGMA threads = {os.cpu_count() or 2};")
-            curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z").fetchall()
-            all_ids = [str(r[0]) for r in curve_ids_result]
-        finally:
-            # Don't close singleton connection
-            pass
+        curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z").fetchall()
+        all_ids = [str(r[0]) for r in curve_ids_result]
 
         if not all_ids:
             return {"status": "success", "elasticity_params": [], "message": "No curves found"}
 
-        batch_size = 100   # Process 100 curves per batch to reduce coordinator round-trips
-        batches = [all_ids[i:i+batch_size] for i in range(0, len(all_ids), batch_size)]
+        print(f"Found {len(all_ids)} total curves in database")
+
+        can_parallelize, max_par_workers, par_batch_size = _get_parallelism_config()
+
+        batches = [all_ids[i:i + par_batch_size]
+                   for i in range(0, len(all_ids), par_batch_size)]
 
         all_params = []
-        ExecutorClass = ThreadPoolExecutor if IS_WINDOWS else ProcessPoolExecutor
-        with ExecutorClass(max_workers=(os.cpu_count() // 2) or 2) as ex:
-            futs = [ex.submit(_parallel_worker, b, filters, "elasticity") for b in batches]
-            for fut in as_completed(futs):
-                res = fut.result()
+
+        if can_parallelize and len(batches) > 1:
+            # ── Parallel path (ThreadPoolExecutor on ALL platforms) ──────────
+            # ProcessPoolExecutor is intentionally avoided: on Linux it forks
+            # the process, inheriting DuckDB file handles, which causes workers
+            # to be OOM-killed or crash immediately.
+            effective_workers = min(max_par_workers, len(batches))
+            print(f"  Using ThreadPoolExecutor: {effective_workers} workers, "
+                  f"{par_batch_size} curves/batch")
+            try:
+                with ThreadPoolExecutor(max_workers=effective_workers) as ex:
+                    futs = [ex.submit(_parallel_worker, b, filters, "elasticity")
+                            for b in batches]
+                    for fut in as_completed(futs):
+                        res = fut.result()
+                        if res and "elasticity_params" in res:
+                            all_params.extend(res["elasticity_params"])
+            except Exception as par_err:
+                print(f"  Parallel path failed ({par_err}), falling back to sequential.")
+                all_params = []
+                can_parallelize = False  # trigger sequential below
+
+        if not can_parallelize or len(batches) <= 1:
+            # ── Sequential path ──────────────────────────────────────────────
+            print(f"  Using sequential processing: {len(batches)} batch(es), "
+                  f"{par_batch_size} curves/batch")
+            for b in batches:
+                res = _parallel_worker(b, filters, "elasticity")
                 if res and "elasticity_params" in res:
                     all_params.extend(res["elasticity_params"])
+
+        print(f"Total elasticity params found: {len(all_params)}")
 
         return {
             "status": "success",
