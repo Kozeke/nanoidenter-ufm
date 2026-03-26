@@ -75,13 +75,16 @@ export const useDashboardStore = create(
       elasticModelParams: createDefaultElasticModelParams(),
       // Stores the active force model parameters shared with the backend.
       forceModelParams: createDefaultForceModelParams(),
-      // Default value for the number of curves requested from the backend.
-      numCurves: 10,
-      // Updates the stored curve count while defaulting invalid input to 10.
-      setNumCurves: (value) =>
-        set({
-          numCurves: Number.isNaN(+value) ? 10 : parseInt(value, 10),
-        }),
+      // Start index (inclusive, 0-based) of the curve range to request.
+      curveFrom: 0,
+      // End index (exclusive) of the curve range to request.
+      curveTo: 10,
+      // Updates the start of the curve range, defaulting to 0 on invalid input.
+      setCurveFrom: (value) =>
+        set({ curveFrom: Number.isNaN(+value) ? 0 : Math.max(0, parseInt(value, 10)) }),
+      // Updates the end of the curve range, defaulting to 10 on invalid input.
+      setCurveTo: (value) =>
+        set({ curveTo: Number.isNaN(+value) ? 10 : Math.max(1, parseInt(value, 10)) }),
       // Stores the current dataset ID from the most recently loaded file.
       datasetId: null,
       // Updates the dataset ID when a new file is loaded.
@@ -210,7 +213,8 @@ export const useDashboardStore = create(
           elasticityParams: createDefaultElasticityParams(),
           elasticModelParams: createDefaultElasticModelParams(),
           forceModelParams: createDefaultForceModelParams(),
-          numCurves: 10,
+          curveFrom: 0,
+          curveTo: 10,
           datasetId: null,
           filename: null,
           activeTab: "forceDisplacement",

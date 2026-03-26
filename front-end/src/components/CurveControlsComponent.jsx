@@ -9,8 +9,11 @@ import {
   Box,
 } from "@mui/material";
 const CurveControlsComponent = ({
-  numCurves,
-  handleNumCurvesChange,
+  curveFrom,
+  curveTo,
+  handleCurveFromChange,
+  handleCurveToChange,
+  maxNumCurves,
   forceData,
   selectedCurveIds,
   setSelectedCurveIds,
@@ -35,10 +38,16 @@ const CurveControlsComponent = ({
   // Ensure we never store `null` in local state – always use a string.
   const [curveIdInput, setCurveIdInput] = useState(curveId ?? "");
 
+  // Local display state for range inputs so the user can clear/retype freely.
+  const [curveFromInput, setCurveFromInput] = useState(String(curveFrom ?? 0));
+  const [curveToInput, setCurveToInput] = useState(String(curveTo ?? 10));
+
   // Derives a flag indicating whether controls should be disabled.
-  const isDisabled = !isSocketConnected;  useEffect(() => {
-    setCurveIdInput(curveId ?? "");
-  }, [curveId]);  useEffect(() => {
+  const isDisabled = !isSocketConnected;
+
+  useEffect(() => { setCurveIdInput(curveId ?? ""); }, [curveId]);
+  useEffect(() => { setCurveFromInput(String(curveFrom ?? 0)); }, [curveFrom]);
+  useEffect(() => { setCurveToInput(String(curveTo ?? 10)); }, [curveTo]);  useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
@@ -287,17 +296,54 @@ setSelectedCurveIds((prev) => {
       {/* Divider */}
       {!isMobile && <div style={dividerStyle} />}
 
-      {/* Number of curves + Curve ID */}
+      {/* Curve range (From / To) + Curve ID */}
       <div style={numberRowStyle}>
-        <label style={numberLabelStyle}>Number of Curves:</label>
+        <label style={numberLabelStyle}>
+          Curves:{maxNumCurves != null && (
+            <span style={{ fontWeight: 400, color: "#8a8fa8", marginLeft: 4 }}>
+              (max {maxNumCurves})
+            </span>
+          )}
+        </label>
+
+        {/* From */}
+        <label style={{ ...numberLabelStyle, fontWeight: 400, fontSize: 13 }}>From</label>
+        <input
+          type="number"
+          min="0"
+          max={maxNumCurves != null ? maxNumCurves - 1 : undefined}
+          value={curveFromInput}
+          onChange={(e) => setCurveFromInput(e.target.value)}
+          onBlur={() => {
+            let val = parseInt(curveFromInput, 10);
+            if (isNaN(val) || val < 0) val = 0;
+            if (maxNumCurves != null && val >= maxNumCurves) val = maxNumCurves - 1;
+            if (val >= curveTo) val = curveTo - 1;
+            setCurveFromInput(String(val));
+            handleCurveFromChange(val);
+          }}
+          style={numberInputStyle}
+        />
+
+        {/* To */}
+        <label style={{ ...numberLabelStyle, fontWeight: 400, fontSize: 13 }}>To</label>
         <input
           type="number"
           min="1"
-          max="100"
-          value={numCurves}
-          onChange={(e) => handleNumCurvesChange(e.target.value)}
+          max={maxNumCurves ?? undefined}
+          value={curveToInput}
+          onChange={(e) => setCurveToInput(e.target.value)}
+          onBlur={() => {
+            let val = parseInt(curveToInput, 10);
+            if (isNaN(val) || val < 1) val = 1;
+            if (maxNumCurves != null && val > maxNumCurves) val = maxNumCurves;
+            if (val <= curveFrom) val = curveFrom + 1;
+            setCurveToInput(String(val));
+            handleCurveToChange(val);
+          }}
           style={numberInputStyle}
         />
+
         <label style={numberLabelStyle}>Curve ID:</label>
         <input
           type="text"

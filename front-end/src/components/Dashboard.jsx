@@ -56,10 +56,14 @@ const Dashboard = () => {
     forceModelParams,
     // Merges force model parameter updates.
     setForceModelParams,
-    // Controls how many curves to request from the backend.
-    numCurves,
-    // Updates the curve count while respecting valid bounds.
-    setNumCurves,
+    // Start index of the curve range to request from the backend.
+    curveFrom,
+    // End index of the curve range to request from the backend.
+    curveTo,
+    // Updates the start of the curve range.
+    setCurveFrom,
+    // Updates the end of the curve range.
+    setCurveTo,
     // Stores the current dataset ID from the most recently loaded file.
     datasetId,
     // Updates the dataset ID when a new file is loaded.
@@ -350,9 +354,10 @@ const Dashboard = () => {
   
   const handleProcessSuccess = (result) => {
     // console.log('File processed successfully:', result);
-    // Set numCurves: if loaded data has fewer than 10 curves, use that value; otherwise use 10
+    // Reset curve range: keep default 0–10 but cap to actual curve count
     if (result.curves) {
-      setNumCurves(Math.min(result.curves, 10));
+      setCurveFrom(0);
+      setCurveTo(Math.min(result.curves, 10));
     }
     // Store dataset_id and filename in the dashboard store - Zustand updates are synchronous
     if (result.dataset_id !== undefined) {
@@ -404,10 +409,8 @@ const Dashboard = () => {
     setIsLoadingExport(nextValue);
   };
 
-  const handleNumCurvesChange = (value) => {
-    // console.log("new");
-    setNumCurves(value);
-  }; const [windowWidth, setWindowWidth] = useState(window.innerWidth);  // Update window width on resize
+  const handleCurveFromChange = (value) => setCurveFrom(value);
+  const handleCurveToChange = (value) => setCurveTo(value); const [windowWidth, setWindowWidth] = useState(window.innerWidth);  // Update window width on resize
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handleResize);
@@ -434,7 +437,8 @@ const Dashboard = () => {
     regularFilters,
     cpFilters,
     activeFmodel,
-    numCurves,
+    curveFrom,
+    curveTo,
     datasetId
   });
 
@@ -477,7 +481,8 @@ const Dashboard = () => {
             f_models: forceModels,
             e_models: elasticityModels,
           },
-          num_curves: numCurves,
+          curve_from: curveFrom,
+          curve_to: curveTo,
           dataset_id: datasetId,
         }),
         signal: fparamsAbortRef.current.signal
@@ -555,7 +560,7 @@ const Dashboard = () => {
   }, [
     showParameters, activeTab, selectedForceModel,
     fparamsCacheKey, lastFparamsKey, allFparams.length,
-    regularFilters, cpFilters, forceModels, elasticityModels, numCurves, datasetId,
+    regularFilters, cpFilters, forceModels, elasticityModels, curveFrom, curveTo, datasetId,
     stableStringify
   ]);
 
@@ -613,7 +618,8 @@ const Dashboard = () => {
     regularFilters,
     cpFilters,
     activeEmodel,
-    numCurves,
+    curveFrom,
+    curveTo,
     elasticityParams,
     elasticModelParams
   });
@@ -1406,8 +1412,11 @@ const Dashboard = () => {
           )}
         </div>
         <CurveControlsComponent
-          numCurves={numCurves}
-          handleNumCurvesChange={handleNumCurvesChange}
+          curveFrom={curveFrom}
+          curveTo={curveTo}
+          handleCurveFromChange={handleCurveFromChange}
+          handleCurveToChange={handleCurveToChange}
+          maxNumCurves={metadataObject?.num_curves ?? null}
           curveId={selectedCurveId}
           setCurveId={handleSetCurveId}
           forceData={forceData}

@@ -72,8 +72,8 @@ export const useDashboardWebSocket = () => {
     f_models: null,
     e_models: null,
   });
-  // Tracks the previous number of curves to detect request changes.
-  const prevNumCurvesRef = useRef(10);
+  // Tracks the previous curve range to detect request changes.
+  const prevCurveRangeRef = useRef({ from: 0, to: 10 });
   // Flags when the caller explicitly wants to re-request curves.
   const [forceRequest, setForceRequest] = useState(false);
   // Tracks whether get_metadata operation is in progress
@@ -91,8 +91,10 @@ export const useDashboardWebSocket = () => {
   const { elasticModelParams } = dashboardStore;
   // Provides force model parameters requested by the backend.
   const { forceModelParams } = dashboardStore;
-  // Provides the total number of curves requested for rendering.
-  const { numCurves } = dashboardStore;
+  // Provides the start index of the curve range requested for rendering.
+  const { curveFrom } = dashboardStore;
+  // Provides the end index of the curve range requested for rendering.
+  const { curveTo } = dashboardStore;
   // Provides the identifier of the currently selected curve.
   const { selectedCurveId } = dashboardStore;
   // Reports whether zero-force correction should be applied server-side.
@@ -107,8 +109,8 @@ export const useDashboardWebSocket = () => {
   const { setSelectedCurveIds } = dashboardStore;
   // Updates connection status used for UX.
   const { setConnectionStatus, setLastSocketError, connectionStatus, lastSocketError } = dashboardStore;
-  // Provides setters for selected curve ID and number of curves.
-  const { setSelectedCurveId, setNumCurves } = dashboardStore;
+  // Provides setters for selected curve ID and curve range.
+  const { setSelectedCurveId, setCurveFrom, setCurveTo } = dashboardStore;
 
   // Simplifies access to regular filter groups.
   const regularFilters = filters.regular;
@@ -175,8 +177,10 @@ export const useDashboardWebSocket = () => {
       }
     );
 
-    // Determines whether the requested curve count changed.
-    const numCurvesChanged = prevNumCurvesRef.current !== numCurves;
+    // Determines whether the requested curve range changed.
+    const numCurvesChanged =
+      prevCurveRangeRef.current.from !== curveFrom ||
+      prevCurveRangeRef.current.to !== curveTo;
 
     // Resets chart domains to trigger automatic scaling.
     const resetState = {
@@ -201,7 +205,8 @@ export const useDashboardWebSocket = () => {
     console.log("sendCurveRequest - datasetId from store:", currentDatasetId);
     const requestData = {
       action: "get_metadata",
-      num_curves: numCurves,
+      curve_from: curveFrom,
+      curve_to: curveTo,
       dataset_id: currentDatasetId,
       filters: {
         regular: regularFilters,
@@ -223,8 +228,8 @@ export const useDashboardWebSocket = () => {
       f_models: forceModels,
       e_models: elasticityModels,
     };
-    // Record the latest curve count so future requests detect changes.
-    prevNumCurvesRef.current = numCurves;
+    // Record the latest curve range so future requests detect changes.
+    prevCurveRangeRef.current = { from: curveFrom, to: curveTo };
     // Clear the manual refresh flag now that the request is enqueued.
     setForceRequest(false);
 
@@ -234,7 +239,8 @@ export const useDashboardWebSocket = () => {
     cpFilters,
     forceModels,
     elasticityModels,
-    numCurves,
+    curveFrom,
+    curveTo,
     elasticityParams,
     elasticModelParams,
     forceModelParams,
@@ -276,7 +282,8 @@ export const useDashboardWebSocket = () => {
     const requestData = {
       action: "compute_stats",
       compute_scope: "model_stats",
-      num_curves: numCurves,
+      curve_from: curveFrom,
+      curve_to: curveTo,
       dataset_id: currentDatasetId,
       filters: {
         regular: regularFilters,
@@ -293,7 +300,8 @@ export const useDashboardWebSocket = () => {
   
     socketRef.current.send(JSON.stringify(requestData));
   }, [
-    numCurves,
+    curveFrom,
+    curveTo,
     datasetId,
     regularFilters,
     cpFilters,
@@ -694,7 +702,7 @@ export const useDashboardWebSocket = () => {
     };
     // socketRef.current = null;
     // We only want this to run once on mount/unmount,
-    // not every time initializeWebSocket (and thus numCurves) changes.
+    // not every time initializeWebSocket (and thus curveFrom/curveTo) changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, token]);
 
@@ -716,8 +724,10 @@ export const useDashboardWebSocket = () => {
     lastSocketError,
     selectedCurveId,
     setSelectedCurveId,
-    numCurves,
-    setNumCurves,
+    curveFrom,
+    curveTo,
+    setCurveFrom,
+    setCurveTo,
     domainRange,
     indentationDomain,
     elspectraDomain,

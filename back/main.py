@@ -482,7 +482,11 @@ async def websocket_data_stream(websocket: WebSocket):
                 compute_scope = str(compute_scope).lower()
                 
                 
-                num_curves = request_data.get("num_curves") or 1
+                curve_from = int(request_data.get("curve_from") or 0)
+                curve_to   = int(request_data.get("curve_to")   or 10)
+                # Clamp to sane values
+                curve_from = max(0, curve_from)
+                curve_to   = max(curve_from + 1, curve_to)
                 filters = request_data.get("filters", {"regular": {}, "cp_filters": {}, "fmodels": {}})
                 curve_id = request_data.get("curve_id", None)  # Extract curve_id
                 filters_changed = request_data.get("filters_changed", False)
@@ -501,7 +505,7 @@ async def websocket_data_stream(websocket: WebSocket):
                     "minInd": 0,
                     "poisson": 0.5
                 })  # Extract force model parameters
-                print(f"Received request: num_curves={num_curves}, dataset_id={dataset_id}, curve_id={curve_id}, filters={filters}")
+                print(f"Received request: curve_from={curve_from}, curve_to={curve_to}, dataset_id={dataset_id}, curve_id={curve_id}, filters={filters}")
 
                 # --- Population stats ignore curve_id ---
                 if compute_scope == "model_stats":
@@ -529,9 +533,10 @@ async def websocket_data_stream(websocket: WebSocket):
                     if curve_id:
                         curve_ids = [curve_id]
                     else:
+                        limit = curve_to - curve_from
                         curve_ids_result = conn.execute(
-                            "SELECT curve_id FROM force_vs_z WHERE dataset_id = ? LIMIT ?", 
-                            (dataset_id, num_curves,)
+                            "SELECT curve_id FROM force_vs_z WHERE dataset_id = ? LIMIT ? OFFSET ?",
+                            (dataset_id, limit, curve_from)
                         ).fetchall()
                         curve_ids = [str(row[0]) for row in curve_ids_result]
 
@@ -869,13 +874,22 @@ async def get_metadata(conn, websocket, dataset_id: int = None):
         
         # Get column names from cursor description
         columns = [description[0] for description in cursor.description]
+
+        # Count total curves for this dataset
+        if dataset_id is not None:
+            num_curves = conn.execute(
+                "SELECT COUNT(*) FROM force_vs_z WHERE dataset_id = ?", (dataset_id,)
+            ).fetchone()[0]
+        else:
+            num_curves = conn.execute("SELECT COUNT(*) FROM force_vs_z").fetchone()[0]
         
         # If a row exists, include its data; otherwise, send only column names
         metadata = {
             "status": "metadata",
             "metadata": {
                 "columns": columns,
-                "sample_row": dict(zip(columns, row)) if row else None
+                "sample_row": dict(zip(columns, row)) if row else None,
+                "num_curves": num_curves,
             }
         }
         
