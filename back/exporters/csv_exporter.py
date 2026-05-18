@@ -49,12 +49,16 @@ class CSVExporter(Exporter):
         # Prevent exporter crash if curve aggregation or downstream file handling encounters invalid data.
         try:
             with duckdb.connect(db_path) as conn:
+                # Captures table schema to keep exports compatible with legacy databases.
+                schema_columns = {row[0] for row in conn.execute("DESCRIBE force_vs_z").fetchall()}
+                # Selects velocity only when present, otherwise provides a typed NULL placeholder.
+                velocity_projection = "velocity" if "velocity" in schema_columns else "CAST(NULL AS DOUBLE)"
                 query = """
-                    SELECT curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
+                    SELECT curve_id, file_id, date, spring_constant,
                            tip_geometry, tip_radius, segment_type, force_values AS deflection,
-                           z_values AS z_sensor, sampling_rate, velocity, no_points
+                           z_values AS z_sensor, {velocity_projection} AS velocity,
                     FROM force_vs_z
-                """
+                """.format(velocity_projection=velocity_projection)
                 params = None
                 if curve_ids:
                     query += " WHERE curve_id IN ({})".format(",".join("?" for _ in curve_ids))
@@ -70,6 +74,13 @@ class CSVExporter(Exporter):
                 
                 # Represents request-level metadata combining legacy `metadata` and new `softmech_metadata`.
                 metadata_payload = kwargs.get("metadata") or kwargs.get("softmech_metadata") or {}
+                # Stores fallback velocity from request payload when DB rows do not provide one.
+                default_velocity = metadata_payload.get("velocity", 1e-6)
+                # Normalizes the fallback velocity to a float to guarantee numeric CSV output.
+                try:
+                    default_velocity = float(default_velocity)
+                except (TypeError, ValueError):
+                    default_velocity = 1e-6
                 for key, value in metadata_payload.items():
                     writer.writerow([key, value])
                 
@@ -80,24 +91,24 @@ class CSVExporter(Exporter):
                 
                 num_exported = 0
                 for row in results:
-                    (curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
+                    (curve_id, file_id, date, spring_constant,
                      tip_geometry, tip_radius, segment_type, deflection, z_sensor,
-                     sampling_rate, velocity, no_points) = row
+                     velocity) = row
+                    # Ensures row-level velocity is present even for legacy schemas without velocity column.
+                    resolved_velocity = velocity if velocity is not None else default_velocity
                     
                     # Row-specific metadata
                     writer.writerow(["curve_id", curve_id])
                     writer.writerow(["file_id", file_id])
                     writer.writerow(["date", date])
-                    writer.writerow(["instrument", instrument])
-                    writer.writerow(["sample", sample])
+                    # writer.writerow(["sample", sample])
                     writer.writerow(["spring_constant", spring_constant])
-                    writer.writerow(["inv_ols", inv_ols])
                     writer.writerow(["tip_geometry", tip_geometry])
                     writer.writerow(["tip_radius", tip_radius])
-                    writer.writerow(["segment_type", segment_type])
-                    writer.writerow(["sampling_rate", sampling_rate])
-                    writer.writerow(["velocity", velocity])
-                    writer.writerow(["no_points", no_points])
+                    # writer.writerow(["segment_type", segment_type])
+                    # writer.writerow(["sampling_rate", sampling_rate])
+                    writer.writerow(["velocity", resolved_velocity])
+                    # writer.writerow(["no_points", no_points])
                     
                     # Headers
                     writer.writerow(["index", "Z (m)", "Force (N)"])

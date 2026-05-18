@@ -1,3 +1,5 @@
+"""Handles CSV file parsing and legacy DuckDB-to-CSV export helpers."""
+
 import csv
 from typing import Dict, Any, List, Optional
 import logging
@@ -127,12 +129,33 @@ def export_from_duckdb_to_csv(
     try:
         # Connect to DuckDB
         with duckdb.connect(db_path) as conn:
+            # Captures available columns to keep legacy exports compatible with reduced schemas.
+            schema_columns = {row[0] for row in conn.execute("DESCRIBE force_vs_z").fetchall()}
+            # Selects optional metadata columns only when they exist in the current table schema.
+            instrument_projection = "instrument" if "instrument" in schema_columns else "CAST(NULL AS VARCHAR)"
+            # Selects optional sample column when available, otherwise uses a typed NULL placeholder.
+            sample_projection = "sample" if "sample" in schema_columns else "CAST(NULL AS VARCHAR)"
+            # Selects optional inv_ols column when available, otherwise uses a typed NULL placeholder.
+            inv_ols_projection = "inv_ols" if "inv_ols" in schema_columns else "CAST(NULL AS DOUBLE)"
+            # Selects optional sampling_rate column when available, otherwise uses a typed NULL placeholder.
+            sampling_rate_projection = "sampling_rate" if "sampling_rate" in schema_columns else "CAST(NULL AS DOUBLE)"
+            # Selects optional velocity column when available, otherwise uses a typed NULL placeholder.
+            velocity_projection = "velocity" if "velocity" in schema_columns else "CAST(NULL AS DOUBLE)"
+            # Selects optional no_points column when available, otherwise uses a typed NULL placeholder.
+            no_points_projection = "no_points" if "no_points" in schema_columns else "CAST(NULL AS BIGINT)"
             query = """
-                SELECT curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
+                SELECT curve_id, file_id, date, {instrument_projection} AS instrument, {sample_projection} AS sample, spring_constant, {inv_ols_projection} AS inv_ols,
                        tip_geometry, tip_radius, segment_type, force_values AS deflection,
-                       z_values AS z_sensor, sampling_rate, velocity, no_points
+                       z_values AS z_sensor, {sampling_rate_projection} AS sampling_rate, {velocity_projection} AS velocity, {no_points_projection} AS no_points
                 FROM force_vs_z
-            """
+            """.format(
+                instrument_projection=instrument_projection,
+                sample_projection=sample_projection,
+                inv_ols_projection=inv_ols_projection,
+                sampling_rate_projection=sampling_rate_projection,
+                velocity_projection=velocity_projection,
+                no_points_projection=no_points_projection,
+            )
             params = None
             if curve_ids:
                 query += " WHERE curve_id IN ({})".format(",".join("?" for _ in curve_ids))
@@ -162,16 +185,16 @@ def export_from_duckdb_to_csv(
                 writer.writerow(["curve_id", curve_id])
                 writer.writerow(["file_id", file_id])
                 writer.writerow(["date", date])
-                writer.writerow(["instrument", instrument])
-                writer.writerow(["sample", sample])
+                # writer.writerow(["instrument", instrument])
+                # writer.writerow(["sample", sample])
                 writer.writerow(["spring_constant", spring_constant])
-                writer.writerow(["inv_ols", inv_ols])
+                # writer.writerow(["inv_ols", inv_ols])
                 writer.writerow(["tip_geometry", tip_geometry])
                 writer.writerow(["tip_radius", tip_radius])
-                writer.writerow(["segment_type", segment_type])
-                writer.writerow(["sampling_rate", sampling_rate])
+                # writer.writerow(["segment_type", segment_type])
+                # writer.writerow(["sampling_rate", sampling_rate])
                 writer.writerow(["velocity", velocity])
-                writer.writerow(["no_points", no_points])
+                # writer.writerow(["no_points", no_points])
                 
                 # Write headers
                 writer.writerow(["index", "Z (m)", "Force (N)"])

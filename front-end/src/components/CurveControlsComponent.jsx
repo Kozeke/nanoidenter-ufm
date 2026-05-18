@@ -30,6 +30,8 @@ const CurveControlsComponent = ({
   onParameterChange,
   showParameters,
   setShowParameters,
+  // Handles Enter shortcut behavior to apply updated curves from curve controls.
+  onApplyChangesShortcut,
   // Disable curve controls when socket is down
   isSocketConnected,
 }) => {
@@ -149,11 +151,70 @@ const CurveControlsComponent = ({
     background: "#fff",
     boxShadow: "0 2px 8px rgba(30,41,59,0.06) inset",
     outline: "none",
-  };  const handleSelectChange = useCallback((event) => {
+  };
+
+  // Commits the current "From" value using the same validation logic as blur.
+  const commitCurveFromInput = useCallback(() => {
+    let val = parseInt(curveFromInput, 10);
+    if (isNaN(val) || val < 0) val = 0;
+    if (maxNumCurves != null && val >= maxNumCurves) val = maxNumCurves - 1;
+    if (val >= curveTo) val = curveTo - 1;
+    setCurveFromInput(String(val));
+    handleCurveFromChange(val);
+  }, [curveFromInput, maxNumCurves, curveTo, handleCurveFromChange]);
+
+  // Commits the current "To" value using the same validation logic as blur.
+  const commitCurveToInput = useCallback(() => {
+    let val = parseInt(curveToInput, 10);
+    if (isNaN(val) || val < 1) val = 1;
+    if (maxNumCurves != null && val > maxNumCurves) val = maxNumCurves;
+    if (val <= curveFrom) val = curveFrom + 1;
+    setCurveToInput(String(val));
+    handleCurveToChange(val);
+  }, [curveToInput, maxNumCurves, curveFrom, handleCurveToChange]);
+
+  // Commits the current curve-id input to shared dashboard state.
+  const commitCurveIdInput = useCallback(() => {
+    setCurveId(curveIdInput);
+  }, [curveIdInput, setCurveId]);
+
+  // Triggers the shared update-curves shortcut after input values are committed.
+  const triggerApplyChangesShortcut = useCallback(() => {
+    if (typeof onApplyChangesShortcut === "function") {
+      onApplyChangesShortcut();
+    }
+  }, [onApplyChangesShortcut]);
+
+  // Handles Enter key for the "From" input to commit and apply updates.
+  const handleCurveFromEnter = useCallback((event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    commitCurveFromInput();
+    triggerApplyChangesShortcut();
+  }, [commitCurveFromInput, triggerApplyChangesShortcut]);
+
+  // Handles Enter key for the "To" input to commit and apply updates.
+  const handleCurveToEnter = useCallback((event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    commitCurveToInput();
+    triggerApplyChangesShortcut();
+  }, [commitCurveToInput, triggerApplyChangesShortcut]);
+
+  // Handles Enter key for the "Curve ID" input to commit and apply updates.
+  const handleCurveIdEnter = useCallback((event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    commitCurveIdInput();
+    triggerApplyChangesShortcut();
+  }, [commitCurveIdInput, triggerApplyChangesShortcut]);
+
+  const handleSelectChange = useCallback((event) => {
     const value = event.target.value;
     setSelectedCurveIds(value);
     console.log("Selected curves for display:", value);
-  }, [setSelectedCurveIds]);  const handleExportChange = useCallback(
+  }, [setSelectedCurveIds]);
+  const handleExportChange = useCallback(
   (curveId) => (event) => {
     event.stopPropagation();
     const isChecked = event.target.checked;
@@ -314,14 +375,8 @@ setSelectedCurveIds((prev) => {
           max={maxNumCurves != null ? maxNumCurves - 1 : undefined}
           value={curveFromInput}
           onChange={(e) => setCurveFromInput(e.target.value)}
-          onBlur={() => {
-            let val = parseInt(curveFromInput, 10);
-            if (isNaN(val) || val < 0) val = 0;
-            if (maxNumCurves != null && val >= maxNumCurves) val = maxNumCurves - 1;
-            if (val >= curveTo) val = curveTo - 1;
-            setCurveFromInput(String(val));
-            handleCurveFromChange(val);
-          }}
+          onBlur={commitCurveFromInput}
+          onKeyDown={handleCurveFromEnter}
           style={numberInputStyle}
         />
 
@@ -333,14 +388,8 @@ setSelectedCurveIds((prev) => {
           max={maxNumCurves ?? undefined}
           value={curveToInput}
           onChange={(e) => setCurveToInput(e.target.value)}
-          onBlur={() => {
-            let val = parseInt(curveToInput, 10);
-            if (isNaN(val) || val < 1) val = 1;
-            if (maxNumCurves != null && val > maxNumCurves) val = maxNumCurves;
-            if (val <= curveFrom) val = curveFrom + 1;
-            setCurveToInput(String(val));
-            handleCurveToChange(val);
-          }}
+          onBlur={commitCurveToInput}
+          onKeyDown={handleCurveToEnter}
           style={numberInputStyle}
         />
 
@@ -349,7 +398,8 @@ setSelectedCurveIds((prev) => {
           type="text"
           value={curveIdInput ?? ""}
           onChange={(e) => setCurveIdInput(e.target.value)}
-          onBlur={() => setCurveId(curveIdInput)}
+          onBlur={commitCurveIdInput}
+          onKeyDown={handleCurveIdEnter}
           style={numberInputStyle}
         />
       </div>

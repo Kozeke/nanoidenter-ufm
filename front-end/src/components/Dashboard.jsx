@@ -1,5 +1,6 @@
 // Renders the main dashboard experience coordinating datasets, filters, and controls.
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext, Suspense, lazy } from "react";
+import { UnitPreferencesProvider } from "../context/UnitPreferencesContext";
 import debounce from 'lodash/debounce';
 import { Box, CircularProgress } from '@mui/material';
 import FiltersComponent from "./FiltersComponent";
@@ -14,6 +15,8 @@ const FileOpener = lazy(() => import("./FileOpener"));
 const ExportButton = lazy(() => import("./ExportButton"));
 const UserMenu = lazy(() => import("./UserMenu"));
 const SaveExperimentButton = lazy(() => import("./SaveExperimentButton"));
+// Lazy-load the trim data modal to keep the initial bundle lean
+const TrimDataModal = lazy(() => import("./TrimDataModal"));
 
 
 // Keep this in sync with FilterStatusSidebar / FiltersComponent drawer width
@@ -110,6 +113,12 @@ const Dashboard = () => {
     setIsLoadingExport,
     // WebSocket connection status for UX.
     connectionStatus,
+    // Stores shared model statistics shown in the header badge.
+    modelStats,
+    // Updates model statistics when a new dataset lifecycle starts.
+    setModelStats,
+    // Resets filters and analysis params to defaults when a new experiment loads.
+    resetFiltersAndParams,
   } = useDashboardStore();
   
   // Centralizes WebSocket lifecycle + curve fetching for the dashboard
@@ -189,6 +198,8 @@ const Dashboard = () => {
     setFilters({ e_models: nextValue });
   };
   const isMetadataReady = metadataObject.columns.length > 0 || Object.keys(metadataObject.sample_row).length > 0;
+  // Controls visibility of the Trim Data modal dialog.
+  const [trimDataOpen, setTrimDataOpen] = useState(false);
   const [showParameters, setShowParameters] = useState(false);
   const [allFparams, setAllFparams] = useState([]);
   const [lastFparamsKey, setLastFparamsKey] = useState(null);
@@ -370,12 +381,31 @@ const Dashboard = () => {
       setFilename(result.filename);
       console.log("Filename set to:", result.filename);
     }
+    // Reset all filters AND analysis parameters (forceModelParams, elasticModelParams,
+    // elasticityParams, setZeroForce) so the new dataset starts from a clean slate.
+    // This prevents stale filter choices from a previous experiment leaking into
+    // the first WebSocket request for the new dataset.
+    resetFiltersAndParams();
+    // Clear single-curve selection so the curve ID field shows empty
+    setSelectedCurveId(null);
+    // Clear highlighted and export curve IDs; they will be repopulated from incoming forceData
+    setSelectedCurveIds([]);
+    setSelectedExportCurveIds([]);
+    // Reset local model-parameter selections that depend on the previous dataset
+    setSelectedParameters([]);
+    setSelectedElasticityParameters([]);
+    // Clears previous model statistics so the new dataset starts with empty E metrics.
+    setModelStats("force", []);
+    setModelStats("elasticity", []);
     // Force a fresh WebSocket request after import
     // The datasetId should be available since Zustand updates are synchronous
     resetAndReload();
   };
 
   const handleImportStart = () => {
+    // Clears stale model statistics immediately when a new file import starts.
+    setModelStats("force", []);
+    setModelStats("elasticity", []);
     setLoadingMulti({ import: true });
     setIsLoadingImport(true);
   };
@@ -410,7 +440,22 @@ const Dashboard = () => {
   };
 
   const handleCurveFromChange = (value) => setCurveFrom(value);
+  // Updates the dashboard's curve-to value from curve controls interactions.
   const handleCurveToChange = (value) => setCurveTo(value); const [windowWidth, setWindowWidth] = useState(window.innerWidth);  // Update window width on resize
+  // Applies the same behavior as the Update Curves action button.
+  const handleApplyCurveUpdatesShortcut = useCallback(() => {
+    // Sends a curve refresh request whenever shortcut updates are applied.
+    sendCurveRequest();
+    // Detects whether model stats should be refreshed alongside curves.
+    const hasForceModels = Object.keys(forceModels || {}).length > 0;
+    // Detects whether elasticity stats should be refreshed alongside curves.
+    const hasElasticModels = Object.keys(elasticityModels || {}).length > 0;
+    // Sends model stats only when at least one model family is currently selected.
+    if ((hasForceModels || hasElasticModels) && sendModelStatsRequest) {
+      sendModelStatsRequest();
+    }
+  }, [sendCurveRequest, sendModelStatsRequest, forceModels, elasticityModels]);
+
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handleResize);
@@ -437,9 +482,10 @@ const Dashboard = () => {
     regularFilters,
     cpFilters,
     activeFmodel,
+    forceModelParams,
+    setZeroForce,
     curveFrom,
-    curveTo,
-    datasetId
+    curveTo
   });
 
   // Function to fetch all fparams with progress tracking
@@ -481,9 +527,12 @@ const Dashboard = () => {
             f_models: forceModels,
             e_models: elasticityModels,
           },
+          // Sends force-model fitting bounds and poisson used by /get-all-fparams-stream calculations.
+          force_model_params: forceModelParams,
+          // Sends the zero-force behavior so indentation branch matches UI settings.
+          set_zero_force: setZeroForce,
           curve_from: curveFrom,
           curve_to: curveTo,
-          dataset_id: datasetId,
         }),
         signal: fparamsAbortRef.current.signal
       });
@@ -561,6 +610,7 @@ const Dashboard = () => {
     showParameters, activeTab, selectedForceModel,
     fparamsCacheKey, lastFparamsKey, allFparams.length,
     regularFilters, cpFilters, forceModels, elasticityModels, curveFrom, curveTo, datasetId,
+    forceModelParams, setZeroForce,
     stableStringify
   ]);
 
@@ -1188,7 +1238,7 @@ const Dashboard = () => {
           {/* Middle: WebSocket status */}
           <div style={statusPillWrapperStyle}>
             <YoungsModulusBadge
-              value={useDashboardStore.getState().modelStats?.force?.[0]?.value}
+              value={modelStats?.force?.[0]?.value}
             />
 
             <span style={statusPillStyle(connectionStatus)}>
@@ -1223,6 +1273,23 @@ const Dashboard = () => {
                     </button>
                   )}
                 />
+              </div>
+            </Suspense>
+
+            {/* Trim Data — opens the force-range trimming dialog */}
+            <Suspense fallback={null}>
+              <div {...pressable}>
+                <button
+                  style={
+                    (!isWebSocketConnected || !datasetId)
+                      ? actionBtnStyle("disabled")
+                      : actionBtnStyle("secondary")
+                  }
+                  onClick={() => setTrimDataOpen(true)}
+                  disabled={!isWebSocketConnected || !datasetId}
+                >
+                  Trim data
+                </button>
               </div>
             </Suspense>
 
@@ -1358,7 +1425,8 @@ const Dashboard = () => {
            />
         </div>
 
-        {/* Tab Content */}
+        {/* Tab Content — wrapped in UnitPreferencesProvider so all graphs share the same unit selection */}
+        <UnitPreferencesProvider>
         <div style={tabContentStyle}>
           {activeTab === "forceDisplacement" && (
             <ForceDisplacementPanel
@@ -1411,6 +1479,7 @@ const Dashboard = () => {
             />
           )}
         </div>
+        </UnitPreferencesProvider>
         <CurveControlsComponent
           curveFrom={curveFrom}
           curveTo={curveTo}
@@ -1433,11 +1502,25 @@ const Dashboard = () => {
              onParameterChange={setSelectedParameters}
              showParameters={showParameters}
              setShowParameters={setShowParameters}
+             onApplyChangesShortcut={handleApplyCurveUpdatesShortcut}
              // Disable curve controls when socket is down
              isSocketConnected={isWebSocketConnected}
         />
       </div>
     </div>
+        {/* Trim Data modal — permanently removes out-of-range force points */}
+        <Suspense fallback={null}>
+          <TrimDataModal
+            open={trimDataOpen}
+            onClose={() => setTrimDataOpen(false)}
+            datasetId={datasetId}
+            onSuccess={() => {
+              setTrimDataOpen(false);
+              resetAndReload();
+            }}
+            forceDomain={domainRange}
+          />
+        </Suspense>
       </Suspense>
     </MetadataContext.Provider>);
 }; export default Dashboard;

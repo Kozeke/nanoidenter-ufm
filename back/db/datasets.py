@@ -1,5 +1,8 @@
+# Dataset persistence helpers for creating, updating, and listing dataset records.
 import hashlib
-from typing import Optional
+import os
+import uuid
+from typing import List, Optional, Tuple
 from db.connection import get_conn
 
 
@@ -13,82 +16,52 @@ def create_dataset(
     spring_constant: Optional[float] = None,
     tip_radius: Optional[float] = None,
     tip_geometry: Optional[str] = None,
+    tip_angle: Optional[float] = None,
 ) -> int:
     """
-    Create a new dataset record and return its ID.
-    If a dataset with the same file_hash already exists, returns the existing dataset ID.
+    Always creates a new dataset record and returns its ID.
+    Every import is treated as a fresh dataset regardless of duplicate filenames or metadata,
+    so re-uploading the same file never triggers a primary key conflict.
     """
     conn = get_conn()
-    
-    # Generate file hash if not provided
+
+    # Build a base content hash from the filename when none is supplied
     if file_hash is None:
-        # For now, use filename as hash (can be improved to hash file contents)
         file_hash = hashlib.md5(filename.encode()).hexdigest()
-    
-    # Make file_hash unique per user and name combination to allow same file with different names
-    # Append user_id and name to file_hash to make it unique
-    unique_file_hash = hashlib.md5(f"{file_hash}_{user_id}_{name}".encode()).hexdigest()
-    
-    # Check if dataset with this unique_file_hash already exists
-    # This allows the same file to be opened multiple times with different names as separate datasets
-    existing = conn.execute(
-        "SELECT id FROM datasets WHERE file_hash = ?",
-        (unique_file_hash,)
-    ).fetchone()
-    
-    if existing:
-        # Return existing dataset ID (same file, same user, same name)
-        existing_id = existing[0]
-        # Optionally update metadata if provided
-        update_dataset(
-            existing_id,
-            num_curves=num_curves if num_curves > 0 else None,
-            spring_constant=spring_constant,
-            tip_radius=tip_radius,
-            tip_geometry=tip_geometry,
-        )
-        return existing_id
-    
-    # If unique_file_hash doesn't exist, create a new dataset
-    # This allows the same file to be opened with different names as separate datasets
-    
-    # Get the next dataset ID
+
+    # Append a random UUID so every call produces a globally unique file_hash,
+    # ensuring no two imports ever collide on the UNIQUE file_hash constraint.
+    unique_file_hash = hashlib.md5(
+        f"{file_hash}_{user_id}_{name}_{uuid.uuid4()}".encode()
+    ).hexdigest()
+
+    # Derive the next sequential dataset ID (no auto-increment sequence exists yet)
     result = conn.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM datasets").fetchone()
     dataset_id = result[0] if result else 1
-    
-    try:
-        conn.execute(
-            """
-            INSERT INTO datasets (
-                id, name, description, filename, file_hash, user_id,
-                num_curves, spring_constant, tip_radius, tip_geometry
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                dataset_id,
-                name,
-                description,
-                filename,
-                unique_file_hash,  # Use unique hash that includes user_id and name
-                user_id,
-                num_curves,
-                spring_constant,
-                tip_radius,
-                tip_geometry,
-            ),
+
+    conn.execute(
+        """
+        INSERT INTO datasets (
+            id, name, description, filename, file_hash, user_id,
+            num_curves, spring_constant, tip_radius, tip_geometry, tip_angle
         )
-    except Exception as e:
-        # If unique constraint fails, try to get existing dataset
-        # This shouldn't happen with unique_file_hash, but handle it just in case
-        existing = conn.execute(
-            "SELECT id FROM datasets WHERE file_hash = ?",
-            (unique_file_hash,)
-        ).fetchone()
-        if existing:
-            return existing[0]
-        raise
-    
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            dataset_id,
+            name,
+            description,
+            filename,
+            unique_file_hash,
+            user_id,
+            num_curves,
+            spring_constant,
+            tip_radius,
+            tip_geometry,
+            tip_angle,
+        ),
+    )
+
     return dataset_id
 
 
@@ -100,7 +73,7 @@ def get_dataset(dataset_id: int) -> Optional[dict]:
         """
         SELECT id, name, description, filename, file_hash, user_id,
                created_at, updated_at, last_accessed_at, num_curves, spring_constant,
-               tip_radius, tip_geometry
+               tip_radius, tip_geometry, tip_angle
         FROM datasets
         WHERE id = ?
         """,
@@ -124,6 +97,7 @@ def get_dataset(dataset_id: int) -> Optional[dict]:
         "spring_constant": row[10],
         "tip_radius": row[11],
         "tip_geometry": row[12],
+        "tip_angle": row[13],
     }
 
 
@@ -134,6 +108,7 @@ def update_dataset(
     spring_constant: Optional[float] = None,
     tip_radius: Optional[float] = None,
     tip_geometry: Optional[str] = None,
+    tip_angle: Optional[float] = None,
 ) -> bool:
     """Update dataset metadata."""
     conn = get_conn()
@@ -156,6 +131,9 @@ def update_dataset(
     if tip_geometry is not None:
         updates.append("tip_geometry = ?")
         params.append(tip_geometry)
+    if tip_angle is not None:
+        updates.append("tip_angle = ?")
+        params.append(tip_angle)
     
     if not updates:
         return False
@@ -169,3 +147,226 @@ def update_dataset(
     )
     
     return True
+
+
+def list_datasets_for_user(user_id: int) -> List[dict]:
+    """Return dataset summary rows for table rendering without loading curve points."""
+    conn = get_conn()
+
+    # Retrieves user-owned datasets with lightweight summary and metadata columns only.
+    rows = conn.execute(
+        """
+        SELECT
+            id,
+            name,
+            filename,
+            num_curves,
+            spring_constant,
+            tip_radius,
+            tip_geometry,
+            tip_angle,
+            created_at
+        FROM datasets
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        """,
+        (user_id,),
+    ).fetchall()
+
+    # Maps DB rows to API-friendly dictionaries expected by the frontend table.
+    datasets: List[dict] = []
+    for row in rows:
+        # Derives file format from the stored filename extension.
+        file_format = os.path.splitext(row[2] or "")[1].lstrip(".").lower() or "unknown"
+        datasets.append(
+            {
+                "id": row[0],
+                "name": row[1],
+                "filename": row[2],
+                "format": file_format,
+                "length": row[3] if row[3] is not None else 0,
+                "created_at": row[8],
+                "metadata": {
+                    "spring_constant": row[4],
+                    "tip_radius": row[5],
+                    "tip_geometry": row[6],
+                    "tip_angle": row[7],
+                },
+            }
+        )
+
+    return datasets
+
+
+# Retrieves one dataset summary row for a specific user.
+def get_dataset_for_user(dataset_id: int, user_id: int) -> Optional[dict]:
+    # Stores shared DB connection for secure user-scoped lookup.
+    conn = get_conn()
+
+    # Stores one matching dataset row if the record belongs to the user.
+    row = conn.execute(
+        """
+        SELECT
+            id,
+            name,
+            description,
+            filename,
+            num_curves,
+            spring_constant,
+            tip_radius,
+            tip_geometry,
+            tip_angle,
+            created_at,
+            last_accessed_at
+        FROM datasets
+        WHERE id = ? AND user_id = ?
+        """,
+        (dataset_id, user_id),
+    ).fetchone()
+
+    if not row:
+        return None
+
+    # Derives file format from the stored filename extension.
+    file_format = os.path.splitext(row[3] or "")[1].lstrip(".").lower() or "unknown"
+
+    return {
+        "id": row[0],
+        "name": row[1],
+        "description": row[2],
+        "filename": row[3],
+        "format": file_format,
+        "length": row[4] if row[4] is not None else 0,
+        "created_at": row[9],
+        "last_accessed_at": row[10],
+        "metadata": {
+            "spring_constant": row[5],
+            "tip_radius": row[6],
+            "tip_geometry": row[7],
+            "tip_angle": row[8],
+        },
+    }
+
+
+# Deletes one dataset and its curve rows when it belongs to the user.
+def delete_dataset_for_user(dataset_id: int, user_id: int) -> Tuple[bool, str]:
+    # Stores shared DB connection for ownership checks and deletion.
+    conn = get_conn()
+    # Stores normalized integer identifier to keep query parameter type stable.
+    normalized_dataset_id = int(dataset_id)
+    # Stores normalized user identifier to keep ownership checks type-consistent.
+    normalized_user_id = int(user_id)
+
+    # Stores whether the target dataset exists for the authenticated user.
+    # Explicit CAST prevents DuckDB from inferring the bound parameter as DOUBLE.
+    dataset_row = conn.execute(
+        """
+        SELECT id
+        FROM datasets
+        WHERE id = CAST(? AS INTEGER) AND user_id = CAST(? AS INTEGER)
+        """,
+        (normalized_dataset_id, normalized_user_id),
+    ).fetchone()
+    if not dataset_row:
+        return False, "Dataset not found"
+
+    # Stores count of experiments that still reference this dataset.
+    # Explicit CAST guards against the same DOUBLE-vs-INTEGER DuckDB type error.
+    referencing_experiments = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM experiments
+        WHERE dataset_id = CAST(? AS INTEGER) AND user_id = CAST(? AS INTEGER)
+        """,
+        (normalized_dataset_id, normalized_user_id),
+    ).fetchone()[0]
+    if referencing_experiments > 0:
+        return (
+            False,
+            "Cannot delete dataset with saved experiments. Delete related experiments first.",
+        )
+
+    # Removes all curve rows tied to the dataset to keep tables consistent.
+    # CAST(? AS INTEGER) prevents a DuckDB internal type-mismatch when the
+    # driver infers the bound parameter as DOUBLE instead of INTEGER.
+    conn.execute(
+        """
+        DELETE FROM force_vs_z
+        WHERE dataset_id = CAST(? AS INTEGER)
+        """,
+        (normalized_dataset_id,),
+    )
+    # Removes the dataset row by primary key after ownership has already been validated.
+    # Explicit cast guards against the same DOUBLE-vs-INTEGER DuckDB assertion error.
+    conn.execute(
+        """
+        DELETE FROM datasets
+        WHERE id = CAST(? AS INTEGER)
+        """,
+        (normalized_dataset_id,),
+    )
+    return True, "Dataset deleted successfully"
+
+
+# Updates editable dataset metadata fields for a user-owned dataset.
+def update_dataset_metadata_for_user(
+    dataset_id: int,
+    user_id: int,
+    spring_constant: Optional[float] = None,
+    tip_radius: Optional[float] = None,
+    tip_geometry: Optional[str] = None,
+    tip_angle: Optional[float] = None,
+) -> Tuple[bool, str]:
+    # Stores shared DB connection for ownership checks and update operations.
+    conn = get_conn()
+
+    # Stores whether the dataset exists for the authenticated user.
+    dataset_row = conn.execute(
+        """
+        SELECT id
+        FROM datasets
+        WHERE id = ? AND user_id = ?
+        """,
+        (dataset_id, user_id),
+    ).fetchone()
+    if not dataset_row:
+        return False, "Dataset not found"
+
+    # Stores column update expressions for the dynamic metadata update query.
+    update_parts: List[str] = []
+    # Stores ordered query parameters matching the dynamic update expressions.
+    query_params: List[object] = []
+
+    if spring_constant is not None:
+        update_parts.append("spring_constant = ?")
+        query_params.append(spring_constant)
+    if tip_radius is not None:
+        update_parts.append("tip_radius = ?")
+        query_params.append(tip_radius)
+    if tip_geometry is not None:
+        update_parts.append("tip_geometry = ?")
+        query_params.append(tip_geometry)
+    if tip_angle is not None:
+        update_parts.append("tip_angle = ?")
+        query_params.append(tip_angle)
+
+    if not update_parts:
+        return False, "No metadata fields provided for update"
+
+    # Updates modification timestamp whenever metadata fields are changed.
+    update_parts.append("updated_at = CURRENT_TIMESTAMP")
+    query_params.extend([dataset_id, user_id])
+    # Prevent crash if dynamic SQL updates fail due to database issues.
+    try:
+        conn.execute(
+            f"""
+            UPDATE datasets
+            SET {", ".join(update_parts)}
+            WHERE id = ? AND user_id = ?
+            """,
+            query_params,
+        )
+    except Exception:
+        return False, "Failed to update dataset metadata"
+
+    return True, "Dataset metadata updated successfully"

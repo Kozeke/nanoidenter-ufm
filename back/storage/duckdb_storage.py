@@ -32,6 +32,16 @@ def save_to_duckdb(curves: Dict[str, ForceCurve], dataset_id: int) -> None:
                 FOREIGN KEY (dataset_id) REFERENCES datasets(id)
             )
         """)
+        # Remove any existing rows for this dataset before inserting fresh data.
+        # This prevents PRIMARY KEY violations when the same file is reprocessed
+        # (create_dataset returns the same dataset_id for duplicate file+user+name combos).
+        existing_rows = conn.execute(
+            "SELECT COUNT(*) FROM force_vs_z WHERE dataset_id = ?", (dataset_id,)
+        ).fetchone()[0]
+        if existing_rows > 0:
+            conn.execute("DELETE FROM force_vs_z WHERE dataset_id = ?", (dataset_id,))
+            print(f"🗑️  Deleted {existing_rows} existing rows for dataset_id={dataset_id} before re-insert")
+
         batch_data = [
             (
                 dataset_id,

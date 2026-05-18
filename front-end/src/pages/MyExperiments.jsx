@@ -129,8 +129,26 @@ export default function MyExperiments() {
                 {paginatedExperiments.map((exp) => (
                   <tr key={exp.id} style={rowStyle} className="row">
                     <td style={tdStyle}>
+                      {/* Experiment title (name) */}
                       <div style={{ fontWeight: 600 }}>{exp.name}</div>
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                      {/* Optional description shown below the title */}
+                      {exp.description && (
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: "#6b7280",
+                            marginTop: 2,
+                            maxWidth: 300,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                          title={exp.description}
+                        >
+                          {exp.description}
+                        </div>
+                      )}
+                      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
                         ID: {exp.id}
                       </div>
                     </td>

@@ -194,6 +194,17 @@ export const useDashboardStore = create(
         set((s) => ({
           forceModelParams: { ...s.forceModelParams, ...updater },
         })),
+      // Resets all filter and analysis-parameter state to defaults when a new
+      // experiment is loaded, preventing stale filter choices from a previous
+      // dataset from leaking into the first request for the new dataset.
+      resetFiltersAndParams: () =>
+        set({
+          filters: createDefaultFilters(),
+          elasticityParams: createDefaultElasticityParams(),
+          elasticModelParams: createDefaultElasticModelParams(),
+          forceModelParams: createDefaultForceModelParams(),
+          setZeroForce: true,
+        }),
       // Restores all dashboard state to defaults so components can reset their view.
       reset: () =>
         set({

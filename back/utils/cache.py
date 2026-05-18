@@ -1,12 +1,17 @@
 """
 Cache optimization utilities for contact point and indentation caching.
 Provides high-performance cache warm-up and retrieval functions.
+Set ENABLE_CACHE=false in .env to bypass all caching (useful for debugging).
 """
+import os
 import json
 import hashlib
 from typing import Dict, List, Tuple, Optional
 import duckdb
 from filters.cpoints.apply_contact_point_filters import apply_cp_filters
+
+# Master switch loaded from environment variable; defaults to True if not set
+CACHE_ENABLED = os.getenv("ENABLE_CACHE", "true").strip().lower() not in ("false", "0", "no")
 
 
 def _json_hash(obj) -> str:
@@ -35,6 +40,10 @@ def warmup_cp_cache(
     Returns:
         Number of curves that were computed (cache misses)
     """
+    # Skip all caching when ENABLE_CACHE=false
+    if not CACHE_ENABLED:
+        return 0
+
     if not cp_filters:
         return 0
     
@@ -140,6 +149,10 @@ def get_cached_indentations(
     Returns:
         Dictionary mapping curve_id -> (zi, fi) tuples
     """
+    # Skip cache lookup when ENABLE_CACHE=false
+    if not CACHE_ENABLED:
+        return {}
+
     if not curve_ids or not cp_hash:
         return {}
     
@@ -180,6 +193,10 @@ def cache_indentations_batch(
     Returns:
         Number of rows inserted
     """
+    # Skip writing to cache when ENABLE_CACHE=false
+    if not CACHE_ENABLED:
+        return 0
+
     if not indent_cache_rows:
         return 0
     

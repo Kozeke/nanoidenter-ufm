@@ -1,4 +1,5 @@
 # fmodel_registry.py
+# Registers force-model UDFs and maps runtime metadata into model instances.
 import duckdb
 from typing import Dict
 import json
@@ -23,40 +24,38 @@ def getJclose(x0, x):
 
 def getFizi(xmin, xmax, zi, fi):
     """
-    Return zi, fi windowed to [xmin, xmax] (inclusive start, exclusive end).
-    Handles swapped bounds and clamps to available zi range.
+    Return zi, fi where zi is within [xmin, xmax], using value-based masking.
+
+    zi = xf - yf/k is NOT monotonically sorted (noise in the force signal causes
+    it to jump around). Index-based slicing (getJclose + zi[jmin:jmax]) returns an
+    arbitrary unsorted chunk instead of the actual requested window, producing
+    garbage fits. Value masking is the only correct approach.
     """
     zi = np.asarray(zi, dtype=float)
     fi = np.asarray(fi, dtype=float)
     if zi.size == 0 or fi.size == 0 or zi.size != fi.size:
         return np.array([]), np.array([])
 
-    # Ensure ascending bounds
     if xmax < xmin:
         xmin, xmax = xmax, xmin
 
-    # Clamp to data range
-    zmin, zmax = float(zi.min()), float(zi.max())
-    xmin = max(xmin, zmin)
-    xmax = min(xmax, zmax)
-
-    # Degenerate or empty window
-    if not np.isfinite(xmin) or not np.isfinite(xmax) or xmax <= xmin:
+    if not np.isfinite(xmin) or not np.isfinite(xmax):
         return np.array([]), np.array([])
 
-    jmin = getJclose(xmin, zi)
-    jmax = getJclose(xmax, zi)
-
-    # Ensure proper slicing (exclusive end); expand by 1 if identical index
-    if jmax <= jmin:
-        jmax = min(jmin + 1, zi.size)
-
-    return zi[jmin:jmax], fi[jmin:jmax]
+    mask = (zi >= xmin) & (zi <= xmax)
+    return zi[mask], fi[mask]
 
 def create_fmodel_udf(fmodel_name: str, conn: duckdb.DuckDBPyConnection):
     """
     Register a DuckDB UDF for the force model.
-    Signature: fn(zi: DOUBLE[], fi: DOUBLE[], params: DOUBLE[]) -> DOUBLE[][]
+    Signature:
+      fn(
+        zi: DOUBLE[],
+        fi: DOUBLE[],
+        params: DOUBLE[],
+        tip_radius: DOUBLE,
+        tip_geometry: VARCHAR
+      ) -> DOUBLE[][]
     Expected params include minInd/maxInd (in nm) if the model defines them.
     """
     inst = FMODEL_REGISTRY[fmodel_name.lower()]["instance"]
@@ -65,10 +64,13 @@ def create_fmodel_udf(fmodel_name: str, conn: duckdb.DuckDBPyConnection):
     udf_param_types = [
         duckdb.list_type('DOUBLE'),  # zi_values
         duckdb.list_type('DOUBLE'),  # fi_values
-        duckdb.list_type('DOUBLE')   # param_values
+        duckdb.list_type('DOUBLE'),  # param_values
+        'DOUBLE',                    # tip_radius (m)
+        'VARCHAR',                   # tip_geometry
+        'DOUBLE',                    # tip_angle (degrees; 0.0 = unknown → C=1)
     ]
 
-    def udf_wrapper(zi_values, fi_values, param_values):
+    def udf_wrapper(zi_values, fi_values, param_values, tip_radius, tip_geometry, tip_angle):
         try:
             zi_values = np.asarray(zi_values, dtype=np.float64)
             fi_values = np.asarray(fi_values, dtype=np.float64)
@@ -79,6 +81,13 @@ def create_fmodel_udf(fmodel_name: str, conn: duckdb.DuckDBPyConnection):
             for i, pname in enumerate(expected):
                 if i < param_values.size:
                     inst.parameters[pname]["default"] = float(param_values[i])
+
+            # Stores per-call tip radius fetched from DB for geometry-aware models.
+            inst.runtime_tip_radius = float(tip_radius) if tip_radius is not None else 1e-5
+            # Stores per-call tip geometry fetched from DB for geometry-aware models.
+            inst.runtime_tip_geometry = str(tip_geometry).lower() if tip_geometry else "sphere"
+            # Stores per-call tip angle (degrees); 0.0 signals unknown → C=1 approximation.
+            inst.runtime_tip_angle = float(tip_angle) if tip_angle is not None else 0.0
 
             # Window in meters (UI is nm; convert here)
             if "minInd" in inst.parameters:

@@ -12,3 +12,4 @@ python-jose[cryptography]
 pyjwt
 bcrypt
 psutil
+python-dotenv

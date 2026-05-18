@@ -1,3 +1,4 @@
+"""Experiment file loading and processing endpoints with dataset persistence."""
 from storage.duckdb_storage import save_to_duckdb
 from transform.transform import transform_data
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
@@ -87,9 +88,15 @@ async def process_file_endpoint(data: Dict[str, Any], user=Depends(get_current_u
         # performed here – what the user submits is what is stored.
         processed_metadata = metadata.copy()
         if "tip_radius" in processed_metadata:
+            # Stores numeric tip radius in SI units before metadata validation and DB save.
             tip_radius_input = float(processed_metadata["tip_radius"])
             processed_metadata["tip_radius"] = tip_radius_input
             logger.info(f"tip_radius received: {tip_radius_input:.6e} m (used as-is)")
+        if "tip_angle" in processed_metadata and processed_metadata["tip_angle"] not in (None, ""):
+            # Stores numeric tip half-angle in degrees so it can be persisted in datasets metadata.
+            tip_angle_input = float(processed_metadata["tip_angle"])
+            processed_metadata["tip_angle"] = tip_angle_input
+            logger.info(f"tip_angle received: {tip_angle_input:.2f} deg (used as-is)")
 
         if not opener.validate_metadata(processed_metadata):
             errors.append("Invalid or incomplete metadata")
@@ -111,6 +118,7 @@ async def process_file_endpoint(data: Dict[str, Any], user=Depends(get_current_u
             spring_constant=processed_metadata.get("spring_constant"),
             tip_radius=processed_metadata.get("tip_radius"),
             tip_geometry=processed_metadata.get("tip_geometry"),
+            tip_angle=processed_metadata.get("tip_angle"),
         )
         logger.info(f"Created dataset record with ID: {dataset_id}, name: {dataset_name}")
         logger.info(f"Created dataset record with ID: {dataset_id}")
@@ -150,11 +158,35 @@ async def process_file_endpoint(data: Dict[str, Any], user=Depends(get_current_u
             "errors": errors
         }
     except Exception as e:
-        errors.append(str(e))
-        logger.error(f"Failed to process file {file_path}: {str(e)}")
+        # Translate low-level DB / processing exceptions into readable messages.
+        raw_error = str(e)
+        if "Duplicate key" in raw_error or "PRIMARY KEY" in raw_error or "unique constraint" in raw_error.lower():
+            # Should not happen after switching to always-new dataset IDs, but kept as safety net
+            friendly_message = (
+                "A database conflict occurred while saving the dataset. "
+                "Please try submitting the file again."
+            )
+        elif "Invalid or incomplete metadata" in raw_error:
+            friendly_message = (
+                "Metadata validation failed. "
+                "Please ensure all required fields (Spring Constant, Tip Radius, Tip Geometry, Date) are filled in correctly."
+            )
+        elif "not found" in raw_error.lower() or "no such file" in raw_error.lower():
+            friendly_message = (
+                f"The file '{os.path.basename(file_path)}' could not be found on the server. "
+                "Please re-upload the file and try again."
+            )
+        elif "Unsupported file type" in raw_error:
+            friendly_message = raw_error  # Already descriptive
+        else:
+            friendly_message = f"Processing failed: {raw_error}"
+
+        errors.append(friendly_message)
+        logger.error(f"Failed to process file {file_path}: {raw_error}")
         raise HTTPException(status_code=500, detail={
             "status": "error",
-            "message": f"Failed to process file: {str(e)}",
+            "message": friendly_message,
             "filename": file_path,
-            "errors": errors
+            "errors": errors,
+            "raw_error": raw_error,  # Included for server-side debugging
         })

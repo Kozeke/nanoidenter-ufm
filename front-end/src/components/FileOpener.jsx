@@ -48,6 +48,12 @@ const activeValidationRules = {
     type: 'number',
     min: 0,
   },
+  tip_angle: {
+    required: 'boolean',
+    label: 'Tip Angle (deg)',
+    type: 'number',
+    min: 0,
+  },
 };
 
 // same styles as before

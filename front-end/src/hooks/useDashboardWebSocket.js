@@ -76,6 +76,9 @@ export const useDashboardWebSocket = () => {
   const prevCurveRangeRef = useRef({ from: 0, to: 10 });
   // Flags when the caller explicitly wants to re-request curves.
   const [forceRequest, setForceRequest] = useState(false);
+  // Ref mirror of forceRequest so sendCurveRequest always reads the current value
+  // even when called from a stale WebSocket onopen closure.
+  const forceRequestRef = useRef(false);
   // Tracks whether get_metadata operation is in progress
   const metadataInProgressRef = useRef(false);
   // Tracks whether compute_stats operation is in progress
@@ -83,24 +86,13 @@ export const useDashboardWebSocket = () => {
 
   // Exposes the centralized dashboard store for shared state access.
   const dashboardStore = useDashboardStore();
-  // Provides the collection of active filters shared with the backend.
-  const { filters } = dashboardStore;
-  // Provides elasticity smoothing parameters requested by the backend.
-  const { elasticityParams } = dashboardStore;
-  // Provides elastic model parameters requested by the backend.
-  const { elasticModelParams } = dashboardStore;
-  // Provides force model parameters requested by the backend.
-  const { forceModelParams } = dashboardStore;
   // Provides the start index of the curve range requested for rendering.
+  // Still subscribed here so the return value stays reactive for consumers.
   const { curveFrom } = dashboardStore;
   // Provides the end index of the curve range requested for rendering.
   const { curveTo } = dashboardStore;
   // Provides the identifier of the currently selected curve.
   const { selectedCurveId } = dashboardStore;
-  // Reports whether zero-force correction should be applied server-side.
-  const { setZeroForce } = dashboardStore;
-  // Provides the current dataset ID from the most recently loaded file.
-  const { datasetId } = dashboardStore;
   // Exposes the multi-loading indicator dispatcher.
   const { setLoadingMulti, loadingMulti } = dashboardStore;
   // Exposes the flag that toggles curve-level loading indicators.
@@ -112,16 +104,26 @@ export const useDashboardWebSocket = () => {
   // Provides setters for selected curve ID and curve range.
   const { setSelectedCurveId, setCurveFrom, setCurveTo } = dashboardStore;
 
-  // Simplifies access to regular filter groups.
-  const regularFilters = filters.regular;
-  // Simplifies access to contact point filter groups.
-  const cpFilters = filters.cp_filters;
-  // Simplifies access to force model filter groups.
-  const forceModels = filters.f_models;
-  // Simplifies access to elasticity model filter groups.
-  const elasticityModels = filters.e_models;
+  // Builds a websocket-safe force-model payload that omits Hertz tip_radius overrides.
+  const buildSocketForceModels = useCallback((rawForceModels) => {
+    // Stores a shallow copy so payload sanitation never mutates shared store state.
+    const sanitizedForceModels = { ...(rawForceModels || {}) };
+    // Stores Hertz parameters only when Hertz is selected in the outgoing payload.
+    const hertzModelParams = sanitizedForceModels.hertz;
+
+    if (hertzModelParams && typeof hertzModelParams === "object") {
+      // Excludes tip_radius so backend runtime metadata remains the single source of truth.
+      const { tip_radius, ...hertzParamsWithoutTipRadius } = hertzModelParams;
+      sanitizedForceModels.hertz = hertzParamsWithoutTipRadius;
+    }
+
+    return sanitizedForceModels;
+  }, []);
 
   // Sends a curve metadata request through the active WebSocket channel.
+  // All filter/param values are read directly from the Zustand store snapshot so
+  // that calls originating from stale onopen closures (e.g. after resetAndReload)
+  // always use the freshest state – including resets applied just before the call.
   const sendCurveRequest = useCallback(() => {
     console.log("sendCurveReq")
     // Avoid sending requests when the socket is unavailable.
@@ -129,6 +131,23 @@ export const useDashboardWebSocket = () => {
       return;
     }
     console.log("sendCurveReq2")
+
+    // Read all values fresh from the store so stale closures (e.g. socket.onopen
+    // captured before the latest React render) never send outdated filter state.
+    const liveState = useDashboardStore.getState();
+    const liveFilters = liveState.filters;
+    const liveRegularFilters = liveFilters.regular;
+    const liveCpFilters = liveFilters.cp_filters;
+    const liveForceModels = liveFilters.f_models;
+    const liveElasticityModels = liveFilters.e_models;
+    const liveElasticityParams = liveState.elasticityParams;
+    const liveElasticModelParams = liveState.elasticModelParams;
+    const liveForceModelParams = liveState.forceModelParams;
+    const liveSetZeroForce = liveState.setZeroForce;
+    const liveSelectedCurveId = liveState.selectedCurveId;
+    const liveCurveFrom = liveState.curveFrom;
+    const liveCurveTo = liveState.curveTo;
+    const liveDatasetId = liveState.datasetId;
 
     // Mark metadata operation as in progress
     metadataInProgressRef.current = true;
@@ -153,6 +172,9 @@ export const useDashboardWebSocket = () => {
     socketRef.current.loadingTimeout = loadingTimeout;
     console.log("sendCurveReq3")
 
+    // Stores force-model filters after websocket sanitation (e.g., Hertz tip_radius removal).
+    const socketSafeForceModels = buildSocketForceModels(liveForceModels);
+
     // Compares previous and current filter snapshots for change detection.
     const areFiltersEqual = (prev, current) => {
       if (!prev || !current) {
@@ -170,17 +192,17 @@ export const useDashboardWebSocket = () => {
         e_models: prevFiltersRef.current.e_models,
       },
       {
-        regular: regularFilters,
-        cp: cpFilters,
-        f_models: forceModels,
-        e_models: elasticityModels,
+        regular: liveRegularFilters,
+        cp: liveCpFilters,
+        f_models: socketSafeForceModels,
+        e_models: liveElasticityModels,
       }
     );
 
     // Determines whether the requested curve range changed.
     const numCurvesChanged =
-      prevCurveRangeRef.current.from !== curveFrom ||
-      prevCurveRangeRef.current.to !== curveTo;
+      prevCurveRangeRef.current.from !== liveCurveFrom ||
+      prevCurveRangeRef.current.to !== liveCurveTo;
 
     // Resets chart domains to trigger automatic scaling.
     const resetState = {
@@ -190,7 +212,12 @@ export const useDashboardWebSocket = () => {
       yMax: null,
     };
 
-    if (filtersChanged || numCurvesChanged || forceRequest) {
+    // forceRequestRef.current is always up-to-date even inside a stale closure,
+    // unlike forceRequest state which may be stale when called from socket.onopen.
+    const shouldReset = filtersChanged || numCurvesChanged || forceRequest || forceRequestRef.current;
+    if (shouldReset) {
+      // Clear the ref immediately so subsequent calls don't re-clear unnecessarily.
+      forceRequestRef.current = false;
       setForceData([]);
       setIndentationData({ curves_cp: [], curves_fparam: [] });
       setElspectraData({ curves: [], curves_elasticity_param: [] });
@@ -200,55 +227,43 @@ export const useDashboardWebSocket = () => {
     }
 
     // Builds the payload describing which curves and metadata to retrieve.
-    // Get fresh datasetId from store to ensure we have the latest value
-    const currentDatasetId = useDashboardStore.getState().datasetId;
-    console.log("sendCurveRequest - datasetId from store:", currentDatasetId);
+    console.log("sendCurveRequest - datasetId from store:", liveDatasetId);
     const requestData = {
       action: "get_metadata",
-      curve_from: curveFrom,
-      curve_to: curveTo,
-      dataset_id: currentDatasetId,
+      curve_from: liveCurveFrom,
+      curve_to: liveCurveTo,
+      dataset_id: liveDatasetId,
       filters: {
-        regular: regularFilters,
-        cp_filters: cpFilters,
-        f_models: forceModels,
-        e_models: elasticityModels,
+        regular: liveRegularFilters,
+        cp_filters: liveCpFilters,
+        f_models: socketSafeForceModels,
+        e_models: liveElasticityModels,
       },
-      elasticity_params: elasticityParams,
-      elastic_model_params: elasticModelParams,
-      force_model_params: forceModelParams,
-      set_zero_force: setZeroForce,
-      curve_id: selectedCurveId,
+      elasticity_params: liveElasticityParams,
+      elastic_model_params: liveElasticModelParams,
+      force_model_params: liveForceModelParams,
+      set_zero_force: liveSetZeroForce,
+      curve_id: liveSelectedCurveId,
     };
 
     // Record the latest filters so future requests detect changes.
     prevFiltersRef.current = {
-      regular: regularFilters,
-      cp: cpFilters,
-      f_models: forceModels,
-      e_models: elasticityModels,
+      regular: liveRegularFilters,
+      cp: liveCpFilters,
+      f_models: socketSafeForceModels,
+      e_models: liveElasticityModels,
     };
     // Record the latest curve range so future requests detect changes.
-    prevCurveRangeRef.current = { from: curveFrom, to: curveTo };
+    prevCurveRangeRef.current = { from: liveCurveFrom, to: liveCurveTo };
     // Clear the manual refresh flag now that the request is enqueued.
     setForceRequest(false);
 
     socketRef.current.send(JSON.stringify(requestData));
   }, [
-    regularFilters,
-    cpFilters,
-    forceModels,
-    elasticityModels,
-    curveFrom,
-    curveTo,
-    elasticityParams,
-    elasticModelParams,
-    forceModelParams,
-    setZeroForce,
-    selectedCurveId,
-    datasetId,
+    forceRequest,
     setLoadingMulti,
     setIsLoadingCurves,
+    buildSocketForceModels,
   ]);
   
   
@@ -275,42 +290,39 @@ export const useDashboardWebSocket = () => {
       setLoadingMulti({ curves: false });
       setIsLoadingCurves(false);
     }, 300000); // 5 minutes from when stats request was sent
-  
-    // Get fresh datasetId from store to ensure we have the latest value
-    const currentDatasetId = useDashboardStore.getState().datasetId;
-    console.log("sendModelStatsRequest - datasetId from store:", currentDatasetId);
+
+    // Read all values fresh from the store snapshot so this function is never
+    // affected by stale closure state (mirrors the pattern used in sendCurveRequest).
+    const liveState = useDashboardStore.getState();
+    const liveFilters = liveState.filters;
+    const liveDatasetId = liveState.datasetId;
+    // Stores force-model filters after websocket sanitation (e.g., Hertz tip_radius removal).
+    const socketSafeForceModels = buildSocketForceModels(liveFilters.f_models);
+    console.log("sendModelStatsRequest - datasetId from store:", liveDatasetId);
     const requestData = {
       action: "compute_stats",
       compute_scope: "model_stats",
-      curve_from: curveFrom,
-      curve_to: curveTo,
-      dataset_id: currentDatasetId,
+      curve_from: liveState.curveFrom,
+      curve_to: liveState.curveTo,
+      dataset_id: liveDatasetId,
       filters: {
-        regular: regularFilters,
-        cp_filters: cpFilters,
-        f_models: forceModels,
-        e_models: elasticityModels,
+        regular: liveFilters.regular,
+        cp_filters: liveFilters.cp_filters,
+        f_models: socketSafeForceModels,
+        e_models: liveFilters.e_models,
       },
-      elasticity_params: elasticityParams,
-      elastic_model_params: elasticModelParams,
-      force_model_params: forceModelParams,
-      set_zero_force: setZeroForce,
+      elasticity_params: liveState.elasticityParams,
+      elastic_model_params: liveState.elasticModelParams,
+      force_model_params: liveState.forceModelParams,
+      set_zero_force: liveState.setZeroForce,
       // IMPORTANT: DO NOT send curve_id
     };
   
     socketRef.current.send(JSON.stringify(requestData));
   }, [
-    curveFrom,
-    curveTo,
-    datasetId,
-    regularFilters,
-    cpFilters,
-    forceModels,
-    elasticityModels,
-    elasticityParams,
-    elasticModelParams,
-    forceModelParams,
-    setZeroForce,
+    setLoadingMulti,
+    setIsLoadingCurves,
+    buildSocketForceModels,
   ]);
   // Removed automatic model stats request - now triggered only by "Update Curves" button
   // Initializes the WebSocket connection and wires up lifecycle handlers.
@@ -709,6 +721,9 @@ export const useDashboardWebSocket = () => {
   // Forces a fresh WebSocket connection when the caller requests a hard reload.
   const resetAndReload = useCallback(() => {
     console.log("resetAndReload")
+    // Set the ref synchronously so the new socket's onopen closure always sees
+    // the reset signal, regardless of React's async state batching.
+    forceRequestRef.current = true;
     setForceRequest(true);
     initialRequestSent.current = false;
     initializeWebSocket();

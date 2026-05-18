@@ -15,6 +15,8 @@ def create_experiment(
     force_model_params: dict,
     results: dict,
     dataset_id: Optional[int] = None,
+    # Optional free-text description provided by the user at save time
+    description: Optional[str] = None,
 ):
     conn = get_conn()
 
@@ -23,6 +25,7 @@ def create_experiment(
         INSERT INTO experiments (
             user_id,
             name,
+            description,
             dataset_id,
             spring_constant,
             curve_id,
@@ -36,11 +39,12 @@ def create_experiment(
             youngs_modulus_mean,
             youngs_modulus_std
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
             name,
+            description,
             dataset_id,
             spring_constant,
             curve_id,
@@ -53,7 +57,6 @@ def create_experiment(
             next(iter(filters.get("e_models", {})), None),
             results.get("youngs_modulus_mean"),
             results.get("youngs_modulus_std"),
-            # json.dumps(results.get("elasticity_param")),
         ),
     )
 
@@ -66,6 +69,7 @@ def list_experiments(user_id: int) -> List[dict]:
         SELECT
             id,
             name,
+            description,
             curve_id,
             created_at,
             tip_geometry,
@@ -84,14 +88,16 @@ def list_experiments(user_id: int) -> List[dict]:
         {
             "id": r[0],
             "name": r[1],
-            "curve_id": r[2],
-            "created_at": r[3],
-            "tip_geometry": r[4],
-            "tip_radius": r[5],
-            "e_model": r[6],
-            "youngs_modulus_mean": r[7],
-            "youngs_modulus_std": r[8],
-            "status_code": "success" if (r[7] is not None or r[8] is not None) else "pending"
+            # Optional description provided at save time
+            "description": r[2],
+            "curve_id": r[3],
+            "created_at": r[4],
+            "tip_geometry": r[5],
+            "tip_radius": r[6],
+            "e_model": r[7],
+            "youngs_modulus_mean": r[8],
+            "youngs_modulus_std": r[9],
+            "status_code": "success" if (r[8] is not None or r[9] is not None) else "pending"
         }
         for r in rows
     ]
@@ -105,6 +111,7 @@ def get_experiment(exp_id: int, user_id: int) -> Optional[dict]:
         SELECT
             e.id,
             e.name,
+            e.description,
             e.dataset_id,
             e.curve_id,
             e.spring_constant,
@@ -129,19 +136,21 @@ def get_experiment(exp_id: int, user_id: int) -> Optional[dict]:
     return {
         "id": row[0],
         "name": row[1],
-        "dataset_id": row[2],
-        "curve_id": row[3],
+        # Optional description provided at save time
+        "description": row[2],
+        "dataset_id": row[3],
+        "curve_id": row[4],
         "metadata": {
-            "spring_constant": row[4],
-            "tip_radius": row[5],
-            "tip_geometry": row[6],
+            "spring_constant": row[5],
+            "tip_radius": row[6],
+            "tip_geometry": row[7],
         },
-        "filters": json.loads(row[7]),
-        "elasticity_params": json.loads(row[8]),
-        "force_model_params": json.loads(row[9]),
-        "youngs_modulus_mean": row[10],
-        "youngs_modulus_std": row[11],
-        "dataset_name": row[12]  # The name from the datasets table (saved from metadata file_id)
+        "filters": json.loads(row[8]),
+        "elasticity_params": json.loads(row[9]),
+        "force_model_params": json.loads(row[10]),
+        "youngs_modulus_mean": row[11],
+        "youngs_modulus_std": row[12],
+        "dataset_name": row[13]  # The name from the datasets table (saved from metadata file_id)
     }
 
 

@@ -1,3 +1,5 @@
+"""Provides HDF5 parsing utilities and legacy DuckDB-to-HDF5 export helpers."""
+
 import h5py
 import numpy as np
 from models.force_curve import ForceCurve, Segment
@@ -233,7 +235,7 @@ def export_from_duckdb_to_hdf5(
     db_path: str,
     output_path: str,
     curve_ids: Optional[List[int]] = None,
-    dataset_path: str = "dataset",
+    dataset_path: str = "curve0/segment0/Force",
     level_names: List[str] = ["curve0", "segment0"],
     metadata_path: str = "tip",
     metadata: Dict[str, Any] = {}
@@ -256,12 +258,33 @@ def export_from_duckdb_to_hdf5(
     try:
         # Connect to DuckDB
         with duckdb.connect(db_path) as conn:
+            # Captures available table columns so exports can run against reduced schemas.
+            schema_columns = {row[0] for row in conn.execute("DESCRIBE force_vs_z").fetchall()}
+            # Selects optional instrument column when available, otherwise uses a typed NULL placeholder.
+            instrument_projection = "instrument" if "instrument" in schema_columns else "CAST(NULL AS VARCHAR)"
+            # Selects optional sample column when available, otherwise uses a typed NULL placeholder.
+            sample_projection = "sample" if "sample" in schema_columns else "CAST(NULL AS VARCHAR)"
+            # Selects optional inv_ols column when available, otherwise uses a typed NULL placeholder.
+            inv_ols_projection = "inv_ols" if "inv_ols" in schema_columns else "CAST(NULL AS DOUBLE)"
+            # Selects optional sampling_rate column when available, otherwise uses a typed NULL placeholder.
+            sampling_rate_projection = "sampling_rate" if "sampling_rate" in schema_columns else "CAST(NULL AS DOUBLE)"
+            # Selects optional velocity column when available, otherwise uses a typed NULL placeholder.
+            velocity_projection = "velocity" if "velocity" in schema_columns else "CAST(NULL AS DOUBLE)"
+            # Selects optional no_points column when available, otherwise uses a typed NULL placeholder.
+            no_points_projection = "no_points" if "no_points" in schema_columns else "CAST(NULL AS BIGINT)"
             query = """
-                SELECT curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
+                SELECT curve_id, file_id, date, {instrument_projection} AS instrument, {sample_projection} AS sample, spring_constant, {inv_ols_projection} AS inv_ols,
                        tip_geometry, tip_radius, segment_type, force_values AS deflection,
-                       z_values AS z_sensor, sampling_rate, velocity, no_points
+                       z_values AS z_sensor, {sampling_rate_projection} AS sampling_rate, {velocity_projection} AS velocity, {no_points_projection} AS no_points
                 FROM force_vs_z
-            """
+            """.format(
+                instrument_projection=instrument_projection,
+                sample_projection=sample_projection,
+                inv_ols_projection=inv_ols_projection,
+                sampling_rate_projection=sampling_rate_projection,
+                velocity_projection=velocity_projection,
+                no_points_projection=no_points_projection,
+            )
             params = None
             if curve_ids:
                 query += " WHERE curve_id IN ({})".format(",".join("?" for _ in curve_ids))
@@ -286,52 +309,40 @@ def export_from_duckdb_to_hdf5(
                  tip_geometry, tip_radius, segment_type, deflection, z_sensor,
                  sampling_rate, velocity, no_points) = row
 
-                # Convert curve_id and segment_type to strings
-                curve_id_str = f"curve{curve_id}" if curve_id is not None else f"curve_{id(row)}"
-                segment_type = str(segment_type) if segment_type is not None else "unknown"
+                # Creates deterministic curve group names so each curve keeps its own branch.
+                curve_group_name = f"curve{curve_id}" if curve_id is not None else f"curve_{id(row)}"
+                # Keeps the canonical segment group expected by downstream readers.
+                segment_group_name = level_names[1] if len(level_names) > 1 and level_names[1] else "segment0"
+                # Creates/gets the per-curve group where all child objects are attached.
+                curve_group = f.require_group(curve_group_name)
+                # Creates/gets the per-segment group under the curve.
+                segment_group = curve_group.require_group(segment_group_name)
 
-                # Create group hierarchy based on level_names
-                group_path = f"{level_names[0]}/{level_names[1]}"  # e.g., curve0/segment0
-                group = f.require_group(group_path)
+                # Prevent crash if the same curve appears multiple times by replacing existing datasets.
+                if "Force" in segment_group:
+                    del segment_group["Force"]
+                # Stores only force values for this curve in the expected dataset name.
+                segment_group.create_dataset("Force", data=np.array(deflection or [], dtype=np.float64))
 
-                # Create datasets at dataset_path (e.g., curve0/segment0/dataset)
-                dataset_group_path = dataset_path  # Use full dataset_path as parent group
-                dataset_group = f.require_group(dataset_group_path)
-                
-                # Store deflection and z_sensor as separate datasets with unique names for each curve
-                dataset_group.create_dataset(
-                    f"deflection_{curve_id_str}",
-                    data=np.array(deflection or [], dtype=np.float64)
-                )
-                dataset_group.create_dataset(
-                    f"z_sensor_{curve_id_str}",
-                    data=np.array(z_sensor or [], dtype=np.float64)
-                )
+                # Prevent crash if the same curve appears multiple times by replacing existing datasets.
+                if "Z" in segment_group:
+                    del segment_group["Z"]
+                # Stores only Z values for this curve in the expected dataset name.
+                segment_group.create_dataset("Z", data=np.array(z_sensor or [], dtype=np.float64))
 
-                # Store metadata at metadata_path (e.g., curve0/segment0/tip)
-                if metadata_path:
-                    metadata_group_path = "/".join(metadata_path.split("/")[:-1])  # Extract parent group path
-                    metadata_name = metadata_path.split("/")[-1]  # Extract metadata group name
-                    if metadata_group_path:
-                        metadata_group = f.require_group(metadata_group_path)
-                    else:
-                        metadata_group = group
-                    metadata_subgroup = metadata_group.require_group(metadata_name)
-                    # Store provided metadata
-                    for key, value in metadata.items():
-                        metadata_subgroup.attrs[key] = value
-                    # Store additional row-specific metadata
-                    metadata_subgroup.attrs["file_id"] = file_id or ""
-                    metadata_subgroup.attrs["date"] = date or ""
-                    metadata_subgroup.attrs["instrument"] = instrument or ""
-                    metadata_subgroup.attrs["sample"] = sample or ""
-                    metadata_subgroup.attrs["spring_constant"] = float(spring_constant or 0.1)
-                    metadata_subgroup.attrs["inv_ols"] = float(inv_ols or 1.0)
-                    metadata_subgroup.attrs["tip_geometry"] = tip_geometry or "unknown"
-                    metadata_subgroup.attrs["tip_radius"] = float(tip_radius or 1e-5)
-                    metadata_subgroup.attrs["sampling_rate"] = float(sampling_rate or 1e5)
-                    metadata_subgroup.attrs["velocity"] = float(velocity or 1e-6)
-                    metadata_subgroup.attrs["no_points"] = int(no_points or 0)
+                # Creates/gets the tip group at curve level so it is sibling to segment0.
+                tip_group = curve_group.require_group("tip")
+                # Stores custom metadata fields directly inside tip as attributes.
+                for key, value in metadata.items():
+                    tip_group.attrs[key] = value
+                # Stores the tip geometry shape as a string attribute.
+                tip_group.attrs["geometry"] = str((metadata.get("tip_geometry") or tip_geometry or "sphere"))
+                # Stores the fixed parameter label expected by consumers.
+                tip_group.attrs["parameter"] = "Radius"
+                # Stores the fixed unit label expected by consumers.
+                tip_group.attrs["unit"] = "um"
+                # Stores the tip radius value used by consumers.
+                tip_group.attrs["value"] = float(metadata.get("tip_radius") or tip_radius or 1e-5)
 
                 num_exported += 1
 

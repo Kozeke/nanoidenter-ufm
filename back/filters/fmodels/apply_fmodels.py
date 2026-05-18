@@ -1,7 +1,7 @@
 from typing import Dict, List
 from .fmodel_registry import FMODEL_REGISTRY
 
-def apply_fmodels(query: str, fmodels: Dict, curve_ids: List[str], force_model_params: Dict = None) -> str:
+def apply_fmodels(query: str, fmodels: Dict, curve_ids: List[str], force_model_params: Dict = None, tip_angle_val: float = 0.0) -> str:
     """
     Build the SQL for force-model fitting. The active model is taken from `fmodels`,
     and its parameters (including poisson, minInd/maxInd in nm) are passed to the UDF.
@@ -16,6 +16,10 @@ def apply_fmodels(query: str, fmodels: Dict, curve_ids: List[str], force_model_p
     # Arrays from indentation computation (Zi, Fi)
     z_col = "indentation_result[1]"
     f_col = "indentation_result[2]"
+    # Reads per-curve tip radius from DB-backed indentation_data metadata.
+    tip_radius_col = "tip_radius"
+    # Reads per-curve tip geometry from DB-backed indentation_data metadata.
+    tip_geometry_col = "tip_geometry"
 
     # Choose the first registered fmodel found in incoming dict
     fmodel_sql = "NULL"
@@ -42,8 +46,8 @@ def apply_fmodels(query: str, fmodels: Dict, curve_ids: List[str], force_model_p
 
             param_array = f"[{', '.join(ordered)}]"
 
-            # Final SQL call; UDF will window by minInd/maxInd (nm→m) internally
-            fmodel_sql = f"{fn_name}({z_col}, {f_col}, {param_array})"
+            # Final SQL call; UDF windows by minInd/maxInd and receives tip metadata.
+            fmodel_sql = f"{fn_name}({z_col}, {f_col}, {param_array}, {tip_radius_col}, {tip_geometry_col}, {float(tip_angle_val)})"
             break
 
     # Prepare curve_id filter (accepts 'curve0' or raw ints)

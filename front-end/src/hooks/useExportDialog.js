@@ -52,6 +52,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
           spring_constant: String(experimentMetadata.spring_constant ?? ''),
           tip_geometry: String(experimentMetadata.tip_geometry ?? 'sphere'),
           tip_radius: String(experimentMetadata.tip_radius ?? ''),
+          velocity: String(experimentMetadata.velocity ?? ''),
         };
       }
       return {
@@ -60,6 +61,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         spring_constant: String(metadataObject.sample_row?.spring_constant ?? ''),
         tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
         tip_radius: String(metadataObject.sample_row?.tip_radius ?? ''),
+        velocity: String(metadataObject.sample_row?.velocity ?? ''),
       };
     },
     [metadataObject.sample_row, experimentMetadata]
@@ -77,9 +79,9 @@ export const useExportDialog = (experimentDataOrFn = null) => {
   // Stores the level names for HDF5 hierarchical structure.
   const [levelNames, setLevelNames] = useState(['curve0', 'segment0']);
   // Stores the metadata path location within HDF5 file.
-  const [metadataPath, setMetadataPath] = useState('curve0/segment0/tip');
+  const [metadataPath, setMetadataPath] = useState('curve0/tip');
   // Stores the dataset path location within HDF5 file.
-  const [datasetPath, setDatasetPath] = useState('curve0/segment0/dataset');
+  const [datasetPath, setDatasetPath] = useState('curve0/segment0/Force');
   // Stores the metadata fields for non-CSV exports.
   const [metadata, setMetadata] = useState(initialMetadata);
   // Tracks validation errors to display in the UI.
@@ -107,6 +109,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     spring_constant: parseFloat(metadataObject.sample_row?.spring_constant) || 0,
     tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
     tip_radius: parseFloat(metadataObject.sample_row?.tip_radius) || 0,
+    velocity: parseFloat(metadataObject.sample_row?.velocity) || 1e-6,
   });
 
   // Derived values
@@ -149,6 +152,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         spring_constant: parseFloat(metadataObject.sample_row?.spring_constant) || 0,
         tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
         tip_radius: parseFloat(metadataObject.sample_row?.tip_radius) || 0,
+        velocity: parseFloat(metadataObject.sample_row?.velocity) || 1e-6,
       });
     } else {
       setEditableSoftMechMetadata({
@@ -157,6 +161,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         spring_constant: parseFloat(initialMetadata.spring_constant) || 0,
         tip_geometry: String(initialMetadata.tip_geometry ?? 'sphere'),
         tip_radius: parseFloat(initialMetadata.tip_radius) || 0,
+        velocity: parseFloat(initialMetadata.velocity) || 1e-6,
       });
     }
   }, [metadataObject.sample_row, initialMetadata]);
@@ -204,6 +209,9 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     }
     if (Number.isFinite(+d.tip_radius) && +d.tip_radius >= 0) {
       clearErrorContains('tip radius');
+    }
+    if (Number.isFinite(+d.velocity) && +d.velocity > 0) {
+      clearErrorContains('velocity');
     }
   }, [
     open,
@@ -358,6 +366,11 @@ export const useExportDialog = (experimentDataOrFn = null) => {
       if (softmechData.tip_radius <= 0 || softmechData.tip_radius > 1e6) {
         newErrors.push('Tip radius must be greater than 0 and less than 1,000,000 nm');
       }
+
+      // Validate velocity
+      if (softmechData.velocity <= 0 || softmechData.velocity > 1e3) {
+        newErrors.push('Velocity must be greater than 0 and less than 1000 m/s');
+      }
     } else {
       // Original validation for other formats (HDF5, JSON, TXT, etc.)
       Object.entries(metadata).forEach(([key, value]) => {
@@ -439,7 +452,11 @@ export const useExportDialog = (experimentDataOrFn = null) => {
             date: metadata.date || '',
             spring_constant: parseFloat(metadata.elastic_constant_nm) || 0,
             tip_geometry: metadata.tip_shape || 'sphere',
-            tip_radius: parseFloat(metadata.tip_radius_nm) > 1e6 ? 10000 : parseFloat(metadata.tip_radius_nm) || 0
+            tip_radius: parseFloat(metadata.tip_radius_nm) > 1e6 ? 10000 : parseFloat(metadata.tip_radius_nm) || 0,
+            // Preserves loaded velocity when calculated metadata response has no velocity field.
+            velocity: Number.isFinite(+editableSoftMechMetadata.velocity) && +editableSoftMechMetadata.velocity > 0
+              ? +editableSoftMechMetadata.velocity
+              : 1e-6,
           };
           setEditableSoftMechMetadata(newEditableMetadata);
         }
@@ -449,7 +466,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     } finally {
       setLoadingMetadata(false);
     }
-  }, [selectedFormat, exportType, datasetType, direction, loose, curveIds, numCurves, regularFilters, cpFilters, forceModels, elasticityModels, forceModelParams]);
+  }, [selectedFormat, exportType, datasetType, direction, loose, curveIds, numCurves, regularFilters, cpFilters, forceModels, elasticityModels, forceModelParams, editableSoftMechMetadata.velocity]);
 
   // Handles navigation to the next step with validation.
   const handleNext = () => {
@@ -724,12 +741,12 @@ export const useExportDialog = (experimentDataOrFn = null) => {
 
   // Generates a simple textual preview of HDF5 structure.
   const generateHdf5Preview = () => {
-    const levels = levelNames.join(' / ');
     return `Root
-  - Group: ${levelNames[0]} (and similar for other curves)
-    ${levelNames.slice(1).map((name, index) => `    ${'  '.repeat(index + 1)}- Group: ${name}`).join('\n')}
-    ${'  '.repeat(levelNames.length)}- Dataset: ${datasetPath.split('/').pop()} (at ${datasetPath})
-    ${'  '.repeat(levelNames.length)}- Metadata at: ${metadataPath}`;
+  - Group: curve0 (and similar for other curves)
+    - Group: segment0
+      - Dataset: Force
+      - Dataset: Z
+    - Group: tip (attributes: geometry, parameter, unit, value, and metadata)`;
   };
 
   // Initializes the export dialog for a specific format.

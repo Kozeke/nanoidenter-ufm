@@ -267,6 +267,13 @@ const FiltersComponent = ({
   // Derives a flag indicating whether controls should be disabled.
   const isDisabled = !isSocketConnected;
 
+  // Opens the sidebar only when it is currently closed to avoid accidental close toggles.
+  const ensureSidebarOpen = useCallback(() => {
+    if (!open && typeof onToggle === "function") {
+      onToggle();
+    }
+  }, [open, onToggle]);
+
   // Remove local "isOpen" as the source of truth; rely on `open` from props
   // Toggle handler that calls parent's onToggle function
   const toggleFilters = () => {
@@ -286,6 +293,8 @@ const FiltersComponent = ({
   // Handle multi-select changes
   const handleRegularChange = (event) => {
     const value = event.target.value || [];
+    // Captures the previous selection count so we can detect newly added filters.
+    const previousCount = selectedRegularFilters.length;
   
     // add newly selected
     value
@@ -296,6 +305,11 @@ const FiltersComponent = ({
     selectedRegularFilters
       .filter((name) => !value.includes(name))
       .forEach((name) => handleRemoveFilter(name, "regular"));
+
+    // Opens the sidebar when a regular filter is newly selected.
+    if (value.length > previousCount) {
+      ensureSidebarOpen();
+    }
   };
   const handleCpChange = (event) => {
     const value = event.target.value || [];
@@ -308,6 +322,8 @@ const FiltersComponent = ({
   
     if (next) {
       handleAddFilter(next, "cp");
+      // Opens the sidebar when a contact-point filter is selected.
+      ensureSidebarOpen();
     }
   };
   const handleForceChange = (event) => {
@@ -321,6 +337,8 @@ const FiltersComponent = ({
     if (next) {
       handleAddFilter(next, "force");
       onForceModelChange?.(next);
+      // Opens the sidebar when a force model is selected.
+      ensureSidebarOpen();
     } else {
       onForceModelChange?.("");
     }
@@ -336,6 +354,8 @@ const FiltersComponent = ({
     if (next) {
       handleAddFilter(next, "elasticity");
       onElasticityModelChange?.(next);
+      // Opens the sidebar when an elasticity model is selected.
+      ensureSidebarOpen();
     } else {
       onElasticityModelChange?.("");
     }
@@ -484,6 +504,7 @@ const FiltersComponent = ({
           onToggle={onToggle}
           fparamsProgress={fparamsProgress}
           eparamsProgress={eparamsProgress}
+          onApplyChangesShortcut={handleUpdateCurves}
         />
       </Suspense>
     </Box>

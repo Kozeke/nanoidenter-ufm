@@ -15,6 +15,8 @@ router = APIRouter(prefix="/experiments", tags=["experiments"])
 
 class SaveExperimentRequest(BaseModel):
     name: str
+    # Optional free-text description entered by the user in the save modal
+    description: Optional[str] = None
     metadata: Dict
     filters: Dict
     elasticity_params: Dict
@@ -48,6 +50,7 @@ def save_experiment(
     create_experiment(
         user_id=user["id"],
         name=data.name,
+        description=data.description,
         spring_constant=curve_metadata["spring_constant"],
         curve_id=data.curve_id,
         tip_radius=curve_metadata["tip_radius"],

@@ -174,7 +174,7 @@ const ExportButton = ({
           },
         }}
       >
-        {/* <MenuItem
+        <MenuItem
           sx={{
             fontSize: 14,
             fontWeight: 600,
@@ -185,7 +185,7 @@ const ExportButton = ({
           onClick={() => handleExportStart('hdf5')}
         >
           HDF5
-        </MenuItem> */}
+        </MenuItem>
         <MenuItem
           sx={{
             fontSize: 14,
@@ -338,7 +338,7 @@ const ExportButton = ({
                     }}
                     fullWidth
                     margin="normal"
-                    helperText="Enter the dataset path (e.g., curve0/segment0/dataset)"
+                    helperText="Enter the dataset path (e.g., curve0/segment0/Force)"
                     error={errors.some((error) => error.includes('Dataset path'))}
                   />
                 </Box>
@@ -355,7 +355,7 @@ const ExportButton = ({
                   }}
                   fullWidth
                   margin="normal"
-                  helperText="Enter the group or dataset path for metadata (e.g., curve0/segment0)"
+                  helperText="Enter the group or dataset path for metadata (e.g., curve0/tip)"
                   error={errors.some((error) => error.includes('Metadata path'))}
                 />
               )}
@@ -727,6 +727,31 @@ const ExportButton = ({
                         helperText="Tip radius in nanometers"
                               disabled={loading}
                             />
+
+                      <TextField
+                        label="Velocity [m/s]"
+                        type="number"
+                        value={editableSoftMechMetadata.velocity ?? ''}
+                        onChange={(e) => {
+                          // Captures the velocity value so it can be sent in the CSV export payload.
+                          const parsed = parseFloat(e.target.value);
+                          // Normalizes invalid input to 0 so validation can surface a clear message.
+                          const normalized = Number.isFinite(parsed) ? parsed : 0;
+                          setEditableSoftMechMetadata((prev) => ({
+                            ...prev,
+                            velocity: normalized,
+                          }));
+                          if (normalized > 0) {
+                            clearErrorContains('velocity');
+                          }
+                        }}
+                        fullWidth
+                        margin="normal"
+                        required
+                        inputProps={{ min: 0, step: 0.000001 }}
+                        helperText="Approach/retract velocity in meters per second"
+                        disabled={loading}
+                      />
                     </>
                   )}
                 </Box>
@@ -853,6 +878,30 @@ const ExportButton = ({
                     inputProps={{ min: 0, step: 0.1 }}
                     helperText="Tip radius in nanometers"
                   />
+
+                  <TextField
+                    label="Velocity [m/s]"
+                    type="number"
+                    value={editableSoftMechMetadata.velocity ?? ''}
+                    onChange={(e) => {
+                      // Stores velocity edits so average/scatter exports can include this metadata field.
+                      const parsed = parseFloat(e.target.value);
+                      // Converts non-numeric input to 0, allowing validation to handle bad values.
+                      const normalized = Number.isFinite(parsed) ? parsed : 0;
+                      setEditableSoftMechMetadata((prev) => ({
+                        ...prev,
+                        velocity: normalized,
+                      }));
+                      if (normalized > 0) {
+                        clearErrorContains('velocity');
+                      }
+                    }}
+                    fullWidth
+                    margin="normal"
+                    required
+                    inputProps={{ min: 0, step: 0.000001 }}
+                    helperText="Approach/retract velocity in meters per second"
+                  />
                 </Box>
               )}
               {step === 3 && (
@@ -885,6 +934,7 @@ const ExportButton = ({
                           <strong>Spring Constant [N/m]:</strong> {editableSoftMechMetadata.spring_constant}<br/>
                           <strong>Tip Geometry:</strong> {editableSoftMechMetadata.tip_geometry}<br/>
                           <strong>Tip Radius [nm]:</strong> {editableSoftMechMetadata.tip_radius}<br/>
+                          <strong>Velocity [m/s]:</strong> {editableSoftMechMetadata.velocity}<br/>
                         </Typography>
                       </Box>
                     </>

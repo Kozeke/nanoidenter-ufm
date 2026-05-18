@@ -74,7 +74,16 @@ def create_contact_point_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
             # Calculate contact point with metadata
             # All contact point filters now accept metadata parameter
             # print(f"  🚀 Calling calculate() with metadata...")
+            # Tracks whether this invocation is for the autothresh filter for explicit terminal diagnostics.
+            is_autothresh_filter = filter_name.lower() == "autothresh"
+            if is_autothresh_filter:
+                print(
+                    "DEBUG autothresh calculate() call: "
+                    f"points={len(x_values)}, params={param_dict}, metadata={metadata}"
+                )
             result = filter_instance.calculate(x_values, y_values, metadata)
+            if is_autothresh_filter:
+                print(f"DEBUG autothresh calculate() result: {result}")
             # print(f"  📤 Calculate result: {result}")
             
             # Debug logs after CP calculation

@@ -69,23 +69,31 @@ def calc_elspectra(
         return None
 
     # --- Contact radius / geometry (same formulas as original) ---
+    # coeff is derived per-branch because the cone C=1 case sets it directly
+    # without going through an aradius intermediate.
     geom = tip_geometry
     if geom == "sphere":
         aradius = np.sqrt(xx * tip_radius)
+        coeff = 3.0 / (8.0 * aradius)
     elif geom == "cylinder":
         aradius = tip_radius
+        coeff = 3.0 / (8.0 * aradius)
     elif geom == "cone":
-        ang_rad = np.radians(tip_angle)
-        # 2 * xx / tan(angle) / pi
-        aradius = (2.0 * xx) / (np.tan(ang_rad) * np.pi)
+        if tip_angle == 0.0:
+            # Unknown geometry approximation: F = C·E·δ²  with C = 1
+            # (slide formula: F = 2E/π(1-ν²)·tan(θ)·δ², collapsed to F = E·δ² when C=1)
+            # dF/dδ = 2E·δ  →  E = dF/dδ / (2δ)  →  coeff = 1/(2δ)
+            coeff = 1.0 / (2.0 * xx)
+        else:
+            ang_rad = np.radians(tip_angle)
+            aradius = (2.0 * xx) / (np.tan(ang_rad) * np.pi)
+            coeff = 3.0 / (8.0 * aradius)
     elif geom == "pyramid":  # Bilodeau formula
         ang_rad = np.radians(tip_angle)
-        # 0.709 * xx * tan(angle)
         aradius = 0.709 * xx * np.tan(ang_rad)
+        coeff = 3.0 / (8.0 * aradius)
     else:
         return None  # invalid geometry – None is the correct DuckDB UDF sentinel
-
-    coeff = 3.0 / (8.0 * aradius)
 
     # Ensure window is odd (same behavior)
     if win % 2 == 0:

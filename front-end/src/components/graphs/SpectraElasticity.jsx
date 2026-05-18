@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import ReactECharts from "echarts-for-react";
 import echarts from "../../utils/echartsConfig";
+import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesContext";
 
 const ElasticitySpectra = ({
   forceData = [],
@@ -18,6 +19,16 @@ const ElasticitySpectra = ({
   const [hoveredCurveId, setHoveredCurveId] = useState(null);
   const lastNonEmptyDataRef = useRef([]);
 
+  // Unit prefix preferences shared across all graph panels via context
+  const { xUnitPrefix, setXUnitPrefix, yUnitPrefix, setYUnitPrefix } = useUnitPreferences();
+  // Controls visibility of the X axis unit dropdown (local UI state)
+  const [xDropdownOpen, setXDropdownOpen] = useState(false);
+  // Controls visibility of the Y axis unit dropdown (local UI state)
+  const [yDropdownOpen, setYDropdownOpen] = useState(false);
+  // Refs for click-outside detection on each dropdown wrapper
+  const xDropdownRef = useRef(null);
+  const yDropdownRef = useRef(null);
+
   useEffect(() => {
     const handleResize = () => setWindowHeight(window.innerHeight);
     window.addEventListener("resize", handleResize);
@@ -31,6 +42,20 @@ const ElasticitySpectra = ({
     }
   }, [forceData]);
 
+  // Close whichever unit dropdown is open when the user clicks outside its wrapper
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (xDropdownRef.current && !xDropdownRef.current.contains(e.target)) {
+        setXDropdownOpen(false);
+      }
+      if (yDropdownRef.current && !yDropdownRef.current.contains(e.target)) {
+        setYDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const isMobile = window.innerWidth < 768;
   const headerHeight = isMobile ? 100 : 120;
   const footerHeight = isMobile ? 50 : 0;
@@ -40,17 +65,17 @@ const ElasticitySpectra = ({
   );
 
   // ---------- Scale helpers ----------
-  function getScaleFactor(minValue, dataArray = []) {
-    if (!minValue && minValue !== 0) return 1;
-    if (minValue === 0 && dataArray.length > 0) {
-      const nonZeroValues = dataArray.filter((v) => v > 0);
-      if (nonZeroValues.length === 0) return 1;
-      minValue = Math.min(...nonZeroValues);
-    }
-    const absMin = Math.abs(minValue);
-    const magnitude = Math.floor(Math.log10(absMin));
-    return Math.pow(10, -magnitude);
+  // Returns floor of log10 of the max-abs value in chosen unit scale, used for power-of-10 tick alignment
+  function computeDisplayPower(maxAbsScaled) {
+    if (!isFinite(maxAbsScaled) || maxAbsScaled <= 0) return 0;
+    return Math.floor(Math.log10(maxAbsScaled));
   }
+
+  // Converts an integer exponent to its Unicode superscript representation
+  const toSuperscript = (num) => {
+    const superscriptMap = { '0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹','-':'⁻' };
+    return String(num).split('').map(c => superscriptMap[c] || c).join('');
+  };
 
   // Downsample data when there are many curves to improve rendering performance
   const MAX_POINTS_PER_CURVE = 700;
@@ -84,7 +109,7 @@ const ElasticitySpectra = ({
     return noSuffix.replace(/^curve/i, "");             // "curve0" -> "0"
   };
 
-  const isShownWithPartner = (id, selected) => {
+  const isShownWithPartner = useCallback((id, selected) => {
     if (!selected || selected.length === 0) return true;
     const base = baseToken(id);
     // compare by base to be suffix-agnostic AND type-agnostic
@@ -92,7 +117,7 @@ const ElasticitySpectra = ({
       selected.map((s) => baseToken(String(s)))
     );
     return selectedBases.has(base);
-  };
+  }, []);
 
   // Process and normalize force data - memoized to avoid recomputing on every render
   const processedCurves = useMemo(() => {
@@ -125,48 +150,62 @@ const ElasticitySpectra = ({
   // console.log("SpectraElasticity - forceData:", forceData);
   // console.log("SpectraElasticity - validForceData:", validForceData);
 
-  // Calculate scale factors - memoized based on domainRange and first curve's x data
-  const xData = useMemo(() => {
-    return validForceData.length > 0 && validForceData[0]?.x.length > 0
-      ? validForceData[0].x
-      : [];
-  }, [validForceData]);
-  
-  const xScaleFactor = useMemo(() => getScaleFactor(domainRange.xMin, xData), [domainRange.xMin, xData]);
-  const yScaleFactor = useMemo(() => getScaleFactor(domainRange.yMin), [domainRange.yMin]);
+  // Resolve active unit option objects from shared context selection
+  const xUnitOption = UNIT_OPTIONS.find((o) => o.value === xUnitPrefix);
+  const yUnitOption = UNIT_OPTIONS.find((o) => o.value === yUnitPrefix);
 
+  // SI conversion factors driven by the selected prefix (e.g. nano → 1e9, milli → 1e3)
+  const xSiFactor = xUnitOption.factor;
+  const ySiFactor = yUnitOption.factor;
+
+  // Determine display power-of-10 so ticks remain in a comfortable numeric range
+  const xDisplayPower = useMemo(() => {
+    const maxAbs = Math.max(Math.abs(domainRange.xMax ?? 0), Math.abs(domainRange.xMin ?? 0)) * xSiFactor;
+    return computeDisplayPower(maxAbs);
+  }, [domainRange.xMax, domainRange.xMin, xSiFactor]);
+
+  const yDisplayPower = useMemo(() => {
+    const maxAbs = Math.max(Math.abs(domainRange.yMax ?? 0), Math.abs(domainRange.yMin ?? 0)) * ySiFactor;
+    return computeDisplayPower(maxAbs);
+  }, [domainRange.yMax, domainRange.yMin, ySiFactor]);
+
+  // 10^power divisors to normalise tick values to human-readable numbers
+  const xDisplayDivisor = useMemo(() => Math.pow(10, xDisplayPower), [xDisplayPower]);
+  const yDisplayDivisor = useMemo(() => Math.pow(10, yDisplayPower), [yDisplayPower]);
+
+  // Final scale factors: raw SI value × scaleFactor = graph display value
+  const xScaleFactor = useMemo(() => xSiFactor / xDisplayDivisor, [xSiFactor, xDisplayDivisor]);
+  const yScaleFactor = useMemo(() => ySiFactor / yDisplayDivisor, [ySiFactor, yDisplayDivisor]);
+
+  // Scaled ranges used to compute required decimal places on tick labels
   const xScaledRange = useMemo(() => (domainRange.xMax - domainRange.xMin) * xScaleFactor, [domainRange.xMax, domainRange.xMin, xScaleFactor]);
   const yScaledRange = useMemo(() => (domainRange.yMax - domainRange.yMin) * yScaleFactor, [domainRange.yMax, domainRange.yMin, yScaleFactor]);
 
   const xDecimals = useMemo(() =>
-    xScaledRange > 0
-      ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10)))
-      : 0,
+    xScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10))) : 0,
     [xScaledRange]
   );
-  
   const yDecimals = useMemo(() =>
-    yScaledRange > 0
-      ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10)))
-      : 0,
+    yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0,
     [yScaledRange]
   );
+  // Keeps tooltip precision readable by forcing at least two decimal places.
+  const tooltipXDecimals = Math.max(2, xDecimals);
+  // Keeps tooltip precision readable by forcing at least two decimal places.
+  const tooltipYDecimals = Math.max(2, yDecimals);
 
-  // Helper function to convert number to superscript
-  const toSuperscript = (num) => {
-    const superscriptMap = {
-      '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
-      '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
-      '-': '⁻'
-    };
-    return String(num).split('').map(char => superscriptMap[char] || char).join('');
-  };
+  // Y axis base symbol for elastic modulus: prepend selected prefix to "Pa" (e.g. milli → "mPa")
+  const yBaseSymbol = yUnitOption.prefix ? `${yUnitOption.prefix}Pa` : "Pa";
 
-  const xExponent = useMemo(() => Math.round(Math.log10(xScaleFactor)), [xScaleFactor]);
-  const yExponent = useMemo(() => Math.round(Math.log10(yScaleFactor)), [yScaleFactor]);
-
-  const xUnit = useMemo(() => xExponent === 0 ? "m" : `10${toSuperscript(xExponent)} m`, [xExponent]);
-  const yUnit = useMemo(() => yExponent === 0 ? "Pa" : `10${toSuperscript(yExponent)} Pa`, [yExponent]);
+  // Axis unit labels; omit "10ⁿ" when exponent is 0
+  const xUnit = useMemo(
+    () => xDisplayPower === 0 ? xUnitOption.xSymbol : `10${toSuperscript(xDisplayPower)} ${xUnitOption.xSymbol}`,
+    [xDisplayPower, xUnitOption],
+  );
+  const yUnit = useMemo(
+    () => yDisplayPower === 0 ? yBaseSymbol : `10${toSuperscript(yDisplayPower)} ${yBaseSymbol}`,
+    [yDisplayPower, yBaseSymbol],
+  );
 
   // ---------- Toolbar styles ----------
   const toolbarCardStyle = {
@@ -197,15 +236,28 @@ const ElasticitySpectra = ({
     padding: "4px 8px",
     borderRadius: "999px",
   };
+  // Clickable unit chip — same visual as static chip but with pointer cursor
   const unitChipStyle = {
-    fontSize: 12,
-    fontWeight: 600,
-    color: "#4a4f6a",
-    background: "#f5f7ff",
-    border: "1px solid #e9ecf5",
-    padding: "3px 8px",
-    borderRadius: "999px",
+    fontSize: 12, fontWeight: 600, color: "#4a4f6a",
+    background: "#f5f7ff", border: "1px solid #e9ecf5", padding: "3px 8px", borderRadius: "999px",
+    cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px", userSelect: "none",
   };
+
+  // Floating dropdown panel positioned below the chip
+  const dropdownPanelStyle = {
+    position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 200,
+    background: "#fff", border: "1px solid #e9ecf5", borderRadius: "10px",
+    boxShadow: "0 8px 20px rgba(20,20,43,0.12)", minWidth: "120px", overflow: "hidden",
+  };
+
+  // Individual dropdown item; active option highlighted in green
+  const dropdownItemStyle = (active) => ({
+    display: "block", width: "100%", padding: "8px 14px",
+    fontSize: 12, fontWeight: active ? 700 : 500,
+    color: active ? "#3DA58A" : "#1d1e2c",
+    background: active ? "#ECFDF5" : "transparent",
+    border: "none", textAlign: "left", cursor: "pointer", transition: "background .1s",
+  });
   const segWrapStyle = {
     display: "flex",
     alignItems: "center",
@@ -284,18 +336,18 @@ const ElasticitySpectra = ({
       return {
         name: id,
         type: graphType,
-        smooth: graphType === "line" ? false : undefined,
-        showSymbol: !manySeries && graphType === "scatter",
-        symbolSize: !manySeries && graphType === "scatter" ? 4 : undefined,
-        large: true,
+        smooth: false,
+        showSymbol: true, // Keep symbol hit targets enabled so item tooltips work in line mode.
+        connectNulls: true,
+        large: false, // Keep hit detection enabled for reliable hover/click behavior.
         sampling: "lttb", // Extra safety for large data
         triggerEvent: true,
         // keep elastic on top
         z: elastic ? 3 : 2,
         // Only set color for elastic model overlays (yellow), let ECharts auto-assign colors for others
         itemStyle: elastic 
-          ? { color: 'yellow', opacity: isDimmed ? 0.25 : 1 }
-          : { opacity: isDimmed ? 0.25 : 1 },
+          ? { color: 'yellow', opacity: graphType === "line" ? 0 : (isDimmed ? 0.25 : 1) }
+          : { opacity: graphType === "line" ? 0 : (isDimmed ? 0.25 : 1) },
         lineStyle:
           graphType === "line"
             ? elastic 
@@ -307,7 +359,7 @@ const ElasticitySpectra = ({
           : [],
       };
     }).filter(Boolean); // Remove null entries
-  }, [processedCurves, graphType, selectedCurveIds, xScaleFactor, yScaleFactor, showElasticModelOverlay, hoveredCurveId]);
+  }, [processedCurves, graphType, selectedCurveIds, xScaleFactor, yScaleFactor, showElasticModelOverlay, hoveredCurveId, isShownWithPartner]);
   
   // Determine if there are too many series for tooltips (performance optimization)
   const tooManySeries = processedCurves.length > 40;
@@ -317,61 +369,17 @@ const ElasticitySpectra = ({
     tooltip: tooManySeries
       ? { show: false } // Disable tooltips when there are many curves to improve performance
       : {
-          trigger: "axis", // Keep axis trigger for reliability across all chart types
-          axisPointer: {
-            type: "cross",
-            axis: "x",
-            snap: true
-          },
-          // Tooltip is passive (read-only) - only displays hoveredCurveId, never sets it
+          trigger: "item",
           formatter: (params) => {
-            // If no curve is hovered, don't show tooltip
-            if (!hoveredCurveId) return '';
-            
-            const list = Array.isArray(params) ? params : [params];
-            
-            // Filter out invalid entries
-            const validEntries = list.filter(p => {
-              if (!p || p.value === null || p.value === undefined) return false;
-              const value = Array.isArray(p.value) ? p.value : [p.value];
-              const x = value[0];
-              const y = value[1];
-              if (x === null || x === undefined || y === null || y === undefined) return false;
-              if (isNaN(x) || isNaN(y)) return false;
-              return true;
-            });
-            
-            if (validEntries.length === 0) return '';
-            
-            // Find the entry that matches the hoveredCurveId
-            const hoveredEntry = validEntries.find(p => {
-              const curveId = p.seriesName || p.name;
-              return curveId === hoveredCurveId;
-            });
-            
-            // If we found the hovered curve, show its data
-            if (hoveredEntry) {
-              const value = Array.isArray(hoveredEntry.value) ? hoveredEntry.value : [hoveredEntry.value];
-              const x = value[0];
-              const y = value[1];
-              
-              return [
-                `<b>${hoveredCurveId}</b>`,
-                `x: ${x.toFixed(2)}`,
-                `y: ${y.toFixed(2)}`,
-              ].join('<br/>');
-            }
-            
-            // Fallback: show first valid entry if hovered curve not found
-            const firstEntry = validEntries[0];
-            const value = Array.isArray(firstEntry.value) ? firstEntry.value : [firstEntry.value];
+            const name = params.seriesName || params.name || '';
+            const value = Array.isArray(params.value) ? params.value : [params.value];
             const x = value[0];
             const y = value[1];
-            
+            if (x == null || y == null || isNaN(x) || isNaN(y)) return '';
             return [
-              `<b>${hoveredCurveId}</b>`,
-              `x: ${x.toFixed(2)}`,
-              `y: ${y.toFixed(2)}`,
+              `<b>${name}</b>`,
+              `Z (${xUnit}): ${x.toFixed(tooltipXDecimals)}`,
+              `E (${yUnit}): ${y.toFixed(tooltipYDecimals)}`,
             ].join('<br/>');
           },
         },
@@ -409,7 +417,7 @@ const ElasticitySpectra = ({
     ],
     animation: false,
     progressive: 5000,
-    }), [tooManySeries, series, xScaleFactor, yScaleFactor, xDecimals, yDecimals, xUnit, yUnit, domainRange, hoveredCurveId]);
+    }), [tooManySeries, series, xScaleFactor, yScaleFactor, xDecimals, yDecimals, tooltipXDecimals, tooltipYDecimals, xUnit, yUnit, domainRange]);
 
   const onChartEvents = {
     mouseover: (params) => {
@@ -446,8 +454,50 @@ const ElasticitySpectra = ({
         <div style={leftWrapStyle}>
           <div style={titleStyle}>Elasticity Spectra</div>
           <div style={chipStyle}>{uniqueCurveCount} series</div>
-          <div style={unitChipStyle}>X: {xUnit}</div>
-          <div style={unitChipStyle}>Y: {yUnit}</div>
+
+          {/* X axis unit selector */}
+          <div ref={xDropdownRef} style={{ position: "relative" }}>
+            <button
+              style={unitChipStyle}
+              onClick={() => { setXDropdownOpen((v) => !v); setYDropdownOpen(false); }}
+              title="Change X axis unit"
+            >
+              X: {xUnit} <span style={{ fontSize: 10, opacity: 0.6 }}>▾</span>
+            </button>
+            {xDropdownOpen && (
+              <div style={dropdownPanelStyle}>
+                {UNIT_OPTIONS.map((opt) => (
+                  <button key={opt.value} style={dropdownItemStyle(xUnitPrefix === opt.value)}
+                    onClick={() => { setXUnitPrefix(opt.value); setXDropdownOpen(false); }}>
+                    {opt.xSymbol}
+                    <span style={{ marginLeft: 6, opacity: 0.5, fontSize: 11 }}>({opt.value === "none" ? "SI" : opt.value})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Y axis unit selector — Y axis is elastic modulus (Pa) for this graph */}
+          <div ref={yDropdownRef} style={{ position: "relative" }}>
+            <button
+              style={unitChipStyle}
+              onClick={() => { setYDropdownOpen((v) => !v); setXDropdownOpen(false); }}
+              title="Change Y axis unit"
+            >
+              Y: {yUnit} <span style={{ fontSize: 10, opacity: 0.6 }}>▾</span>
+            </button>
+            {yDropdownOpen && (
+              <div style={dropdownPanelStyle}>
+                {UNIT_OPTIONS.map((opt) => (
+                  <button key={opt.value} style={dropdownItemStyle(yUnitPrefix === opt.value)}
+                    onClick={() => { setYUnitPrefix(opt.value); setYDropdownOpen(false); }}>
+                    {opt.prefix ? `${opt.prefix}Pa` : "Pa"}
+                    <span style={{ marginLeft: 6, opacity: 0.5, fontSize: 11 }}>({opt.value === "none" ? "SI" : opt.value})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>

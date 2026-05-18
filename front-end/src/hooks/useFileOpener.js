@@ -30,6 +30,13 @@ const metadataValidationRules = {
     type: 'number',
     min: 0,
   },
+  tip_angle: {
+    required: 'boolean',
+    label: 'Tip Angle (deg)',
+    type: 'number',
+    min: 0,
+    minInclusive: true,
+  },
 };
 
 // Active validation rules used during file processing workflow.
@@ -39,6 +46,7 @@ const activeValidationRules = {
   spring_constant: metadataValidationRules.spring_constant,
   tip_geometry: metadataValidationRules.tip_geometry,
   tip_radius: metadataValidationRules.tip_radius,
+  tip_angle: metadataValidationRules.tip_angle,
 };
 
 // --- helpers that don't depend on React state ---
@@ -154,8 +162,13 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
         const numValue = parseFloat(value);
         if (Number.isNaN(numValue)) {
           newErrors.push(`${rule.label} must be a valid number`);
-        } else if (rule.min !== undefined && numValue <= rule.min) {
-          newErrors.push(`${rule.label} must be greater than ${rule.min}`);
+        } else if (
+          rule.min !== undefined &&
+          (rule.minInclusive ? numValue < rule.min : numValue <= rule.min)
+        ) {
+          newErrors.push(
+            `${rule.label} must be ${rule.minInclusive ? 'greater than or equal to' : 'greater than'} ${rule.min}`
+          );
         }
       }
       if (rule.regex && value && !rule.regex.test(value)) {
@@ -516,18 +529,17 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
     [fileType, currentGroup, structure, filePath]
   );
 
-  // Handles changes to metadata input fields and clears related validation errors.
+  // Handles changes to metadata input fields and clears ALL current errors.
+  // Clearing all errors (not just field-specific ones) ensures that server-side
+  // submission errors (e.g. duplicate key, network failures) do not keep the
+  // Submit button permanently disabled after the user starts correcting the form.
+  // Fresh validation runs again when the user clicks Submit.
   const handleMetadataChange = useCallback(
     (e) => {
       const { name, value } = e.target;
       setMetadata((prev) => ({ ...prev, [name]: value }));
-      // Clears errors related to this field when user starts editing.
-      setErrors((prev) =>
-        prev.filter(
-          (error) =>
-            !error.includes(metadataValidationRules[name]?.label || name)
-        )
-      );
+      // Clear all errors so Submit re-enables once the user begins editing.
+      setErrors([]);
     },
     []
   );

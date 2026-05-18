@@ -1,4 +1,9 @@
-# FastAPI application exposing REST and WebSocket endpoints for curve analytics streaming.
+﻿# FastAPI application exposing REST and WebSocket endpoints for curve analytics streaming.
+
+# Load .env variables first so all subsequent imports (e.g. cache.py) see the correct values
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
@@ -17,7 +22,7 @@ from db.init_db import ensure_cache_tables
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any, Optional
 from utils.stats import format_stat, is_valid_param_vector
-from utils.cache import warmup_cp_cache, clear_cache
+from utils.cache import warmup_cp_cache, clear_cache, CACHE_ENABLED
 
 # Detect OS for parallel processing strategy
 IS_WINDOWS = platform.system() == 'Windows'
@@ -517,9 +522,13 @@ async def websocket_data_stream(websocket: WebSocket):
                     # Added before using cp_filters
                     cp_filters = filters.get("cp_filters", {})
                     # Optimization: Pre-warm CP cache for ALL curves before parallel processing
-                    if cp_filters:
+                    if cp_filters and CACHE_ENABLED:
                         print(f"ðŸ”¥ Pre-warming CP cache for {len(curve_ids)} curves before parallel processing...")
-                        metadata_global = get_metadata_for_curves(conn, curve_ids)
+                        # Pass dataset_id so the metadata query is scoped to the correct dataset.
+                        # Without it, get_metadata_for_curves picks up the first matching curve_id
+                        # from any dataset in force_vs_z, producing a wrong spring_constant / tip_radius
+                        # that generates a different cache hash and causes autothresh to run twice.
+                        metadata_global = get_metadata_for_curves(conn, curve_ids, dataset_id=dataset_id)
                         warmup_cp_cache(
                             conn, 
                             [int(cid) for cid in curve_ids], 
@@ -995,7 +1004,11 @@ async def process_and_stream_batch(
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             from pipeline import get_metadata_for_curves
             metadata = get_metadata_for_curves(conn, batch_ids, dataset_id=dataset_id)
-            # print(f"DEBUG: Retrieved metadata: {metadata}")
+            print(
+                "DEBUG fetch_curves_batch metadata "
+                f"(scope={compute_scope}, dataset_id={dataset_id}, batch_size={len(batch_ids)}): "
+                f"{metadata}"
+            )
 
             # ---- SINGLE-CURVE PATH (models / targeted updates) ----
             if is_single_batch and (curve_id or want_models or not scope_full):
@@ -1020,7 +1033,7 @@ async def process_and_stream_batch(
                 # print(f"Batch processing ({compute_scope}):", batch_ids)
                 
                 # Optimization: Warm up CP cache for model stats before parallel processing
-                if scope_model_stats and cp_filters:
+                if scope_model_stats and cp_filters and CACHE_ENABLED:
                     # print(f"ðŸ"¥ Pre-warming CP cache for {len(batch_ids)} curves...")
                     warmup_cp_cache(conn, [int(cid) for cid in batch_ids], cp_filters, metadata, batch_size=50)
                 
@@ -1209,6 +1222,14 @@ async def get_all_fparams_stream(data: Dict[str, Any]):
             # Extract parameters from request
             filters = data.get("filters", {})
             dataset_id = data.get("dataset_id")  # None → all datasets
+            # Receives force-model runtime parameters (maxInd/minInd/poisson) from frontend.
+            force_model_params = data.get("force_model_params", {
+                "maxInd": 800,
+                "minInd": 0,
+                "poisson": 0.5
+            })
+            # Receives zero-force toggle so indentation computation matches the UI setting.
+            set_zero_force = data.get("set_zero_force", True)
             
             # Ensure we have fmodels to calculate fparams
             if not filters.get("f_models"):
@@ -1259,9 +1280,14 @@ async def get_all_fparams_stream(data: Dict[str, Any]):
                 # to a single-threaded executor (only one batch runs at a time here).
                 _batch_conn = get_conn()
                 def _process_batch(_ids=batch_curve_ids, _filters=filters, _c=_batch_conn, _ds=dataset_id):
+                    # Retrieves per-request metadata so indentation uses the real spring constant/tip metadata.
+                    batch_metadata = get_metadata_for_curves(_c, _ids, dataset_id=_ds)
                     _fvz, g_fi, _el = fetch_curves_batch(
                         _c, _ids, _filters,
                         single=True, compute_elspectra=False,
+                        metadata=batch_metadata,
+                        force_model_params=force_model_params,
+                        set_zero_force=set_zero_force,
                         dataset_id=_ds,
                     )
                     return g_fi
@@ -1573,6 +1599,291 @@ async def get_all_elasticity_params(data: Dict[str, Any]):
             "status": "error",
             "message": f"Failed to fetch elasticity params: {str(e)}"
         })
+
+
+
+# Returns the one-time operation flags for a dataset so the frontend can
+# disable checkboxes that have already been applied irreversibly.
+@app.get("/dataset-trim-state/{dataset_id}")
+async def get_dataset_trim_state(dataset_id: int, user=Depends(get_current_user)):
+    """
+    Return the persistent trim-state flags for a dataset:
+      - force_absolute: True once |F| has been applied to all curves.
+      - retract_trimmed: True once the retract phase has been removed.
+      - z_normalized: True once z-normalization (z[i] -= z[0]) has been applied.
+    The frontend uses these to disable the corresponding checkboxes so the
+    operations are never accidentally repeated on already-transformed data.
+    """
+    try:
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT force_absolute, retract_trimmed, z_normalized FROM datasets WHERE id = ?",
+            [dataset_id],
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+        return {
+            "force_absolute": bool(row[0]) if row[0] is not None else False,
+            "retract_trimmed": bool(row[1]) if row[1] is not None else False,
+            # Whether z-normalization has already been applied to this dataset.
+            "z_normalized": bool(row[2]) if row[2] is not None else False,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching trim state: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch trim state: {str(e)}")
+
+
+# Trim data endpoint — removes data points outside the specified force range from all curves
+@app.post("/trim-data")
+async def trim_data_endpoint(request: Request, user=Depends(get_current_user)):
+    """
+    Remove rows from all curves in a dataset where force values fall outside
+    the provided [force_min, force_max] range. Both bounds are optional:
+    omitting force_min skips the lower-bound check; omitting force_max skips
+    the upper-bound check.
+    """
+    # Performs one full trim transaction attempt so the caller can retry on
+    # optimistic concurrency conflicts without duplicating the core logic.
+    def _run_trim_once(body: Dict[str, Any]) -> Dict[str, Any]:
+
+        # Required dataset identifier
+        dataset_id = body.get("dataset_id")
+        if dataset_id is None:
+            raise HTTPException(status_code=400, detail="dataset_id is required")
+
+        # Optional force bounds (None = no constraint on that side)
+        force_min = body.get("force_min")
+        force_max = body.get("force_max")
+        # When True, each curve is truncated at its peak-force index (argmin of
+        # force), discarding the retract phase that follows the deepest indent.
+        trim_retract = bool(body.get("trim_retract", False))
+        # When True, the absolute value is applied to every force sample before
+        # any range-based trimming so that |F| replaces F across all curves.
+        absolute_force = bool(body.get("absolute_force", False))
+        # When True, shift every curve's z values so the first z becomes 0:
+        # z[i] -= z[0]. Applied only when all curves have positive first and last z.
+        normalize_z = bool(body.get("normalize_z", False))
+
+        if force_min is None and force_max is None and not trim_retract and not absolute_force and not normalize_z:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one of force_min, force_max, trim_retract, absolute_force, or normalize_z must be provided"
+            )
+
+        conn = get_conn()
+
+        # Read whether forces were already made absolute in a previous call so
+        # that trim_retract uses the correct peak-detection direction even when
+        # absolute_force is not set in this request.
+        dataset_row = conn.execute(
+            "SELECT force_absolute FROM datasets WHERE id = ?",
+            [dataset_id],
+        ).fetchone()
+        # Default False if the column is missing on a very old DB row.
+        already_absolute = bool(dataset_row[0]) if dataset_row and dataset_row[0] is not None else False
+
+        # Forces are considered absolute for this operation if either they were
+        # already abs'd in a prior call or the caller requests it now.
+        forces_are_absolute = already_absolute or absolute_force
+
+        # Fetch all rows for this dataset so we can filter element-by-element
+        rows = conn.execute(
+            """
+            SELECT curve_id, segment_type, force_values, z_values
+            FROM force_vs_z
+            WHERE dataset_id = ?
+            """,
+            [dataset_id],
+        ).fetchall()
+
+        if not rows:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No curves found for dataset_id {dataset_id}"
+            )
+
+        # Pre-validate z-normalization: every curve must have positive first and
+        # last z values so that the shift z[i] -= z[0] is physically meaningful.
+        # If any curve fails the check, reject the whole operation rather than
+        # normalizing only a subset and leaving the dataset in a mixed state.
+        if normalize_z:
+            for curve_id, segment_type, force_values, z_values in rows:
+                if not z_values or len(z_values) < 2:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Curve {curve_id} ({segment_type}) has fewer than 2 z-values — "
+                            "cannot validate z-normalization."
+                        ),
+                    )
+                # First and last z must both be strictly positive.
+                z_first = z_values[0]
+                z_last = z_values[-1]
+                if z_first <= 0 or z_last <= 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Curve {curve_id} ({segment_type}) has non-positive z values "
+                            f"(first={z_first:.4g}, last={z_last:.4g}). "
+                            "All curves must have positive first and last z values for normalization."
+                        ),
+                    )
+
+        # Tracks how many data points were trimmed across all curves
+        total_trimmed = 0
+
+        for curve_id, segment_type, force_values, z_values in rows:
+            if not force_values:
+                continue
+
+            # Apply absolute value to all force samples first so that
+            # subsequent range trimming (and retract detection) operates on |F|.
+            if absolute_force:
+                force_values = [abs(f) for f in force_values]
+
+            # After abs(), all values are ≥ 0 so a negative lower bound is
+            # meaningless (it would let everything pass) and must be ignored to
+            # avoid silently discarding data when the caller passed the original
+            # signed force_min alongside absolute_force=True.
+            effective_force_min = force_min
+            if forces_are_absolute and force_min is not None and force_min < 0:
+                effective_force_min = None
+
+            # Build keep-mask: True for indices that satisfy both bounds
+            mask = []
+            for f in force_values:
+                keep = True
+                if effective_force_min is not None and f < effective_force_min:
+                    keep = False
+                if force_max is not None and f > force_max:
+                    keep = False
+                mask.append(keep)
+
+            # Apply mask to both arrays in lockstep to preserve pairing
+            new_force = [f for f, m in zip(force_values, mask) if m]
+            new_z = (
+                [z for z, m in zip(z_values, mask) if m]
+                if z_values is not None
+                else None
+            )
+
+            # Retract-phase trimming: keep only the approach portion of each
+            # curve — everything up to and including the peak-force sample.
+            # On signed data the deepest indentation point is the most-negative
+            # (minimum) force value. Once forces are absolute (either from this
+            # request or a prior one), all values are ≥ 0, so the deepest point
+            # becomes the maximum instead. Using min() on abs'd data would
+            # wrongly find the near-zero start of contact and discard almost
+            # the entire approach curve.
+            if trim_retract and new_force:
+                peak_idx = (
+                    new_force.index(max(new_force))
+                    if forces_are_absolute
+                    else new_force.index(min(new_force))
+                )
+                new_force = new_force[: peak_idx + 1]
+                if new_z is not None:
+                    new_z = new_z[: peak_idx + 1]
+
+            # Shift z so the first point sits at z=0: z[i] -= z[0].
+            # This collapses the absolute piezo offset and aligns all curves
+            # to a common origin without changing their relative spacing.
+            if normalize_z and new_z is not None and len(new_z) > 0:
+                z_origin = new_z[0]
+                new_z = [z - z_origin for z in new_z]
+
+            # Count how many points were removed for this curve/segment
+            total_trimmed += len(force_values) - len(new_force)
+
+            conn.execute(
+                """
+                UPDATE force_vs_z
+                SET force_values = ?, z_values = ?
+                WHERE dataset_id = ? AND curve_id = ? AND segment_type = ?
+                """,
+                [new_force, new_z, dataset_id, curve_id, segment_type],
+            )
+
+        # Persist flags so the frontend can disable already-applied operations
+        # and so future calls know the current data state without re-sending flags.
+        #   force_absolute  — set once |F| has been written into force_vs_z.
+        #   retract_trimmed — set once the retract phase has been discarded.
+        #   z_normalized    — set once z values have been shifted by z[0] per curve.
+        # All columns are updated in a single statement to stay consistent.
+        update_cols = []
+        if forces_are_absolute:
+            update_cols.append("force_absolute = TRUE")
+        if trim_retract:
+            update_cols.append("retract_trimmed = TRUE")
+        if normalize_z:
+            update_cols.append("z_normalized = TRUE")
+        if update_cols:
+            conn.execute(
+                f"UPDATE datasets SET {', '.join(update_cols)} WHERE id = ?",
+                [dataset_id],
+            )
+
+        # Invalidate caches so subsequent queries use the trimmed data
+        clear_cache(conn)
+
+        logger.info(
+            f"Trimmed {total_trimmed} data points from dataset {dataset_id} "
+            f"(force_min={force_min}, force_max={force_max})"
+        )
+
+        return {
+            "status": "success",
+            "message": (
+                f"Data trimmed successfully. "
+                f"Removed {total_trimmed} data points across {len(rows)} curve segments."
+            ),
+            "trimmed_points": total_trimmed,
+        }
+
+    try:
+        # Captures the client payload once so each retry uses identical inputs.
+        body = await request.json()
+        # Limits optimistic-concurrency retries to avoid infinite loops.
+        max_retries = 3
+        # Base delay (seconds) for exponential backoff between retry attempts.
+        retry_delay_seconds = 0.05
+        # Stores the last seen exception to preserve root-cause reporting.
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                return _run_trim_once(body)
+            except Exception as trim_error:
+                # Tracks the latest failure so we can re-raise after final attempt.
+                last_error = trim_error
+                # Normalizes DuckDB error text for robust conflict detection.
+                error_text = str(trim_error).lower()
+                # Prevent crash on transient concurrent updates to the same row.
+                is_write_conflict = "write-write conflict" in error_text
+                if not is_write_conflict or attempt == max_retries - 1:
+                    raise
+                # Calculates exponential backoff to reduce immediate contention.
+                backoff_seconds = retry_delay_seconds * (2 ** attempt)
+                logger.warning(
+                    "Write-write conflict while trimming dataset; retrying "
+                    f"(attempt {attempt + 1}/{max_retries}) after {backoff_seconds:.3f}s: {trim_error}"
+                )
+                await asyncio.sleep(backoff_seconds)
+
+        if last_error is not None:
+            raise last_error
+
+    except HTTPException:
+        # Re-raise explicit HTTP exceptions unchanged
+        raise
+    except Exception as e:
+        logger.error(f"Error trimming data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": f"Failed to trim data: {str(e)}"}
+        )
 
 
 # File-serving endpoint

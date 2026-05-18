@@ -24,7 +24,14 @@ def getJclose(x0, x):
     return int(np.argmin((x - x0) ** 2))
 
 def getEizi(xmin, xmax, zi, ei):
-    """Filter zi and ei arrays between xmin and xmax. Returns empty arrays if insufficient data."""
+    """
+    Return zi, ei where zi is within [xmin, xmax], using value-based masking.
+
+    The elasticity spectrum Ze (output of calc_elspectra) is computed on an
+    interpolated 1 nm grid, so it IS monotonic. However, using value masking
+    is still correct and consistent with getFizi, and guards against any
+    edge-case where the grid is non-monotonic near the boundaries.
+    """
     zi = np.asarray(zi, dtype=float)
     ei = np.asarray(ei, dtype=float)
     if zi.size == 0 or ei.size == 0 or zi.size != ei.size:
@@ -34,23 +41,12 @@ def getEizi(xmin, xmax, zi, ei):
     if xmax < xmin:
         xmin, xmax = xmax, xmin
 
-    # Clamp to data range
-    zmin, zmax = float(zi.min()), float(zi.max())
-    xmin = max(xmin, zmin)
-    xmax = min(xmax, zmax)
-
-    # Degenerate or empty window
-    if not np.isfinite(xmin) or not np.isfinite(xmax) or xmax <= xmin:
+    if not np.isfinite(xmin) or not np.isfinite(xmax):
         return np.array([]), np.array([])
 
-    jmin = getJclose(xmin, zi)
-    jmax = getJclose(xmax, zi)
-
-    # Ensure proper slicing (exclusive end); expand by 1 if identical index
-    if jmax <= jmin:
-        jmax = min(jmin + 1, zi.size)
-
-    return zi[jmin:jmax], ei[jmin:jmax]
+    # Value-based mask: select only points whose zi is inside [xmin, xmax]
+    mask = (zi >= xmin) & (zi <= xmax)
+    return zi[mask], ei[mask]
 
 
 def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):

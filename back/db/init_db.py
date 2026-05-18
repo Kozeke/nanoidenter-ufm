@@ -1,3 +1,4 @@
+"""Database schema initialization and backward-compatible migrations."""
 import duckdb
 
 def init_cache_tables(conn: duckdb.DuckDBPyConnection) -> None:
@@ -14,6 +15,7 @@ def init_cache_tables(conn: duckdb.DuckDBPyConnection) -> None:
             spring_constant DOUBLE,
             tip_radius DOUBLE,
             tip_geometry VARCHAR,
+            tip_angle DOUBLE,
             PRIMARY KEY (curve_id, method, params_hash)
         )
     """)
@@ -94,10 +96,43 @@ def init_datasets_table(conn: duckdb.DuckDBPyConnection) -> None:
             spring_constant DOUBLE,
             tip_radius DOUBLE,
             tip_geometry VARCHAR,
+
+            -- True once absolute_force has been applied so trim_retract can
+            -- detect peaks correctly (max |F| rather than min signed F).
+            force_absolute BOOLEAN DEFAULT FALSE,
+
+            -- True once the retract phase has been trimmed; prevents the
+            -- operation from being applied a second time on already-approach-only data.
+            retract_trimmed BOOLEAN DEFAULT FALSE,
+
+            -- True once z-normalization has been applied (z[i] -= z[0] per curve);
+            -- prevents accidental double-shift on already-normalized data.
+            z_normalized BOOLEAN DEFAULT FALSE,
             
             FOREIGN KEY (user_id) REFERENCES users(id)
         )
     """)
+
+    # Backward-compatible migrations: add columns if an older DB is opened.
+    # Prevent crash if the column already exists (DuckDB raises on duplicate ALTER).
+    try:
+        conn.execute("ALTER TABLE datasets ADD COLUMN force_absolute BOOLEAN DEFAULT FALSE")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE datasets ADD COLUMN retract_trimmed BOOLEAN DEFAULT FALSE")
+    except Exception:
+        pass
+    # Backward-compatible migration: add z_normalized for databases created before this column.
+    try:
+        conn.execute("ALTER TABLE datasets ADD COLUMN z_normalized BOOLEAN DEFAULT FALSE")
+    except Exception:
+        pass
+    # Backward-compatible migration: add tip_angle for databases created before this column.
+    try:
+        conn.execute("ALTER TABLE datasets ADD COLUMN tip_angle DOUBLE")
+    except Exception:
+        pass
 
 
 def init_experiment_tables(conn):
@@ -115,6 +150,7 @@ def init_experiment_tables(conn):
             
             user_id BIGINT NOT NULL,
             name VARCHAR,
+            description VARCHAR,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
             dataset_id INTEGER,
@@ -138,3 +174,9 @@ def init_experiment_tables(conn):
             FOREIGN KEY (dataset_id) REFERENCES datasets(id)
         )
     """)
+
+    # Backward-compatible migration: add description column to existing databases
+    try:
+        conn.execute("ALTER TABLE experiments ADD COLUMN description VARCHAR")
+    except Exception:
+        pass

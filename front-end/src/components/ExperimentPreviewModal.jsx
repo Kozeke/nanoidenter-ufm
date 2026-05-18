@@ -66,9 +66,14 @@ export default function ExperimentPreviewModal({ id, onClose, onOpen }) {
         {/* ───────────── Header ───────────── */}
         <div style={headerStyle}>
           <div>
+            {/* Experiment title */}
             <h2 style={modalTitleStyle}>
               {data?.name || `Experiment #${id}`}
             </h2>
+            {/* Optional description shown below the title */}
+            {data?.description && (
+              <p style={descriptionStyle}>{data.description}</p>
+            )}
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
               {data?.created_at && (
                 <span style={captionStyle}>{formatDate(data.created_at)}</span>
@@ -384,6 +389,14 @@ const modalStyle = {
 const headerStyle = {
   padding: 24,
   borderBottom: "1px solid #eef1ff",
+};
+
+// Description text shown below the experiment title in the header
+const descriptionStyle = {
+  margin: "6px 0 0",
+  fontSize: 14,
+  color: "#6b7280",
+  lineHeight: 1.5,
 };
 
 const modalTitleStyle = {
