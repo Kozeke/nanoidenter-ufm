@@ -1,6 +1,25 @@
 """Database schema initialization and backward-compatible migrations."""
 import duckdb
 
+
+def _run_migration(conn: duckdb.DuckDBPyConnection, sql: str) -> None:
+    """
+    Execute a single DDL migration statement and, if it fails (e.g. because
+    the column already exists), roll back the aborted transaction so the
+    connection stays usable for all subsequent statements.
+
+    Without the ROLLBACK, DuckDB leaves the connection in an aborted-transaction
+    state and every following conn.execute() raises:
+        TransactionContext Error: Current transaction is aborted (please ROLLBACK)
+    """
+    try:
+        conn.execute(sql)
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
+
 def init_cache_tables(conn: duckdb.DuckDBPyConnection) -> None:
     """
     Cache tables used by the analysis pipeline.
@@ -114,25 +133,12 @@ def init_datasets_table(conn: duckdb.DuckDBPyConnection) -> None:
     """)
 
     # Backward-compatible migrations: add columns if an older DB is opened.
-    # Prevent crash if the column already exists (DuckDB raises on duplicate ALTER).
-    try:
-        conn.execute("ALTER TABLE datasets ADD COLUMN force_absolute BOOLEAN DEFAULT FALSE")
-    except Exception:
-        pass
-    try:
-        conn.execute("ALTER TABLE datasets ADD COLUMN retract_trimmed BOOLEAN DEFAULT FALSE")
-    except Exception:
-        pass
-    # Backward-compatible migration: add z_normalized for databases created before this column.
-    try:
-        conn.execute("ALTER TABLE datasets ADD COLUMN z_normalized BOOLEAN DEFAULT FALSE")
-    except Exception:
-        pass
-    # Backward-compatible migration: add tip_angle for databases created before this column.
-    try:
-        conn.execute("ALTER TABLE datasets ADD COLUMN tip_angle DOUBLE")
-    except Exception:
-        pass
+    # After each failed ALTER TABLE, DuckDB marks the transaction as aborted —
+    # a ROLLBACK is required to clear that state before issuing further statements.
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN force_absolute BOOLEAN DEFAULT FALSE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN retract_trimmed BOOLEAN DEFAULT FALSE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN z_normalized BOOLEAN DEFAULT FALSE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN tip_angle DOUBLE")
 
 
 def init_experiment_tables(conn):
@@ -176,7 +182,4 @@ def init_experiment_tables(conn):
     """)
 
     # Backward-compatible migration: add description column to existing databases
-    try:
-        conn.execute("ALTER TABLE experiments ADD COLUMN description VARCHAR")
-    except Exception:
-        pass
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN description VARCHAR")
