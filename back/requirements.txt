@@ -13,3 +13,5 @@ pyjwt
 bcrypt
 psutil
 python-dotenv
+sqlalchemy[asyncio]
+aiosqlite
