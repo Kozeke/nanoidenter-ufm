@@ -1163,6 +1163,7 @@ from pathlib import Path
 from routers.opener import router as experiment_router
 from routers.exporter import router as exporter_router
 from routers.datasets import router as datasets_router
+from routers.hdf5_ingest import ingest_router, ApiKeyMiddleware
 from auth.router import router as auth_router
 from auth.dependencies import get_current_user
 from experiments.router import router as experiments_router
@@ -1177,11 +1178,15 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+# Protects all /hdf5/* endpoints with API-key authentication middleware.
+app.add_middleware(ApiKeyMiddleware)
 app.include_router(experiment_router)
 app.include_router(exporter_router)
 app.include_router(datasets_router)
 app.include_router(experiments_router)
 app.include_router(auth_router)
+# Exposes /hdf5/ingest and /hdf5/ping routes for remote file delivery.
+app.include_router(ingest_router)
 
 
 # Sanitize file system paths
