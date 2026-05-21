@@ -26,14 +26,12 @@ Environment variables
 
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from openers import get_opener
-from transform.transform import transform_data
-from storage.duckdb_storage import save_to_duckdb
-from db.datasets import create_dataset
+from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
 
@@ -42,24 +40,30 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 API_KEY        = os.getenv("DEVICE_B_API_KEY", "change-me")
-# Sets the default cloud-ingest storage path for received HDF5 files.
-UPLOAD_DIR     = Path(os.getenv("HDF5_UPLOAD_DIR", "/Users/kozykorpeshtolep/Desktop/projects/nanoidenter-ufm/back/data_from_cloud"))
+# Default to the OS temp dir so this works on every platform and every cloud
+# host (Render, Railway, Fly, etc.) without setting any env vars.
+# Override with HDF5_UPLOAD_DIR only when you want a persistent volume path.
+_default_upload_dir = Path(tempfile.gettempdir()) / "hdf5_uploads"
+UPLOAD_DIR     = Path(os.getenv("HDF5_UPLOAD_DIR", str(_default_upload_dir)))
 KEEP_UPLOADS   = os.getenv("HDF5_KEEP_UPLOADS", "0") == "1"
 MAX_UPLOAD_MB  = int(os.getenv("HDF5_MAX_UPLOAD_MB", "500"))
-# Sets the dataset path for force values in publisher-generated HDF5 files.
-PUBLISHER_FORCE_PATH = "curve0/segment0/Force"
-# Sets the dataset path for displacement values in publisher-generated HDF5 files.
-PUBLISHER_Z_PATH = "curve0/segment0/Z"
-# Sets the fallback dataset owner id for API-key based ingest requests.
-INGEST_USER_ID = int(os.getenv("HDF5_INGEST_USER_ID", "1"))
-# Sets the default spring constant used for automated ingest metadata.
-INGEST_SPRING_CONSTANT = float(os.getenv("HDF5_INGEST_SPRING_CONSTANT", "0.1"))
-# Sets the default tip geometry used for automated ingest metadata.
-INGEST_TIP_GEOMETRY = os.getenv("HDF5_INGEST_TIP_GEOMETRY", "sphere")
-# Sets the default tip radius used for automated ingest metadata.
-INGEST_TIP_RADIUS = float(os.getenv("HDF5_INGEST_TIP_RADIUS", "1e-6"))
 
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+def _ensure_upload_dir() -> Path:
+    """Create UPLOAD_DIR on first use instead of at import time.
+    This prevents crashes during uvicorn module loading when the configured
+    path doesn't exist yet (e.g. a Render deploy where the env var still
+    points to a developer's local machine path).
+    """
+    try:
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    except PermissionError as exc:
+        raise RuntimeError(
+            f"Cannot create HDF5_UPLOAD_DIR={UPLOAD_DIR}. "
+            "On cloud hosts set HDF5_UPLOAD_DIR to a writable path such as "
+            "/tmp/hdf5_uploads or a mounted persistent disk."
+        ) from exc
+    return UPLOAD_DIR
 
 ingest_router = APIRouter(prefix="/hdf5", tags=["HDF5 Ingest"])
 
@@ -114,7 +118,9 @@ async def ingest(request: Request):
         Content-Type: application/octet-stream
         <binary HDF5 bytes>
     """
-    # Captures the incoming filename from the client metadata header.
+    from hdf5_db import Hdf5Repository, _session_factory   # import here to avoid circular deps
+    from hdf5_watcher import _parse_hdf5
+
     filename = request.headers.get("X-Filename", "upload.h5")
     # Sanitise filename — no path traversal
     filename = Path(filename).name or "upload.h5"
@@ -122,7 +128,8 @@ async def ingest(request: Request):
         raise HTTPException(status_code=400, detail="Only .h5 / .hdf5 files accepted")
 
     # Stream body to a temp file (avoids loading the whole file into RAM)
-    tmp_path = UPLOAD_DIR / f"tmp_{os.getpid()}_{filename}"
+    upload_dir = _ensure_upload_dir()
+    tmp_path = upload_dir / f"tmp_{os.getpid()}_{filename}"
     bytes_written = 0
     max_bytes = MAX_UPLOAD_MB * 1024 * 1024
 
@@ -148,76 +155,54 @@ async def ingest(request: Request):
     log.info("Received  file=%s  size=%.1f KB", filename, bytes_written / 1024)
 
     # Move to a stable name now that we have the full file
-    final_path = UPLOAD_DIR / filename
+    final_path = upload_dir / filename
     # If a file with this name already exists, make it unique
     if final_path.exists():
         import time
         final_path = UPLOAD_DIR / f"{int(time.time())}_{filename}"
     tmp_path.rename(final_path)
 
-    # Keeps the absolute upload path for observability in API responses and logs.
-    resolved_upload_path = str(final_path.resolve())
-    # Defines metadata required by the HDF5 opener validation routine.
-    ingest_metadata = {
-        "file_id": Path(filename).stem,
-        # Uses the saved upload file timestamp for deterministic metadata date.
-        "date": str(int(final_path.stat().st_mtime)),
-        "spring_constant": INGEST_SPRING_CONSTANT,
-        "tip_geometry": INGEST_TIP_GEOMETRY,
-        "tip_radius": INGEST_TIP_RADIUS,
-    }
-
+    # Parse with h5py
     try:
-        # Selects the HDF5 opener implementation used in manual processing flow.
-        hdf5_opener = get_opener("hdf5")
-        # Validates metadata before attempting parse and transform.
-        if not hdf5_opener.validate_metadata(ingest_metadata):
-            raise ValueError(f"Invalid ingest metadata: {ingest_metadata}")
-        # Parses force-curve content from publisher-defined Force and Z dataset paths.
-        parsed_curves = hdf5_opener.process(
-            resolved_upload_path,
-            PUBLISHER_FORCE_PATH,
-            PUBLISHER_Z_PATH,
-            ingest_metadata,
-        )
-        # Creates a dataset record so parsed curves are linked in DuckDB.
-        dataset_id = create_dataset(
-            user_id=INGEST_USER_ID,
-            name=Path(filename).stem,
-            filename=resolved_upload_path,
-            num_curves=len(parsed_curves),
-            spring_constant=ingest_metadata["spring_constant"],
-            tip_radius=ingest_metadata["tip_radius"],
-            tip_geometry=ingest_metadata["tip_geometry"],
-        )
-        # Applies the standard transform step before saving into DuckDB.
-        transformed_curves = transform_data(parsed_curves)
-        # Persists transformed curve segments into the analytics DuckDB store.
-        save_to_duckdb(transformed_curves, dataset_id)
+        datasets = _parse_hdf5(final_path)
     except Exception as exc:
-        log.exception("Failed to parse and persist ingested file=%s", filename)
+        log.error("Failed to parse %s: %s", filename, exc)
         if not KEEP_UPLOADS:
             final_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail=f"Ingest parse/save error: {exc}")
+        raise HTTPException(status_code=422, detail=f"HDF5 parse error: {exc}")
 
-    # Captures curve count for API response after successful parse and persistence.
-    dataset_count = len(parsed_curves)
-    log.info(
-        "Ingest complete  file=%s  stored_path=%s  dataset_id=%s  curves=%s",
-        filename,
-        resolved_upload_path,
-        dataset_id,
-        dataset_count,
-    )
+    dataset_count = sum(1 for k in datasets if not k.endswith(".__attrs__"))
+
+    # Save to DB
+    try:
+        async with _session_factory() as session:
+            repo = Hdf5Repository(session)
+            if await repo.is_seen(str(final_path.resolve())):
+                log.info("Duplicate upload ignored  file=%s", filename)
+                if not KEEP_UPLOADS:
+                    final_path.unlink(missing_ok=True)
+                return JSONResponse({
+                    "status":    "duplicate",
+                    "filename":  filename,
+                    "detail":    "File already processed",
+                })
+            row = await repo.save_file_result(final_path, datasets)
+    except Exception as exc:
+        log.exception("DB write failed for %s", filename)
+        if not KEEP_UPLOADS:
+            final_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"DB error: {exc}")
+
+    if not KEEP_UPLOADS:
+        final_path.unlink(missing_ok=True)
+
+    log.info("Ingest complete  file=%s  datasets=%d  db_id=%d", filename, dataset_count, row.id)
     return JSONResponse({
         "status":        "ok",
         "filename":      filename,
-        "stored_path":   resolved_upload_path,
-        "dataset_id":    dataset_id,
+        "file_id":       row.id,
         "dataset_count": dataset_count,
         "size_bytes":    bytes_written,
-        "force_path":    PUBLISHER_FORCE_PATH,
-        "z_path":        PUBLISHER_Z_PATH,
     })
 
 
