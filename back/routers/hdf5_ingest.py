@@ -170,10 +170,6 @@ async def ingest(request: Request):
             spring_constant=ingest_metadata["spring_constant"],
             tip_radius=ingest_metadata["tip_radius"],
             tip_geometry=ingest_metadata["tip_geometry"],
-            # Recorded for reference only — the conversion itself already happened
-            # in process_hdf5 above, so z_values/force_values on disk are already SI.
-            z_scale_to_m=ingest_metadata["z_scale_to_m"],
-            force_scale_to_n=ingest_metadata["force_scale_to_n"],
         )
         transformed_curves = transform_data(parsed_curves)
         save_to_duckdb(transformed_curves, dataset_id)
