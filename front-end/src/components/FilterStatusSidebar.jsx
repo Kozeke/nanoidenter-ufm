@@ -128,8 +128,145 @@ const parameterTooltipByFilter = {
   },
 };
 
-const ComputedResults = ({ title, stats }) => {
-  if (!Array.isArray(stats) || stats.length === 0) return null;
+// Maps filter parameters to measurement units shown in the applied-filters sidebar.
+const parameterUnitByFilter = {
+  savgolsmooth: {
+    window_size: "nm",
+  },
+  fixedbaseline: {
+    baseline_start_nm: "nm",
+    baseline_dz_nm: "nm",
+  },
+  linearwindowfit: {
+    t1_nm: "nm",
+    t2_nm: "nm",
+  },
+  notch: {
+    period_nm: "nm",
+  },
+  lineardetrend: {
+    smoothing_window: "pts",
+    threshold: "N",
+  },
+  customfilter: {
+    smoothing_window: "pts",
+    threshold: "N",
+    threswindow: "N",
+  },
+  polytrend: {
+    percentile: "%",
+  },
+  prominence: {
+    band: "%",
+  },
+  median: {
+    window_size: "pts",
+  },
+  hertz: {
+    maxInd: "nm",
+    minInd: "nm",
+    tip_radius: "m",
+  },
+  hertzeffective: {
+    maxInd: "nm",
+    minInd: "nm",
+  },
+  driftedhertz: {
+    maxInd: "nm",
+    minInd: "nm",
+  },
+  hertzline: {
+    tip_radius: "m",
+  },
+  bilayer: {
+    maxInd: "nm",
+    minInd: "nm",
+    tip_radius: "m",
+  },
+  sigmoid: {
+    Smooth: "%",
+    Lower: "%",
+  },
+  sigmoid_new: {
+    maxInd: "nm",
+    minInd: "nm",
+  },
+  cmax: {
+    Smooth: "%",
+    Lower: "%",
+  },
+};
+
+// Resolves the measurement unit displayed beside an applied filter parameter.
+const getParameterUnit = (filterName, param) => {
+  const filterKey = filterName?.toLowerCase() ?? "";
+  const paramKey = param ?? "";
+  const filterUnits = parameterUnitByFilter[filterKey];
+
+  if (filterUnits) {
+    if (paramKey in filterUnits) return filterUnits[paramKey];
+    const matchedKey = Object.keys(filterUnits).find(
+      (key) => key.toLowerCase() === paramKey.toLowerCase()
+    );
+    if (matchedKey) return filterUnits[matchedKey];
+  }
+
+  const normalizedParam = paramKey.toLowerCase();
+  if (
+    normalizedParam.endsWith("_nm") ||
+    normalizedParam === "fitwindow" ||
+    normalizedParam === "zerorange" ||
+    normalizedParam === "windowrov" ||
+    normalizedParam === "windowr" ||
+    normalizedParam === "xrange" ||
+    normalizedParam === "x_range" ||
+    normalizedParam === "fit_window"
+  ) {
+    return "nm";
+  }
+  if (normalizedParam === "maxind" || normalizedParam === "minind") return "nm";
+  if (normalizedParam === "tip_radius") return "m";
+  if (
+    normalizedParam === "starting_threshold" ||
+    normalizedParam === "fthreshold" ||
+    normalizedParam === "force_threshold" ||
+    normalizedParam === "safe_threshold"
+  ) {
+    return "nN";
+  }
+  if (normalizedParam === "force_offset") return "pN";
+  if (
+    normalizedParam === "min_x" ||
+    normalizedParam === "max_x" ||
+    normalizedParam === "minx" ||
+    normalizedParam === "maxf" ||
+    normalizedParam === "percentile" ||
+    normalizedParam === "band" ||
+    normalizedParam === "smooth" ||
+    normalizedParam === "lower"
+  ) {
+    return "%";
+  }
+  if (normalizedParam === "smoothing_window") return "pts";
+  if (normalizedParam === "window_size" && filterKey === "median") return "pts";
+  if (normalizedParam === "window_size") return "nm";
+
+  return "";
+};
+
+// Appends a unit suffix to a parameter label when a unit is known.
+const formatParameterLabel = (label, unit) => (unit ? `${label} (${unit})` : label);
+
+const ComputedResults = ({ title, stats, emphasizeLabel = false }) => {
+  // Drops placeholder/empty entries so we never render a blank stat box.
+  const validStats = (Array.isArray(stats) ? stats : []).filter(
+    (item) => item?.value != null && item.value !== "" && item.value !== "—"
+  );
+
+  if (validStats.length === 0) return null;
+
+  // Use one column for a single stat (full width); two columns when there are two or more.
+  const columnCount = Math.min(validStats.length, 2);
 
   return (
     <Box sx={{ mt: 1 }}>
@@ -148,30 +285,51 @@ const ComputedResults = ({ title, stats }) => {
         {title}
       </Typography>
 
-      <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
-        {stats.map((item, idx) => (
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${columnCount}, 1fr)`,
+          gap: 1,
+        }}
+      >
+        {validStats.map((item, idx) => (
           <Box
             key={idx}
             sx={{
-              border: "1px dashed #dbe2ff",
+              border: emphasizeLabel ? "2px solid #3DA58A" : "1px dashed #dbe2ff",
               borderRadius: "8px",
-              px: 1,
-              py: 0.75,
-              backgroundColor: "#f9faff",
+              px: emphasizeLabel ? 1.25 : 1,
+              py: emphasizeLabel ? 1 : 0.75,
+              backgroundColor: emphasizeLabel ? "#ffffff" : "#f9faff",
+              boxShadow: emphasizeLabel ? "0 1px 4px rgba(0, 0, 0, 0.08)" : "none",
+              display: "flex",
+              alignItems: "baseline",
+              gap: 0.75,
+              flexWrap: "nowrap",
             }}
           >
-            <Typography variant="caption" sx={{ fontSize: 11, color: "#6b7280" }}>
+            <Typography
+              variant="body2"
+              sx={{
+                fontSize: emphasizeLabel ? 17 : 11,
+                fontWeight: emphasizeLabel ? 800 : 400,
+                color: emphasizeLabel ? "#111827" : "#6b7280",
+                flexShrink: 0,
+              }}
+            >
               {item.label}
             </Typography>
             <Typography
               variant="body2"
               sx={{
-                fontWeight: 700,
-                fontSize: 13,
+                fontWeight: emphasizeLabel ? 700 : 700,
+                fontSize: emphasizeLabel ? 16 : 13,
+                color: emphasizeLabel ? "#111827" : "inherit",
                 fontFamily: "monospace",
+                whiteSpace: "nowrap",
               }}
             >
-              {item.value ?? "—"}
+              {item.value}
             </Typography>
           </Box>
         ))}
@@ -691,10 +849,15 @@ const FilterCard = ({
             isThresholdRange
               ? parameterTooltipByFilter?.threshold?.min_x
               : parameterTooltipByFilter?.[filterName?.toLowerCase()]?.[param];
+          // Resolves the measurement unit for this parameter (nm, N, %, etc.).
+          const paramUnit = isThresholdRange
+            ? "%"
+            : getParameterUnit(filterName, param);
           // Stores the displayed parameter label, including combined range row labels.
-          const displayedParamLabel = isThresholdRange
+          const baseParamLabel = isThresholdRange
             ? "min_x / max_x"
-            : param.replace("_", " ");
+            : param.replace(/_/g, " ");
+          const displayedParamLabel = formatParameterLabel(baseParamLabel, paramUnit);
 
           if (isHiddenHertzTipRadius || isHiddenThresholdMaxX) {
             return null;
@@ -1332,6 +1495,28 @@ const FilterCard = ({
                     nm
                   </Typography>
                 </Box>
+              ) : paramUnit ? (
+                <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, mt: 0.5 }}>
+                  <TextField
+                    type="number"
+                    size="small"
+                    margin="dense"
+                    value={filterData[param] ?? ""}
+                    onChange={(e) =>
+                      handleFilterChange(
+                        filterName,
+                        param,
+                        parseFloat(e.target.value),
+                        type
+                      )
+                    }
+                    inputProps={{ step: "any" }}
+                    sx={{ ...inputCompactSx, flex: 1 }}
+                  />
+                  <Typography variant="body2" sx={{ whiteSpace: "nowrap", color: "text.secondary" }}>
+                    {paramUnit}
+                  </Typography>
+                </Box>
               ) : (
                 <TextField
                   type="number"
@@ -1860,6 +2045,15 @@ const FilterStatusSidebar = ({
         )}
         
         <Stack direction="column" spacing={1}>
+          {/* Stiffness (K) Results — pinned to the top; only shown when LinearWindowFit is an active Regular filter */}
+          {Object.prototype.hasOwnProperty.call(regularFilters || {}, "linearwindowfit") && (
+            <ComputedResults
+              title="Stiffness Results"
+              stats={modelStats.stiffness}
+              emphasizeLabel
+            />
+          )}
+
           {/* View Force Parameters - Only show on forceIndentation tab AND in single-curve mode */}
           {activeTab === "forceIndentation" && canUseModels && selectedForceModel && (
             <Card sx={cardSx}>

@@ -2,27 +2,13 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import ReactECharts from "echarts-for-react";
 import echarts from "../../utils/echartsConfig";
 import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesContext";
-
-// Converts an integer exponent to its Unicode superscript representation (e.g. 2 → "²", -1 → "⁻¹")
-function toSuperscript(exp) {
-  const supMap = {
-    "-": "⁻",
-    0: "⁰",
-    1: "¹",
-    2: "²",
-    3: "³",
-    4: "⁴",
-    5: "⁵",
-    6: "⁶",
-    7: "⁷",
-    8: "⁸",
-    9: "⁹",
-  };
-  return String(exp)
-    .split("")
-    .map((c) => supMap[c] ?? c)
-    .join("");
-}
+import { useDashboardStore } from "../../state/useDashboardStore";
+import {
+  CHART_AXIS_NAME_TEXT_STYLE,
+  buildValueAxisTickLabel,
+  formatAxisQuantityLabel,
+  formatScaledUnit,
+} from "../../utils/chartAxisStyles";
 
 // Given the maximum absolute value in the chosen unit scale, returns the floor power of 10 for tick scaling
 function computeDisplayPower(maxAbsScaled) {
@@ -48,6 +34,14 @@ const ForceDisplacementDataSet = ({
 
   // Unit prefix preferences are shared across all graph panels via context
   const { xUnitPrefix, setXUnitPrefix, yUnitPrefix, setYUnitPrefix } = useUnitPreferences();
+
+  // Reads the active FixedBaseline / LinearWindowFit configs directly from the
+  // store (rather than threading new props through Dashboard.jsx /
+  // ForceDisplacementPanel.jsx) so the chart can shade each fit's window and
+  // mark its edges — matching the reference script's axvspan/axvline on the
+  // baseline-window and K-window diagnostic plots.
+  const baselineCfg = useDashboardStore((s) => s.filters?.regular?.fixedbaseline);
+  const linfitCfg = useDashboardStore((s) => s.filters?.regular?.linearwindowfit);
   // Controls visibility of the X axis unit dropdown (local UI state only)
   const [xDropdownOpen, setXDropdownOpen] = useState(false);
   // Controls visibility of the Y axis unit dropdown (local UI state only)
@@ -263,20 +257,14 @@ const ForceDisplacementDataSet = ({
   // Y axis base symbol for force: prepend the selected metric prefix to "N" (e.g. milli → "mN")
   const yBaseSymbol = yUnitOption.prefix ? `${yUnitOption.prefix}N` : "N";
 
-  // Axis unit labels: omit "10ⁿ" prefix when exponent is 0 (10⁰ = 1, no scaling needed)
+  // Axis unit labels: omit "×10^n" prefix when exponent is 0 (10^0 = 1, no scaling needed)
   const xUnit = useMemo(
-    () =>
-      xDisplayPower === 0
-        ? xUnitOption.xSymbol
-        : `10${toSuperscript(xDisplayPower)} ${xUnitOption.xSymbol}`,
+    () => formatScaledUnit(xDisplayPower, xUnitOption.xSymbol),
     [xDisplayPower, xUnitOption],
   );
   // Y unit label uses the selected force symbol (e.g. mN, µN, nN, N)
   const yUnit = useMemo(
-    () =>
-      yDisplayPower === 0
-        ? yBaseSymbol
-        : `10${toSuperscript(yDisplayPower)} ${yBaseSymbol}`,
+    () => formatScaledUnit(yDisplayPower, yBaseSymbol),
     [yDisplayPower, yBaseSymbol],
   );
 
@@ -355,9 +343,22 @@ const ForceDisplacementDataSet = ({
         [x, y] = downsampleXY(x, y);
       }
 
+      // Overlay curves get a fixed, distinct color/weight regardless of the
+      // underlying curve's own color, so they read clearly as fit diagnostics
+      // rather than as another data curve — same idea as the "_hertz" overlay
+      // treatment on the Force–Indentation chart.
+      const isBaselineOverlay = curve.curve_id.includes("_baseline");
+      const isLinfitOverlay = curve.curve_id.includes("_linfit") && curve.curve_id !== "avg_linfit";
+      const isAvgLinfit = curve.curve_id === "avg_linfit";
+      const isOverlay = isBaselineOverlay || isLinfitOverlay || isAvgLinfit;
+
+      // Overlay/annotation curve IDs (e.g. "5_linfit", "avg_linfit") never
+      // match a real curve_id in selectedCurveIds ("curve5"), so without this
+      // they'd disappear the instant any curve was selected. Always show them.
       const isShown =
         (selectedCurveIds.length === 0 ||
-          selectedCurveIds.includes(curve.curve_id)) &&
+          selectedCurveIds.includes(curve.curve_id) ||
+          isOverlay) &&
         Array.isArray(x) &&
         Array.isArray(y) &&
         x.length === y.length;
@@ -370,7 +371,28 @@ const ForceDisplacementDataSet = ({
         // opacity:0 hides them visually; ECharts canvas still detects hover on them.
         showSymbol: true,
         symbolSize: graphType === "scatter" ? 4 : 10,
-        itemStyle: { opacity: graphType === "scatter" ? 1 : 0 },
+        itemStyle: {
+          opacity: graphType === "scatter" ? 1 : 0,
+          color: isBaselineOverlay
+            ? "#4c78a8"
+            : isAvgLinfit
+              ? "#f6b26b"
+              : isLinfitOverlay
+                ? "#e0399c"
+                : undefined,
+        },
+        lineStyle: isOverlay
+          ? {
+              width: isAvgLinfit ? 3 : 2.5,
+              color: isBaselineOverlay ? "#4c78a8" : isAvgLinfit ? "#f6b26b" : "#e0399c",
+              // Approximates the reference script's white-halo path effect
+              // (pe.Stroke(white) + pe.Normal()) — ECharts has no native
+              // stroke-outline option, so the "shadow" below fakes the halo.
+              shadowColor: "#ffffff",
+              shadowBlur: isAvgLinfit ? 6 : 0,
+            }
+          : undefined,
+        z: isAvgLinfit ? 11 : isOverlay ? 10 : 1,
         connectNulls: true,
         large: false,
         sampling: "lttb",
@@ -387,6 +409,73 @@ const ForceDisplacementDataSet = ({
     xScaleFactor,
     yScaleFactor,
   ]);
+
+  // Baseline-window and K-window shaded regions + dashed edge lines, matching
+  // the reference script's plt.axvspan/plt.axvline. Rendered as two invisible
+  // ("silent", no line/points of their own) marker series carrying markArea +
+  // markLine, since ECharts attaches these to a series rather than the chart
+  // as a whole. Only included when the corresponding filter is actually active.
+  const windowMarkerSeries = useMemo(() => {
+    const markers = [];
+
+    if (baselineCfg) {
+      const startNm = Number(baselineCfg.baseline_start_nm ?? 0);
+      const dzNm = Number(baselineCfg.baseline_dz_nm ?? 0);
+      if (Number.isFinite(startNm) && Number.isFinite(dzNm) && dzNm > 0) {
+        const startScaled = startNm * 1e-9 * xScaleFactor;
+        const endScaled = (startNm + dzNm) * 1e-9 * xScaleFactor;
+        markers.push({
+          name: "_baseline_window_marker",
+          type: "line",
+          data: [],
+          silent: true,
+          showSymbol: false,
+          tooltip: { show: false },
+          markArea: {
+            itemStyle: { color: "rgba(76,120,168,0.12)" },
+            data: [[{ xAxis: startScaled }, { xAxis: endScaled }]],
+          },
+          markLine: {
+            silent: true,
+            symbol: "none",
+            lineStyle: { color: "#4c78a8", type: "dashed", width: 0.9 },
+            label: { show: false },
+            data: [{ xAxis: startScaled }, { xAxis: endScaled }],
+          },
+        });
+      }
+    }
+
+    if (linfitCfg) {
+      const t1Nm = Number(linfitCfg.t1_nm ?? NaN);
+      const t2Nm = Number(linfitCfg.t2_nm ?? NaN);
+      if (Number.isFinite(t1Nm) && Number.isFinite(t2Nm)) {
+        const lowScaled = Math.min(t1Nm, t2Nm) * 1e-9 * xScaleFactor;
+        const highScaled = Math.max(t1Nm, t2Nm) * 1e-9 * xScaleFactor;
+        markers.push({
+          name: "_k_window_marker",
+          type: "line",
+          data: [],
+          silent: true,
+          showSymbol: false,
+          tooltip: { show: false },
+          markArea: {
+            itemStyle: { color: "rgba(224,57,156,0.10)" },
+            data: [[{ xAxis: lowScaled }, { xAxis: highScaled }]],
+          },
+          markLine: {
+            silent: true,
+            symbol: "none",
+            lineStyle: { color: "#e0399c", type: "dashed", width: 0.9 },
+            label: { show: false },
+            data: [{ xAxis: lowScaled }, { xAxis: highScaled }],
+          },
+        });
+      }
+    }
+
+    return markers;
+  }, [baselineCfg, linfitCfg, xScaleFactor]);
 
   const onChartEvents = {
     // Track zoom state so it survives re-renders (e.g. unit prefix change)
@@ -464,32 +553,26 @@ const ForceDisplacementDataSet = ({
           },
       xAxis: {
         type: "value",
-        name: `Z (${xUnit})`,
+        name: formatAxisQuantityLabel("Z", xDisplayPower, xUnitOption.xSymbol),
         nameLocation: "middle",
-        nameGap: 25,
+        nameGap: 34,
+        nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
         min: domainRange.xMin ? domainRange.xMin * xScaleFactor : undefined,
         max: domainRange.xMax ? domainRange.xMax * xScaleFactor : undefined,
-        axisLabel: {
-          formatter: function (value) {
-            return value.toFixed(xDecimals);
-          },
-        },
+        axisLabel: buildValueAxisTickLabel((value) => value.toFixed(xDecimals)),
       },
       yAxis: {
         type: "value",
-        name: `Force (${yUnit})`,
+        name: formatAxisQuantityLabel("Force", yDisplayPower, yBaseSymbol),
         nameLocation: "middle",
-        nameGap: 40,
+        nameGap: 50,
+        nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
         scale: true,
         min: domainRange.yMin * yScaleFactor,
         max: domainRange.yMax * yScaleFactor,
-        axisLabel: {
-          formatter: function (value) {
-            return value.toFixed(yDecimals);
-          },
-        },
+        axisLabel: buildValueAxisTickLabel((value) => value.toFixed(yDecimals)),
       },
-      series,
+      series: [...series, ...windowMarkerSeries],
       legend: {
         show: false,
       },
@@ -535,6 +618,7 @@ const ForceDisplacementDataSet = ({
     [
       tooManySeries,
       series,
+      windowMarkerSeries,
       xDecimals,
       yDecimals,
       tooltipXDecimals,

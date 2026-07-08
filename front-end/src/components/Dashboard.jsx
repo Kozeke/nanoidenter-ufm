@@ -450,11 +450,15 @@ const Dashboard = () => {
     const hasForceModels = Object.keys(forceModels || {}).length > 0;
     // Detects whether elasticity stats should be refreshed alongside curves.
     const hasElasticModels = Object.keys(elasticityModels || {}).length > 0;
-    // Sends model stats only when at least one model family is currently selected.
-    if ((hasForceModels || hasElasticModels) && sendModelStatsRequest) {
+    // Stiffness (K) comes from the LinearWindowFit regular filter, not an f/e model,
+    // so its stats must also trigger a model_stats refresh. Same detection the
+    // sidebar uses to render the "Stiffness Results" card.
+    const hasStiffnessFilter = Object.prototype.hasOwnProperty.call(regularFilters || {}, "linearwindowfit");
+    // Sends model stats when a model family OR the stiffness filter is currently selected.
+    if ((hasForceModels || hasElasticModels || hasStiffnessFilter) && sendModelStatsRequest) {
       sendModelStatsRequest();
     }
-  }, [sendCurveRequest, sendModelStatsRequest, forceModels, elasticityModels]);
+  }, [sendCurveRequest, sendModelStatsRequest, forceModels, elasticityModels, regularFilters]);
 
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);

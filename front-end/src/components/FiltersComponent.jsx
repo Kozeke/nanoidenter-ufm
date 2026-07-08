@@ -369,11 +369,15 @@ const FiltersComponent = ({
     // Check if any models are selected and send model stats request if needed
     const hasForceModels = forceModels && Object.keys(forceModels).length > 0;
     const hasElasticModels = elasticityModels && Object.keys(elasticityModels).length > 0;
-    
-    if ((hasForceModels || hasElasticModels) && sendModelStatsRequest) {
+    // Stiffness (K) comes from the LinearWindowFit regular filter, not an f/e model,
+    // so its stats must also trigger a model_stats refresh. Same detection the
+    // sidebar uses to render the "Stiffness Results" card.
+    const hasStiffnessFilter = Object.prototype.hasOwnProperty.call(regularFilters || {}, "linearwindowfit");
+
+    if ((hasForceModels || hasElasticModels || hasStiffnessFilter) && sendModelStatsRequest) {
       sendModelStatsRequest();
     }
-  }, [sendCurveRequest, sendModelStatsRequest, forceModels, elasticityModels]);
+  }, [sendCurveRequest, sendModelStatsRequest, forceModels, elasticityModels, regularFilters]);
         
 
   // Theme and media query to determine if content should shift on desktop

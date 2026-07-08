@@ -162,7 +162,8 @@ export const useDashboardStore = create(
       // Stores population model statistics (e.g. Young's modulus)
       modelStats: {
         force: [],
-        elasticity: []
+        elasticity: [],
+        stiffness: []
       },
       
       setModelStats: (type, statsArray) =>
@@ -215,7 +216,8 @@ export const useDashboardStore = create(
           lastSocketError: null,
           modelStats: {
             force: [],
-            elasticity: []
+            elasticity: [],
+            stiffness: []
           },
           selectedCurveId: null,
           computeScope: "full",

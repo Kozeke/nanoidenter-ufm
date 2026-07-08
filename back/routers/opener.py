@@ -98,6 +98,21 @@ async def process_file_endpoint(data: Dict[str, Any], user=Depends(get_current_u
             processed_metadata["tip_angle"] = tip_angle_input
             logger.info(f"tip_angle received: {tip_angle_input:.2f} deg (used as-is)")
 
+        # z_scale_to_m / force_scale_to_n are unit-calibration factors applied
+        # inside process_hdf5 (hdf5.py) directly to the raw Z/Force arrays at
+        # ingestion. Both default to 1.0 (no-op) via validate_and_fill_metadata
+        # if omitted, so this block only needs to coerce them when the user
+        # actually supplies a non-default value (e.g. 1e-6 for an instrument
+        # that exports Z in micrometers).
+        if "z_scale_to_m" in processed_metadata and processed_metadata["z_scale_to_m"] not in (None, ""):
+            z_scale_input = float(processed_metadata["z_scale_to_m"])
+            processed_metadata["z_scale_to_m"] = z_scale_input
+            logger.info(f"z_scale_to_m received: {z_scale_input:.6e} (Z will be multiplied by this to get meters)")
+        if "force_scale_to_n" in processed_metadata and processed_metadata["force_scale_to_n"] not in (None, ""):
+            force_scale_input = float(processed_metadata["force_scale_to_n"])
+            processed_metadata["force_scale_to_n"] = force_scale_input
+            logger.info(f"force_scale_to_n received: {force_scale_input:.6e} (Force will be multiplied by this to get Newtons)")
+
         if not opener.validate_metadata(processed_metadata):
             errors.append("Invalid or incomplete metadata")
             logger.error(f"Metadata validation failed: {processed_metadata}")

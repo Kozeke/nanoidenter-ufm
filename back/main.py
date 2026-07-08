@@ -1,4 +1,4 @@
-﻿# FastAPI application exposing REST and WebSocket endpoints for curve analytics streaming.
+﻿ # FastAPI application exposing REST and WebSocket endpoints for curve analytics streaming.
 
 # Load .env variables first so all subsequent imports (e.g. cache.py) see the correct values
 from dotenv import load_dotenv
@@ -294,7 +294,15 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
                     elasticity_params_list = g_el.get("curves_elasticity_param", [])
                 out["elasticity_params"] = elasticity_params_list
                 print(f"[Worker] Extracted {len(elasticity_params_list)} elasticity params")
-            
+
+            # Extract K-stiffness values whenever LinearWindowFit produced them —
+            # unconditional, since it doesn't depend on any fmodel/emodel being active.
+            kfit_list = []
+            if g_fvz and isinstance(g_fvz.get("curves_kfit"), list):
+                kfit_list = g_fvz["curves_kfit"]
+            out["kfit_params"] = kfit_list
+            print(f"[Worker] Extracted {len(kfit_list)} kfit params")
+
             # Return tuple format for streaming endpoints
             return True, out
             
@@ -552,6 +560,7 @@ async def websocket_data_stream(websocket: WebSocket):
                 # --- ADD THIS ---
                 global_force_params = []
                 global_elastic_params = []
+                global_k_params = []  # NEW: stiffness (K) values from LinearWindowFit
                 # Added before using has_fmodel and has_emodel
                 has_fmodel = bool(filters.get("f_models", {}))
                 has_emodel = bool(filters.get("e_models", {}))
@@ -617,6 +626,10 @@ async def websocket_data_stream(websocket: WebSocket):
                                             for r in result["elasticity_params"]:
                                                 if is_valid_param_vector(r.get("elasticity_param")):
                                                     global_elastic_params.append(r["elasticity_param"])
+                                        if "kfit_params" in result:
+                                            for r in result["kfit_params"]:
+                                                if r.get("k_n_per_m") is not None:
+                                                    global_k_params.append(r["k_n_per_m"])
                                     completed += len(batch)
                                     pct = (completed / len(curve_ids)) * 100
                                     print(f"  Progress: {completed}/{len(curve_ids)} curves ({pct:.1f}%)")
@@ -629,7 +642,8 @@ async def websocket_data_stream(websocket: WebSocket):
                             print(
                                 f"Parallel processing complete: "
                                 f"{len(global_force_params)} force params, "
-                                f"{len(global_elastic_params)} elastic params"
+                                f"{len(global_elastic_params)} elastic params, "
+                                f"{len(global_k_params)} k params"
                             )
                         else:
                             print("All parallel batches failed -- falling back to sequential.")
@@ -650,7 +664,7 @@ async def websocket_data_stream(websocket: WebSocket):
                     cpu_count_seq = os.cpu_count() or 1
 
                     if available_memory_gb < 1.0:
-                        batch_size_to_use = 5
+                        batch_size_to_use = 10
                         print(f"Very low memory ({available_memory_gb:.1f} GB) -- batch size: {batch_size_to_use}")
                     elif available_memory_gb < 2.0:
                         batch_size_to_use = 10
@@ -679,6 +693,7 @@ async def websocket_data_stream(websocket: WebSocket):
                             compute_scope=compute_scope,
                             global_force_params=global_force_params,
                             global_elastic_params=global_elastic_params,
+                            global_k_params=global_k_params,
                             dataset_id=dataset_id,
                         )
                         await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
@@ -710,6 +725,9 @@ async def websocket_data_stream(websocket: WebSocket):
                             for i, values in enumerate(params_by_index)
                             if len(values) >= 2
                         }
+
+                    if len(global_k_params) >= 2:
+                        stats["k_stiffness"] = format_stat(global_k_params)
 
                     await websocket.send_text(json.dumps({
                         "status": "model_stats",
@@ -931,6 +949,7 @@ async def process_and_stream_batch(
     compute_scope: str = "full",  # NEW
     global_force_params: list = None,
     global_elastic_params: list = None,
+    global_k_params: list = None,  # NEW: stiffness (K) values from LinearWindowFit
     dataset_id: int = None,
 ) -> None:
     """
@@ -1069,6 +1088,14 @@ async def process_and_stream_batch(
                 for r in curves_block["curves_fparam"]:
                     if is_valid_param_vector(r.get("fparam")):
                         global_force_params.append(r["fparam"])
+
+            # K-stiffness values come from graph_force_vs_z["curves_kfit"], populated
+            # whenever LinearWindowFit is active among the Regular filters — independent
+            # of whether any force/elasticity model is selected.
+            if graph_force_vs_z and "curves_kfit" in graph_force_vs_z:
+                for r in graph_force_vs_z["curves_kfit"]:
+                    if r.get("k_n_per_m") is not None and global_k_params is not None:
+                        global_k_params.append(r["k_n_per_m"])
 
             # Elasticity params come from graph_elspectra["curves_elasticity_param"] (top-level, not inside "curves")
             if run_elastic_population and graph_elspectra:

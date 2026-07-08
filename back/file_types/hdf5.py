@@ -6,6 +6,7 @@ from models.force_curve import ForceCurve, Segment
 import logging
 import os
 from typing import Dict, List, Any, Optional
+import duckdb
 
 def get_hdf5_structure(file_path: str) -> Dict[str, Any]:
     """Return the HDF5 file structure as a nested dictionary for frontend display."""
@@ -139,6 +140,65 @@ def process_hdf5(file_path: str, force_path: str, z_path: str, metadata: Dict[st
                     # Validate metadata
                     validated_metadata = validate_and_fill_metadata(metadata, curve_name)
 
+                    # Convert raw instrument units to SI (meters, Newtons) here, once,
+                    # at ingestion — every downstream consumer (filters, contact-point
+                    # detection, Hertz/other fmodels, the LinearWindowFit K fit) then
+                    # sees correctly-scaled values with no further conversion needed.
+                    # Defaults of 1.0 are a no-op for instruments that already export SI.
+                    z_scale_to_m = float(validated_metadata.get("z_scale_to_m", 1.0) or 1.0)
+                    force_scale_to_n = float(validated_metadata.get("force_scale_to_n", 1.0) or 1.0)
+                    if z_scale_to_m != 1.0:
+                        z_sensor = z_sensor * z_scale_to_m
+                    if force_scale_to_n != 1.0:
+                        deflection = deflection * force_scale_to_n
+
+                    # ── Approach-segment isolation ──────────────────────────
+                    # Mirrors the reference script's prepare_for_analysis():
+                    #   1. Drop non-finite pairs
+                    #   2. Keep only the loading (approach) portion up to the
+                    #      point of maximum Z — everything after that is
+                    #      retraction, which has different force values at the
+                    #      same Z (hysteresis) and would bias downstream fits.
+                    #   3. Sort by Z so smoothing/fitting see a monotonically
+                    #      increasing sequence.
+                    #   4. Remove duplicate Z values to prevent degenerate
+                    #      polyfit behavior.
+                    MIN_POINTS = 20
+
+                    # 1. Drop non-finite
+                    keep = np.isfinite(z_sensor) & np.isfinite(deflection)
+                    z_sensor = z_sensor[keep]
+                    deflection = deflection[keep]
+
+                    if len(z_sensor) < MIN_POINTS:
+                        logger.warning(f"Skipping {curve_name}: only {len(z_sensor)} finite points (need {MIN_POINTS})")
+                        continue
+
+                    # 2. Cut at argmax(Z) — approach only
+                    end_idx = int(np.argmax(z_sensor))
+                    if end_idx > 0:  # guard against all-equal Z
+                        z_sensor = z_sensor[:end_idx + 1]
+                        deflection = deflection[:end_idx + 1]
+
+                    if len(z_sensor) < MIN_POINTS:
+                        logger.warning(f"Skipping {curve_name}: only {len(z_sensor)} points after approach trim (need {MIN_POINTS})")
+                        continue
+
+                    # 3. Sort by Z
+                    order = np.argsort(z_sensor)
+                    z_sensor = z_sensor[order]
+                    deflection = deflection[order]
+
+                    # 4. Remove duplicate Z values
+                    z_sensor, unique_idx = np.unique(z_sensor, return_index=True)
+                    deflection = deflection[unique_idx]
+
+                    if len(z_sensor) < MIN_POINTS:
+                        logger.warning(f"Skipping {curve_name}: only {len(z_sensor)} points after dedup (need {MIN_POINTS})")
+                        continue
+
+                    min_length = len(z_sensor)  # update after trimming
+
                     # Create segment
                     segments = [
                         Segment(
@@ -199,7 +259,11 @@ def validate_and_fill_metadata(metadata: Dict, curve_name: str) -> Dict:
         "tip_geometry": "pyramid",
         "tip_radius": 1e-5,
         "sampling_rate": 1e5,
-        "velocity": 1e-6
+        "velocity": 1e-6,
+        # Unit-calibration factors applied in process_hdf5. 1.0 = raw data is
+        # already SI (meters / Newtons); no-op for most instruments.
+        "z_scale_to_m": 1.0,
+        "force_scale_to_n": 1.0,
     }
     validated_metadata = metadata.copy()
     
@@ -207,10 +271,19 @@ def validate_and_fill_metadata(metadata: Dict, curve_name: str) -> Dict:
         if key not in validated_metadata or validated_metadata[key] is None:
             # logger.warning(f"Missing metadata field {key} for {curve_name}, using default: {default}")
             validated_metadata[key] = default
-        elif key in ["spring_constant", "inv_ols", "tip_radius", "sampling_rate", "velocity"]:
+        elif key in ["spring_constant", "inv_ols", "tip_radius", "sampling_rate", "velocity", "z_scale_to_m", "force_scale_to_n"]:
             try:
                 validated_metadata[key] = float(validated_metadata[key])
-                if validated_metadata[key] <= 0:
+                # force_scale_to_n is allowed to be negative — a negative value
+                # means "flip the sign AND scale", which is physically meaningful
+                # for sensors whose voltage convention is inverted relative to
+                # the expected force direction (e.g. the Aurora sensor's raw
+                # voltage is negative-going on approach, but downstream fits
+                # expect a positive-going force curve). Zero is still invalid.
+                if key == "force_scale_to_n":
+                    if validated_metadata[key] == 0:
+                        validated_metadata[key] = default
+                elif validated_metadata[key] <= 0:
                     # logger.warning(f"Invalid {key} for {curve_name}: {validated_metadata[key]}, using default: {default}")
                     validated_metadata[key] = default
             except (ValueError, TypeError):
@@ -256,8 +329,10 @@ def export_from_duckdb_to_hdf5(
         Number of curves exported.
     """
     try:
-        # Connect to DuckDB
-        with duckdb.connect(db_path) as conn:
+        # Use in-memory DuckDB bridge loaded from PostgreSQL (db_path is now ignored)
+        from db.analysis_bridge import get_export_conn
+        conn = get_export_conn(db_path, curve_ids=curve_ids)
+        with conn:
             # Captures available table columns so exports can run against reduced schemas.
             schema_columns = {row[0] for row in conn.execute("DESCRIBE force_vs_z").fetchall()}
             # Selects optional instrument column when available, otherwise uses a typed NULL placeholder.

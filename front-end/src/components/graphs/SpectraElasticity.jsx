@@ -2,6 +2,12 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import ReactECharts from "echarts-for-react";
 import echarts from "../../utils/echartsConfig";
 import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesContext";
+import {
+  CHART_AXIS_NAME_TEXT_STYLE,
+  buildValueAxisTickLabel,
+  formatAxisQuantityLabel,
+  formatScaledUnit,
+} from "../../utils/chartAxisStyles";
 
 const ElasticitySpectra = ({
   forceData = [],
@@ -70,12 +76,6 @@ const ElasticitySpectra = ({
     if (!isFinite(maxAbsScaled) || maxAbsScaled <= 0) return 0;
     return Math.floor(Math.log10(maxAbsScaled));
   }
-
-  // Converts an integer exponent to its Unicode superscript representation
-  const toSuperscript = (num) => {
-    const superscriptMap = { '0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹','-':'⁻' };
-    return String(num).split('').map(c => superscriptMap[c] || c).join('');
-  };
 
   // Downsample data when there are many curves to improve rendering performance
   const MAX_POINTS_PER_CURVE = 700;
@@ -197,13 +197,13 @@ const ElasticitySpectra = ({
   // Y axis base symbol for elastic modulus: prepend selected prefix to "Pa" (e.g. milli → "mPa")
   const yBaseSymbol = yUnitOption.prefix ? `${yUnitOption.prefix}Pa` : "Pa";
 
-  // Axis unit labels; omit "10ⁿ" when exponent is 0
+  // Axis unit labels; omit "×10^n" when exponent is 0
   const xUnit = useMemo(
-    () => xDisplayPower === 0 ? xUnitOption.xSymbol : `10${toSuperscript(xDisplayPower)} ${xUnitOption.xSymbol}`,
+    () => formatScaledUnit(xDisplayPower, xUnitOption.xSymbol),
     [xDisplayPower, xUnitOption],
   );
   const yUnit = useMemo(
-    () => yDisplayPower === 0 ? yBaseSymbol : `10${toSuperscript(yDisplayPower)} ${yBaseSymbol}`,
+    () => formatScaledUnit(yDisplayPower, yBaseSymbol),
     [yDisplayPower, yBaseSymbol],
   );
 
@@ -385,26 +385,24 @@ const ElasticitySpectra = ({
         },
     xAxis: {
       type: "value",
-      name: `Z (${xUnit})`,
+      name: formatAxisQuantityLabel("Z", xDisplayPower, xUnitOption.xSymbol),
       nameLocation: "middle",
-      nameGap: 25,
+      nameGap: 34,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       min: safeMin(domainRange.xMin * xScaleFactor),
       max: safeMin(domainRange.xMax * xScaleFactor),
-      axisLabel: {
-        formatter: (value) => value.toFixed(xDecimals),
-      },
+      axisLabel: buildValueAxisTickLabel((value) => value.toFixed(xDecimals)),
     },
     yAxis: {
       type: "value",
-      name: `E (${yUnit})`,
+      name: formatAxisQuantityLabel("E", yDisplayPower, yBaseSymbol),
       nameLocation: "middle",
-      nameGap: 40,
+      nameGap: 50,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       scale: true,
       min: safeMin(domainRange.yMin * yScaleFactor),
       max: safeMin(domainRange.yMax * yScaleFactor),
-      axisLabel: {
-        formatter: (value) => value.toFixed(yDecimals),
-      },
+      axisLabel: buildValueAxisTickLabel((value) => value.toFixed(yDecimals)),
     },
     series,
     legend: { show: false },

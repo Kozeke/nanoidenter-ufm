@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import ReactECharts from "echarts-for-react";
 import echarts from "../../utils/echartsConfig";
+import {
+  CHART_AXIS_NAME_TEXT_STYLE,
+  CHART_AXIS_TICK_STYLE,
+  buildValueAxisTickLabel,
+} from "../../utils/chartAxisStyles";
 
 // --- Toolbar styles (match other panels) ---
 const toolbarCardStyle = {
@@ -466,24 +471,23 @@ const ParametersGraph = ({
       type: "value",
       name: `Curve Index`,
       nameLocation: "middle",
-      nameGap: 25,
+      nameGap: 34,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       min: allCurveIndices.length > 0 ? Math.min(...allCurveIndices) - 0.5 : 0,
       max: allCurveIndices.length > 0 ? Math.max(...allCurveIndices) + 0.5 : 10,
-      axisLabel: {
-        formatter: function (value) {
-          return value.toFixed(0);
-        },
-      },
+      axisLabel: buildValueAxisTickLabel((value) => value.toFixed(0)),
     },
     yAxis: {
       type: "value",
       name: `Parameter Value`,
       nameLocation: "middle",
-      nameGap: 70,
+      nameGap: 78,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       scale: true,
       min: adjustedYMin,
       max: adjustedYMax,
       axisLabel: {
+        ...CHART_AXIS_TICK_STYLE,
         formatter: function (value) {
           if (value === 0) return '0';
           const absVal = Math.abs(value);

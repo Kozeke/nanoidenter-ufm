@@ -2,6 +2,12 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import ReactECharts from "echarts-for-react";
 import echarts from "../../utils/echartsConfig";
 import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesContext";
+import {
+  CHART_AXIS_NAME_TEXT_STYLE,
+  buildValueAxisTickLabel,
+  formatAxisQuantityLabel,
+  formatScaledUnit,
+} from "../../utils/chartAxisStyles";
 
 const ForceIndentationDataSet = ({
   forceData = [],
@@ -259,12 +265,6 @@ const ForceIndentationDataSet = ({
   // console.log("curves_cp:", curvesCpData);
   // console.log("curves_fparam:", curvesFparamData);
 
-  // Converts an integer exponent to its Unicode superscript representation
-  const toSuperscript = (num) => {
-    const superscriptMap = { '0':'⁰','1':'¹','2':'²','3':'³','4':'⁴','5':'⁵','6':'⁶','7':'⁷','8':'⁸','9':'⁹','-':'⁻' };
-    return String(num).split('').map(c => superscriptMap[c] || c).join('');
-  };
-
   // Resolve active unit option objects from the shared context selection
   const xUnitOption = UNIT_OPTIONS.find((o) => o.value === xUnitPrefix);
   const yUnitOption = UNIT_OPTIONS.find((o) => o.value === yUnitPrefix);
@@ -306,13 +306,13 @@ const ForceIndentationDataSet = ({
   // Y axis base symbol for force: prepend selected metric prefix to "N" (e.g. milli → "mN")
   const yBaseSymbol = yUnitOption.prefix ? `${yUnitOption.prefix}N` : "N";
 
-  // Axis unit labels; omit "10ⁿ" when exponent is 0
+  // Axis unit labels; omit "×10^n" when exponent is 0
   const xUnit = useMemo(
-    () => xDisplayPower === 0 ? xUnitOption.xSymbol : `10${toSuperscript(xDisplayPower)} ${xUnitOption.xSymbol}`,
+    () => formatScaledUnit(xDisplayPower, xUnitOption.xSymbol),
     [xDisplayPower, xUnitOption],
   );
   const yUnit = useMemo(
-    () => yDisplayPower === 0 ? yBaseSymbol : `10${toSuperscript(yDisplayPower)} ${yBaseSymbol}`,
+    () => formatScaledUnit(yDisplayPower, yBaseSymbol),
     [yDisplayPower, yBaseSymbol],
   );
 
@@ -404,30 +404,24 @@ const ForceIndentationDataSet = ({
         },
     xAxis: {
       type: "value",
-      name: `Indentation (${xUnit})`,
+      name: formatAxisQuantityLabel("Indentation", xDisplayPower, xUnitOption.xSymbol),
       nameLocation: "middle",
-      nameGap: 25,
+      nameGap: 34,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       min: domainRange.xMin !== null ? domainRange.xMin * xScaleFactor : undefined,
       max: domainRange.xMax !== null ? domainRange.xMax * xScaleFactor : undefined,
-      axisLabel: {
-        formatter: function (value) {
-          return value.toFixed(xDecimals);
-        },
-      },
+      axisLabel: buildValueAxisTickLabel((value) => value.toFixed(xDecimals)),
     },
     yAxis: {
       type: "value",
-      name: `Force (${yUnit})`,
+      name: formatAxisQuantityLabel("Force", yDisplayPower, yBaseSymbol),
       nameLocation: "middle",
-      nameGap: 40,
+      nameGap: 50,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       scale: true,
       min: domainRange.yMin !== null ? domainRange.yMin * yScaleFactor : undefined,
       max: domainRange.yMax !== null ? domainRange.yMax * yScaleFactor : undefined,
-      axisLabel: {
-        formatter: function (value) {
-          return value.toFixed(yDecimals);
-        },
-      },
+      axisLabel: buildValueAxisTickLabel((value) => value.toFixed(yDecimals)),
     },
     series,
 

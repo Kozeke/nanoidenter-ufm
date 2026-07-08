@@ -48,6 +48,76 @@ def _json_hash(obj) -> str:
     json_str = json.dumps(obj, sort_keys=True)
     return hashlib.md5(json_str.encode()).hexdigest()
 
+
+# Emit script-style baseline/K diagnostics for backend-vs-script comparisons.
+def _print_import_fit_summary(
+    dataset_id: Optional[int],
+    baseline_slopes_by_curve: List[Dict[str, float]],
+    k_values_by_curve: List[Dict[str, float]],
+) -> None:
+    """
+    Print baseline and K logs in the same format as the standalone script.
+    """
+    # Store a readable dataset label so logs identify which dataset produced the numbers.
+    dataset_label = f"dataset_id={dataset_id}" if dataset_id is not None else "dataset_id=unknown"
+    print(f"Processed {dataset_label}")
+
+    # Store the number of unique curves that contributed to baseline/K diagnostics.
+    unique_curve_ids = sorted(
+        {
+            row.get("curve_id")
+            for row in baseline_slopes_by_curve + k_values_by_curve
+            if row.get("curve_id") is not None
+        }
+    )
+    print(f"Curves used: {len(unique_curve_ids)}")
+    print()
+
+    print("Baseline drift slope from detrending:")
+    for row in baseline_slopes_by_curve:
+        # Store curve identifier in the same "curveN" format used by the script output.
+        curve_name = str(row["curve_id"])
+        # Store baseline slope value; numerically identical in nN/nm and N/m.
+        slope_n_per_m = float(row["slope_n_per_m"])
+        print(f"{curve_name}: {slope_n_per_m:.6g} nN/nm ({slope_n_per_m:.6g} N/m)")
+
+    if baseline_slopes_by_curve:
+        # Store all baseline slopes for mean/std aggregation across processed curves.
+        slope_values = [float(row["slope_n_per_m"]) for row in baseline_slopes_by_curve]
+        # Store mean baseline slope in script-matching units and formatting.
+        mean_slope = sum(slope_values) / len(slope_values)
+        # Store sample standard deviation to match script behavior (ddof=1 when n>1).
+        if len(slope_values) > 1:
+            std_slope = math.sqrt(sum((value - mean_slope) ** 2 for value in slope_values) / (len(slope_values) - 1))
+        else:
+            std_slope = 0.0
+        print()
+        print(f"Average baseline drift slope: {mean_slope:.6g} +/- {std_slope:.6g} nN/nm")
+        print(f"Average baseline drift slope: {mean_slope:.6g} +/- {std_slope:.6g} N/m")
+
+    print()
+    print("K from each curve:")
+    for row in k_values_by_curve:
+        # Store curve identifier in the same "curveN" format used by the script output.
+        curve_name = str(row["curve_id"])
+        # Store stiffness slope value; numerically identical in nN/nm and N/m.
+        k_n_per_m = float(row["k_n_per_m"])
+        print(f"{curve_name}: {k_n_per_m:.6g} nN/nm ({k_n_per_m:.6g} N/m)")
+
+    if k_values_by_curve:
+        # Store all K values for mean/std aggregation across processed curves.
+        k_values = [float(row["k_n_per_m"]) for row in k_values_by_curve]
+        # Store mean K in script-matching units and formatting.
+        mean_k = sum(k_values) / len(k_values)
+        # Store sample standard deviation to match script behavior (ddof=1 when n>1).
+        if len(k_values) > 1:
+            std_k = math.sqrt(sum((value - mean_k) ** 2 for value in k_values) / (len(k_values) - 1))
+        else:
+            std_k = 0.0
+        print()
+        print(f"Average K: {mean_k:.6g} +/- {std_k:.6g} nN/nm")
+        print(f"Average K: {mean_k:.6g} +/- {std_k:.6g} N/m")
+
 # Preserve legacy cache structures that store extended intermediate results
 # def _ensure_extended_cache_tables(conn: duckdb.DuckDBPyConnection):
 #     """Create cache tables for contact_points, indentations, and elspectra if they don't exist."""
@@ -358,20 +428,145 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         """.format(",".join(map(str, numeric_curve_ids)))
 
     # --- Graph 1: Force vs Z (Regular Filters) ---
-    query_regular = apply(base_query, regular_filters, curve_ids)
+    # Pull FixedBaseline and LinearWindowFit out of the SQL chain so neither
+    # silently overwrites the displayed curve, and so their per-curve fit
+    # results (baseline curve, K slope) can be reliably read back — the
+    # DuckDB UDF path shares one filter instance across every row in a
+    # batched query, so instance attributes aren't safe to read there.
+    # Both are applied here in Python, in the same order they'd have run in
+    # the SQL chain, then shown as separate overlay curves — the same
+    # pattern used for the Hertz fit overlay ("{curve_id}_hertz") further
+    # down in this function.
+    regular_filters_for_sql = dict(regular_filters)
+    baseline_cfg = regular_filters_for_sql.pop("fixedbaseline", None)
+    linfit_cfg = regular_filters_for_sql.pop("linearwindowfit", None)
+
+    query_regular = apply(base_query, regular_filters_for_sql, curve_ids)
     result_regular = conn.execute(query_regular).fetchall()
-    
-    curves_regular = [
-        {
-            "curve_id": f"curve{row[0]}",
-            "x": row[1],
-            "y": row[2]
-        }
-        for row in result_regular
-    ]
+
+    curves_regular = []
+    curves_kfit = []  # scalar K per curve, collected for mean ± std aggregation
+    # Collect per-curve baseline slopes so backend logs can mirror script diagnostics.
+    baseline_slopes_by_curve = []
+    _curves_for_avg_line = []  # (z_values, working_y) pairs, collected only if linfit_cfg is active
+
+    for row in result_regular:
+        curve_id, z_values, force_values = row[0], row[1], row[2]
+        # Store stable script-style curve label used by all diagnostic log lines.
+        curve_label = f"curve{curve_id}"
+
+        # working_y tracks the curve as it passes through whichever of
+        # FixedBaseline / LinearWindowFit were popped out above, so the main
+        # displayed curve and the K fit both see the fully-corrected signal
+        # (e.g. K should be fit on the baseline-corrected curve, not the raw one).
+        working_y = force_values
+
+        if baseline_cfg is not None:
+            from filters.filters.import_filters.fixed_baseline_filter import FixedBaselineFilter
+            bl = FixedBaselineFilter()
+            bl.create()
+            for pname, pval in baseline_cfg.items():
+                if pname in bl.parameters:
+                    bl.parameters[pname]["default"] = pval
+
+            corrected_y = bl.calculate(z_values, working_y)
+            if bl.last_baseline_slope is not None:
+                baseline_slopes_by_curve.append(
+                    {
+                        "curve_id": curve_label,
+                        "slope_n_per_m": float(bl.last_baseline_slope),
+                    }
+                )
+
+            if bl.last_baseline_values is not None:
+                # Drawn across the WHOLE curve, not clipped to the fit window —
+                # matches the reference script's `curve.baseline`, which is
+                # np.polyval evaluated over the entire z_nm domain (unlike the
+                # K line, which the reference script never extrapolates).
+                curves_regular.append({
+                    "curve_id": f"{curve_id}_baseline",
+                    "x": z_values,
+                    "y": bl.last_baseline_values
+                })
+
+            working_y = corrected_y
+
+        curves_regular.append({
+            "curve_id": curve_label,
+            "x": z_values,
+            "y": working_y
+        })
+
+        if linfit_cfg is not None:
+            from filters.filters.import_filters.linear_window_fit_filter import LinearWindowFitFilter
+            fit = LinearWindowFitFilter()
+            fit.create()
+            for pname, pval in linfit_cfg.items():
+                if pname in fit.parameters:
+                    fit.parameters[pname]["default"] = pval
+
+            fitted_y = fit.calculate(z_values, working_y)
+
+            if fit.last_slope_per_meter is not None:
+                # Slice down to just the [t1_nm, t2_nm] window using the mask the
+                # filter exposes, instead of drawing the fitted line across the
+                # whole curve — matches the original script, which only ever
+                # draws the fit line within the region it was fit on.
+                mask = fit.last_window_mask
+                if mask is not None:
+                    window_x = [zv for zv, m in zip(z_values, mask) if m]
+                    window_y = [fy for fy, m in zip(fitted_y, mask) if m]
+                else:
+                    window_x, window_y = z_values, fitted_y
+
+                curves_regular.append({
+                    "curve_id": f"{curve_id}_linfit",
+                    "x": window_x,
+                    "y": window_y
+                })
+                curves_kfit.append({
+                    "curve_id": curve_label,
+                    "k_n_per_m": fit.last_slope_per_meter
+                })
+
+            # Collected regardless of whether this particular curve's own fit
+            # succeeded — average_curve_fit_line (below) decides per-curve
+            # usability itself, same as the reference script.
+            _curves_for_avg_line.append((z_values, working_y))
+
+    if linfit_cfg is not None and len(_curves_for_avg_line) > 0:
+        import numpy as np
+        try:
+            t1_nm = float(linfit_cfg.get("t1_nm", 317.0))
+            t2_nm = float(linfit_cfg.get("t2_nm", 580.0))
+        except (TypeError, ValueError):
+            t1_nm, t2_nm = 317.0, 580.0
+        low_m, high_m = sorted((t1_nm * 1e-9, t2_nm * 1e-9))
+
+        # Only curves that actually span the whole [low, high] window are usable —
+        # same requirement as the reference script's average_curve_fit_line().
+        usable = [
+            (zv, wy) for zv, wy in _curves_for_avg_line
+            if zv and wy and zv[0] <= low_m and zv[-1] >= high_m and len(zv) == len(wy)
+        ]
+        if usable:
+            z_line = np.linspace(low_m, high_m, 100)
+            y_values = [np.interp(z_line, zv, wy) for zv, wy in usable]
+            y_mean = np.mean(np.vstack(y_values), axis=0)
+            avg_slope, avg_intercept = np.polyfit(z_line, y_mean, 1)
+            curves_regular.append({
+                "curve_id": "avg_linfit",
+                "x": z_line.tolist(),
+                "y": (avg_slope * z_line + avg_intercept).tolist()
+            })
+
+    # Print script-style diagnostics only when at least one relevant import fit is active.
+    if baseline_cfg is not None or linfit_cfg is not None:
+        _print_import_fit_summary(dataset_id, baseline_slopes_by_curve, curves_kfit)
+
     print("graphgorcevsz", len(curves_regular))
     domain_regular = compute_domain(conn, curves_regular, "curves_temp_regular")
-    graph_force_vs_z = {"curves": curves_regular, "domain": domain_regular}
+    graph_force_vs_z = {"curves": curves_regular, "domain": domain_regular, "curves_kfit": curves_kfit}
     
     # --- Graph 2: Force vs Indentation and Elspectra (CP Filters, if active) ---
     # print("graph_force_vs_z")

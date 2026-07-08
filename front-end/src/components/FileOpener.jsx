@@ -54,6 +54,20 @@ const activeValidationRules = {
     type: 'number',
     min: 0,
   },
+  // Unit-conversion factor: raw Z is multiplied by this to become meters (mm -> 1e-3).
+  z_scale_to_m: {
+    required: 'number',
+    label: 'Z Scale to meters (raw Z x this)',
+    type: 'number',
+    min: 0,
+  },
+  // Unit-conversion factor: raw Force is multiplied by this to become Newtons (0.05 mN/V -> -5e-5 flips sign and scales).
+  force_scale_to_n: {
+    required: 'number',
+    label: 'Force Scale to Newtons (raw Force x this)',
+    type: 'number',
+    nonzero: true,
+  },
 };
 
 // same styles as before

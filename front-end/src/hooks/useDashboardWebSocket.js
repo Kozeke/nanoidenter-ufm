@@ -4,6 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useDashboardStore } from "../state/useDashboardStore";
 import { useAuthStore } from "../state/useAuthStore";
 import { normalizeForceStats, normalizeElasticityStats  } from "../utils/elasticityMapper"
+
+// Formats mean ± std in plain decimal notation, sized to the std's precision.
+// Unlike the backend's format_stat() (tuned for values spanning many orders of
+// magnitude, e.g. Young's modulus in Pa), this stays readable for human-scale
+// values like K (~O(1) N/m): "1.2530 ± 0.0050 N/m" instead of "(1258 ± 5) × 10^-3".
+const formatMeanStd = (mean, std, unit) => {
+  if (!Number.isFinite(mean)) return "—";
+  if (!Number.isFinite(std) || std <= 0) {
+    return `${mean.toPrecision(4)} ${unit}`;
+  }
+  // Show one extra digit of precision beyond where std first becomes significant.
+  const decimals = Math.max(0, -Math.floor(Math.log10(std)) + 1);
+  return `${mean.toFixed(decimals)} ± ${std.toFixed(decimals)} ${unit}`;
+};
+
 // Exposes dashboard curve data and WebSocket helpers to the presentation layer.
 export const useDashboardWebSocket = () => {
   // Stores Force–Z curve batches received from the backend.
@@ -539,10 +554,21 @@ export const useDashboardWebSocket = () => {
         // console.log("elasticityModel (LIVE)", liveElasticityModels);
         const normalizedForceStats = normalizeForceStats(stats, liveFilters);
         const normalizedElasticStats = normalizeElasticityStats(stats, liveFilters);
-        
+
         useDashboardStore.getState().setModelStats("force", normalizedForceStats);
         useDashboardStore.getState().setModelStats("elasticity", normalizedElasticStats);
-        
+
+        // K-stiffness comes back as a single format_stat() dict {mean, std, formatted}.
+        // format_stat()'s "formatted" string is tuned for values spanning many orders
+        // of magnitude (e.g. Young's modulus in Pa) and switches to "(1258 ± 5) × 10^-3"
+        // style notation whenever std's exponent is small — which is exactly the case
+        // for K (~O(1) N/m), producing an unreadable result. So K gets its own plain
+        // decimal formatting from the raw mean/std instead of using .formatted.
+        const stiffnessStats = stats.k_stiffness
+          ? [{ label: "K =", value: formatMeanStd(stats.k_stiffness.mean, stats.k_stiffness.std, "N/m") }]
+          : [];
+        useDashboardStore.getState().setModelStats("stiffness", stiffnessStats);
+
         // Note: Don't mark stats as complete here - wait for "complete" status
       }
       

@@ -48,3 +48,15 @@ def get_conn() -> duckdb.DuckDBPyConnection:
         else:
             raise
     return _conn_singleton
+
+
+# No-op release hook kept for backward compatibility; the shared singleton stays open for reuse.
+def release_conn(conn: duckdb.DuckDBPyConnection = None) -> None:
+    # The connection is a process-wide singleton, so callers must not close it here.
+    return None
+
+
+# Backward-compatible re-export so importers of db.connection still find the cache bootstrap helper.
+def ensure_cache_tables(conn: duckdb.DuckDBPyConnection) -> None:
+    # Delegates to the canonical cache-table initializer defined in db.init_db.
+    init_cache_tables(conn)

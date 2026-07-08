@@ -37,6 +37,22 @@ const metadataValidationRules = {
     min: 0,
     minInclusive: true,
   },
+  // Multiplicative factor applied to raw Z values to convert them to meters.
+  // e.g. Z in mm -> enter 1e-3; Z already in meters -> enter 1.
+  z_scale_to_m: {
+    required: 'number',
+    label: 'Z Scale to meters (raw Z x this)',
+    type: 'number',
+    min: 0,
+  },
+  // Multiplicative factor applied to raw Force values to convert them to Newtons.
+  // e.g. Force in Volts at 0.05 mN/V -> enter -5e-5 to flip sign and scale; Force already in N -> enter 1.
+  force_scale_to_n: {
+    required: 'number',
+    label: 'Force Scale to Newtons (raw Force x this)',
+    type: 'number',
+    nonzero: true,
+  },
 };
 
 // Active validation rules used during file processing workflow.
@@ -47,6 +63,9 @@ const activeValidationRules = {
   tip_geometry: metadataValidationRules.tip_geometry,
   tip_radius: metadataValidationRules.tip_radius,
   tip_angle: metadataValidationRules.tip_angle,
+  // Unit-conversion factors surfaced in the metadata step so they can be set per file.
+  z_scale_to_m: metadataValidationRules.z_scale_to_m,
+  force_scale_to_n: metadataValidationRules.force_scale_to_n,
 };
 
 // --- helpers that don't depend on React state ---
@@ -169,6 +188,8 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
           newErrors.push(
             `${rule.label} must be ${rule.minInclusive ? 'greater than or equal to' : 'greater than'} ${rule.min}`
           );
+        } else if (rule.nonzero && numValue === 0) {
+          newErrors.push(`${rule.label} must not be zero`);
         }
       }
       if (rule.regex && value && !rule.regex.test(value)) {
@@ -419,6 +440,12 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
           } else if (key === 'file_id' && filePath) {
             // Auto-populate file_id with filename from file path
             acc[key] = filePath.split('/').pop() || filePath.split('\\').pop() || filePath;
+          } else if (key === 'z_scale_to_m') {
+            // Default Z conversion: raw values in mm -> meters (x 1e-3). Editable per file.
+            acc[key] = 1e-3;
+          } else if (key === 'force_scale_to_n') {
+            // Default Force conversion: raw Volts at 0.05 mN/V -> Newtons (x -5e-5 flips sign and scales). Editable per file.
+            acc[key] = -5e-5;
           } else {
             acc[key] = '';
           }
@@ -501,6 +528,12 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
             } else if (key === 'file_id' && filePath) {
               // Auto-populate file_id with filename from file path
               acc[key] = filePath.split('/').pop() || filePath.split('\\').pop() || filePath;
+            } else if (key === 'z_scale_to_m') {
+              // Default Z conversion: raw values in mm -> meters (x 1e-3). Editable per file.
+              acc[key] = 1e-3;
+            } else if (key === 'force_scale_to_n') {
+              // Default Force conversion: raw Volts at 0.05 mN/V -> Newtons (x -5e-5 flips sign and scales). Editable per file.
+              acc[key] = -5e-5;
             } else {
               acc[key] = '';
             }

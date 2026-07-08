@@ -369,4 +369,47 @@ def update_dataset_metadata_for_user(
     except Exception:
         return False, "Failed to update dataset metadata"
 
+    # Propagate the same changes to every curve row for this dataset so that
+    # per-curve consumers (e.g. the get_metadata websocket action and the
+    # fetch_curves_batch / elasticity computation pipeline, which read
+    # spring_constant, tip_radius, and tip_geometry directly from force_vs_z)
+    # don't keep serving the stale value captured at ingestion time.
+    # NOTE: force_vs_z has no tip_angle column, so tip_angle lives only on the
+    # datasets row and is intentionally excluded from this per-curve sync.
+    # Stores force_vs_z column update expressions mirroring the dataset changes.
+    curve_update_parts: List[str] = []
+    # Stores ordered query parameters for the force_vs_z update statement.
+    curve_query_params: List[object] = []
+
+    if spring_constant is not None:
+        curve_update_parts.append("spring_constant = ?")
+        curve_query_params.append(spring_constant)
+    if tip_radius is not None:
+        curve_update_parts.append("tip_radius = ?")
+        curve_query_params.append(tip_radius)
+    if tip_geometry is not None:
+        curve_update_parts.append("tip_geometry = ?")
+        curve_query_params.append(tip_geometry)
+
+    if curve_update_parts:
+        curve_query_params.append(dataset_id)
+        # Prevent crash if the per-curve sync fails after the dataset row updated.
+        try:
+            conn.execute(
+                f"""
+                UPDATE force_vs_z
+                SET {", ".join(curve_update_parts)}
+                WHERE dataset_id = ?
+                """,
+                curve_query_params,
+            )
+        except Exception:
+            # The dataset-level metadata already updated successfully; surface a
+            # distinct message so the caller/UI knows the curve rows may now be
+            # out of sync and a retry may be needed.
+            return (
+                False,
+                "Dataset metadata updated, but failed to sync curve data. Please retry.",
+            )
+
     return True, "Dataset metadata updated successfully"
