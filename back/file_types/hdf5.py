@@ -302,8 +302,6 @@ def validate_and_fill_metadata(metadata: Dict, curve_name: str) -> Dict:
     return validated_metadata
 
 
-import duckdb
-
 def export_from_duckdb_to_hdf5(
     db_path: str,
     output_path: str,
@@ -329,10 +327,8 @@ def export_from_duckdb_to_hdf5(
         Number of curves exported.
     """
     try:
-        # Use in-memory DuckDB bridge loaded from PostgreSQL (db_path is now ignored)
-        from db.analysis_bridge import get_export_conn
-        conn = get_export_conn(db_path, curve_ids=curve_ids)
-        with conn:
+        # Connect to DuckDB using the same local database path as the exporter router.
+        with duckdb.connect(db_path) as conn:
             # Captures available table columns so exports can run against reduced schemas.
             schema_columns = {row[0] for row in conn.execute("DESCRIBE force_vs_z").fetchall()}
             # Selects optional instrument column when available, otherwise uses a typed NULL placeholder.
