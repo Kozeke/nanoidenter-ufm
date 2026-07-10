@@ -4,9 +4,6 @@ import echarts from "../../utils/echartsConfig";
 import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesContext";
 import {
   CHART_AXIS_NAME_TEXT_STYLE,
-  CHART_GRID_BOTTOM,
-  CHART_X_AXIS_NAME_GAP,
-  CHART_X_DATAZOOM_BOTTOM,
   buildValueAxisTickLabel,
   formatAxisQuantityLabel,
 } from "../../utils/chartAxisStyles";
@@ -362,7 +359,7 @@ const ElasticitySpectra = ({
       type: "value",
       name: formatAxisQuantityLabel("Z", 0, xUnitOption.xSymbol),
       nameLocation: "middle",
-      nameGap: CHART_X_AXIS_NAME_GAP,
+      nameGap: 34,
       nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       min: safeMin(domainRange.xMin * xScaleFactor),
       max: safeMin(domainRange.xMax * xScaleFactor),
@@ -381,9 +378,9 @@ const ElasticitySpectra = ({
     },
     series,
     legend: { show: false },
-    grid: { left: "12%", right: "10%", bottom: CHART_GRID_BOTTOM, top: "8%" },
+    grid: { left: "12%", right: "10%", bottom: "15%", top: "8%" },
     dataZoom: [
-      { type: "slider", xAxisIndex: 0, start: 0, end: 100, height: 20, bottom: CHART_X_DATAZOOM_BOTTOM },
+      { type: "slider", xAxisIndex: 0, start: 0, end: 100, height: 20, bottom: 10 },
       { type: "slider", yAxisIndex: 0, start: 0, end: 100, width: 20, right: 10 },
       { type: "inside", xAxisIndex: 0, start: 0, end: 100 },
       { type: "inside", yAxisIndex: 0, start: 0, end: 100 },

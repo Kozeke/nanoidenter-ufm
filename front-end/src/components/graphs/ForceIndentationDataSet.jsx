@@ -4,9 +4,6 @@ import echarts from "../../utils/echartsConfig";
 import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesContext";
 import {
   CHART_AXIS_NAME_TEXT_STYLE,
-  CHART_GRID_BOTTOM,
-  CHART_X_AXIS_NAME_GAP,
-  CHART_X_DATAZOOM_BOTTOM,
   buildValueAxisTickLabel,
   formatAxisQuantityLabel,
 } from "../../utils/chartAxisStyles";
@@ -380,7 +377,7 @@ const ForceIndentationDataSet = ({
       type: "value",
       name: formatAxisQuantityLabel("Indentation", 0, xUnitOption.xSymbol),
       nameLocation: "middle",
-      nameGap: CHART_X_AXIS_NAME_GAP,
+      nameGap: 34,
       nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       min: domainRange.xMin !== null ? domainRange.xMin * xScaleFactor : undefined,
       max: domainRange.xMax !== null ? domainRange.xMax * xScaleFactor : undefined,
@@ -400,7 +397,7 @@ const ForceIndentationDataSet = ({
     series,
 
     legend: { show: false },
-    grid: { left: "12%", right: "10%", bottom: CHART_GRID_BOTTOM, top: "8%" },
+    grid: { left: "12%", right: "10%", bottom: "15%", top: "8%" },
     dataZoom: [
       {
         type: "slider",
@@ -408,7 +405,7 @@ const ForceIndentationDataSet = ({
         start: 0,
         end: 100,
         height: 20,
-        bottom: CHART_X_DATAZOOM_BOTTOM,
+        bottom: 10,
       },
       {
         type: "slider",

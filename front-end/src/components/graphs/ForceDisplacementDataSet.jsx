@@ -5,9 +5,6 @@ import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesC
 import { useDashboardStore } from "../../state/useDashboardStore";
 import {
   CHART_AXIS_NAME_TEXT_STYLE,
-  CHART_GRID_BOTTOM,
-  CHART_X_AXIS_NAME_GAP,
-  CHART_X_DATAZOOM_BOTTOM,
   buildValueAxisTickLabel,
   formatAxisQuantityLabel,
 } from "../../utils/chartAxisStyles";
@@ -507,7 +504,7 @@ const ForceDisplacementDataSet = ({
         type: "value",
         name: formatAxisQuantityLabel("Z", 0, xUnitOption.xSymbol),
         nameLocation: "middle",
-        nameGap: CHART_X_AXIS_NAME_GAP,
+        nameGap: 34,
         nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
         min: domainRange.xMin ? domainRange.xMin * xScaleFactor : undefined,
         max: domainRange.xMax ? domainRange.xMax * xScaleFactor : undefined,
@@ -531,7 +528,7 @@ const ForceDisplacementDataSet = ({
       grid: {
         left: "12%",
         right: "10%",
-        bottom: CHART_GRID_BOTTOM,
+        bottom: "15%",
         top: "8%",
       },
       dataZoom: [
@@ -541,7 +538,7 @@ const ForceDisplacementDataSet = ({
           start: zoomRef.current.xStart,
           end: zoomRef.current.xEnd,
           height: 20,
-          bottom: CHART_X_DATAZOOM_BOTTOM,
+          bottom: 10,
         },
         {
           type: "slider",
