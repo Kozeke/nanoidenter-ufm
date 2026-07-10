@@ -89,6 +89,8 @@ export const useDashboardWebSocket = () => {
   });
   // Tracks the previous curve range to detect request changes.
   const prevCurveRangeRef = useRef({ from: 0, to: 10 });
+  // Tracks the previous segment selection to detect request changes.
+  const prevSegmentTypeRef = useRef("segment0");
   // Flags when the caller explicitly wants to re-request curves.
   const [forceRequest, setForceRequest] = useState(false);
   // Ref mirror of forceRequest so sendCurveRequest always reads the current value
@@ -163,6 +165,7 @@ export const useDashboardWebSocket = () => {
     const liveCurveFrom = liveState.curveFrom;
     const liveCurveTo = liveState.curveTo;
     const liveDatasetId = liveState.datasetId;
+    const liveSegmentType = liveState.selectedSegmentType || "segment0";
 
     // Mark metadata operation as in progress
     metadataInProgressRef.current = true;
@@ -219,6 +222,15 @@ export const useDashboardWebSocket = () => {
       prevCurveRangeRef.current.from !== liveCurveFrom ||
       prevCurveRangeRef.current.to !== liveCurveTo;
 
+    // Determines whether the selected segment changed.
+    const segmentTypeChanged = prevSegmentTypeRef.current !== liveSegmentType;
+
+    if (segmentTypeChanged) {
+      console.log(
+        `Segment changed: ${prevSegmentTypeRef.current} -> ${liveSegmentType}`
+      );
+    }
+
     // Resets chart domains to trigger automatic scaling.
     const resetState = {
       xMin: null,
@@ -229,7 +241,7 @@ export const useDashboardWebSocket = () => {
 
     // forceRequestRef.current is always up-to-date even inside a stale closure,
     // unlike forceRequest state which may be stale when called from socket.onopen.
-    const shouldReset = filtersChanged || numCurvesChanged || forceRequest || forceRequestRef.current;
+    const shouldReset = filtersChanged || numCurvesChanged || segmentTypeChanged || forceRequest || forceRequestRef.current;
     if (shouldReset) {
       // Clear the ref immediately so subsequent calls don't re-clear unnecessarily.
       forceRequestRef.current = false;
@@ -248,6 +260,7 @@ export const useDashboardWebSocket = () => {
       curve_from: liveCurveFrom,
       curve_to: liveCurveTo,
       dataset_id: liveDatasetId,
+      segment_type: liveSegmentType,
       filters: {
         regular: liveRegularFilters,
         cp_filters: liveCpFilters,
@@ -270,6 +283,7 @@ export const useDashboardWebSocket = () => {
     };
     // Record the latest curve range so future requests detect changes.
     prevCurveRangeRef.current = { from: liveCurveFrom, to: liveCurveTo };
+    prevSegmentTypeRef.current = liveSegmentType;
     // Clear the manual refresh flag now that the request is enqueued.
     setForceRequest(false);
 
@@ -320,6 +334,7 @@ export const useDashboardWebSocket = () => {
       curve_from: liveState.curveFrom,
       curve_to: liveState.curveTo,
       dataset_id: liveDatasetId,
+      segment_type: liveState.selectedSegmentType || "segment0",
       filters: {
         regular: liveFilters.regular,
         cp_filters: liveFilters.cp_filters,
@@ -677,6 +692,10 @@ export const useDashboardWebSocket = () => {
     };
 
     socket.onclose = (event) => {
+      // Ignore close events from superseded sockets after resetAndReload().
+      if (socketRef.current !== socket) {
+        return;
+      }
       console.warn("WebSocket connection closed", event);
       setConnectionStatus("disconnected");
       // Reset both operation flags
@@ -694,6 +713,10 @@ export const useDashboardWebSocket = () => {
     console.log("sendCurveReq9")
 
     socket.onerror = (event) => {
+      // Ignore errors from superseded sockets after resetAndReload().
+      if (socketRef.current !== socket) {
+        return;
+      }
       console.error("WebSocket error:", event);
       setConnectionStatus("error");
       setLastSocketError("WebSocket error");

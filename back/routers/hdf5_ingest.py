@@ -44,6 +44,7 @@ from openers import get_opener
 from transform.transform import transform_data
 from storage.duckdb_storage import save_to_duckdb
 from db.datasets import create_dataset
+from file_types.hdf5 import read_tip_metadata_from_hdf5
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +152,9 @@ async def ingest(request: Request):
         "z_scale_to_m":       INGEST_Z_SCALE_TO_M,
         "force_scale_to_n":   INGEST_FORCE_SCALE_TO_N,
     }
+    # Prefer metadata embedded in the HDF5 tip group (barytech exports).
+    tip_metadata = read_tip_metadata_from_hdf5(resolved_path)
+    ingest_metadata.update({k: v for k, v in tip_metadata.items() if v is not None})
 
     try:
         hdf5_opener = get_opener("hdf5")
@@ -167,9 +171,13 @@ async def ingest(request: Request):
             name=Path(filename).stem,
             filename=resolved_path,
             num_curves=len(parsed_curves),
-            spring_constant=ingest_metadata["spring_constant"],
-            tip_radius=ingest_metadata["tip_radius"],
-            tip_geometry=ingest_metadata["tip_geometry"],
+            spring_constant=ingest_metadata.get("spring_constant"),
+            tip_radius=ingest_metadata.get("tip_radius"),
+            tip_geometry=ingest_metadata.get("tip_geometry"),
+            velocity=ingest_metadata.get("velocity"),
+            force_scale_to_n=ingest_metadata.get("force_scale_to_n"),
+            z_scale_to_m=ingest_metadata.get("z_scale_to_m"),
+            sensor_type=ingest_metadata.get("sensor_type"),
         )
         transformed_curves = transform_data(parsed_curves)
         save_to_duckdb(transformed_curves, dataset_id)

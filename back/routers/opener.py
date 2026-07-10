@@ -112,6 +112,30 @@ async def process_file_endpoint(data: Dict[str, Any], user=Depends(get_current_u
             force_scale_input = float(processed_metadata["force_scale_to_n"])
             processed_metadata["force_scale_to_n"] = force_scale_input
             logger.info(f"force_scale_to_n received: {force_scale_input:.6e} (Force will be multiplied by this to get Newtons)")
+        # Accept barytech folder export alias for force calibration metadata.
+        if "force_conversion_factor" in processed_metadata and processed_metadata["force_conversion_factor"] not in (None, ""):
+            force_scale_input = float(processed_metadata["force_conversion_factor"])
+            processed_metadata["force_scale_to_n"] = force_scale_input
+            logger.info(f"force_conversion_factor received: {force_scale_input:.6e} (mapped to force_scale_to_n)")
+        if "z_conversion_factor" in processed_metadata and processed_metadata["z_conversion_factor"] not in (None, ""):
+            z_scale_input = float(processed_metadata["z_conversion_factor"])
+            processed_metadata["z_scale_to_m"] = z_scale_input
+            logger.info(f"z_conversion_factor received: {z_scale_input:.6e} (mapped to z_scale_to_m)")
+        # Map barytech tip group geometry attribute to tip_geometry when present.
+        if processed_metadata.get("tip_geometry") in (None, "") and processed_metadata.get("geometry"):
+            processed_metadata["tip_geometry"] = str(processed_metadata["geometry"])
+        if processed_metadata.get("tip_radius") in (None, "") and processed_metadata.get("value") not in (None, ""):
+            tip_value = float(processed_metadata["value"])
+            tip_unit = str(processed_metadata.get("unit", "")).lower()
+            if tip_unit in ("um", "µm", "micrometer", "micrometers"):
+                processed_metadata["tip_radius"] = tip_value * 1e-6
+            elif tip_unit in ("mm", "millimeter", "millimeters"):
+                processed_metadata["tip_radius"] = tip_value * 1e-3
+            else:
+                processed_metadata["tip_radius"] = tip_value
+            logger.info(
+                f"tip radius inferred from value/unit attrs: {processed_metadata['tip_radius']:.6e} m"
+            )
 
         if not opener.validate_metadata(processed_metadata):
             errors.append("Invalid or incomplete metadata")
@@ -134,6 +158,10 @@ async def process_file_endpoint(data: Dict[str, Any], user=Depends(get_current_u
             tip_radius=processed_metadata.get("tip_radius"),
             tip_geometry=processed_metadata.get("tip_geometry"),
             tip_angle=processed_metadata.get("tip_angle"),
+            velocity=processed_metadata.get("velocity"),
+            force_scale_to_n=processed_metadata.get("force_scale_to_n"),
+            z_scale_to_m=processed_metadata.get("z_scale_to_m"),
+            sensor_type=processed_metadata.get("sensor_type"),
         )
         logger.info(f"Created dataset record with ID: {dataset_id}, name: {dataset_name}")
         logger.info(f"Created dataset record with ID: {dataset_id}")

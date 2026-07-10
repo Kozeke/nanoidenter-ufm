@@ -1,4 +1,8 @@
 """Shared DuckDB connection lifecycle for backend data access."""
+import os
+import shutil
+from datetime import datetime
+
 import duckdb
 from filters.register_all import register_filters
 from db.init_db import init_auth_tables
@@ -10,10 +14,40 @@ DB_PATH = "data/all.db"
 _conn_singleton = None
 
 
+def _wal_path_for_db(db_path: str) -> str:
+    """Return the DuckDB write-ahead log path for a database file."""
+    return f"{db_path}.wal"
+
+
+def _recover_corrupt_wal(db_path: str) -> bool:
+    """Rename a corrupt WAL so DuckDB can open from the last checkpoint."""
+    wal_path = _wal_path_for_db(db_path)
+    if not os.path.exists(wal_path):
+        return False
+    # Stores a timestamped backup path for the broken WAL file.
+    backup_path = f"{wal_path}.broken-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    shutil.move(wal_path, backup_path)
+    return True
+
+
+def _open_duckdb_connection(db_path: str) -> duckdb.DuckDBPyConnection:
+    """Open DuckDB, recovering once if WAL replay fails."""
+    try:
+        return duckdb.connect(db_path)
+    except duckdb.Error as open_error:
+        error_message = str(open_error).lower()
+        # Prevent crash when an interrupted migration or hard kill leaves a bad WAL.
+        if "wal" not in error_message and "replay" not in error_message:
+            raise
+        if not _recover_corrupt_wal(db_path):
+            raise
+        return duckdb.connect(db_path)
+
+
 # Creates and initializes a new DuckDB connection with schema/bootstrap hooks.
 def _create_initialized_connection() -> duckdb.DuckDBPyConnection:
     # Stores the newly opened DuckDB connection.
-    new_connection = duckdb.connect(DB_PATH)
+    new_connection = _open_duckdb_connection(DB_PATH)
     register_filters(new_connection)
     init_cache_tables(new_connection)
     init_auth_tables(new_connection)

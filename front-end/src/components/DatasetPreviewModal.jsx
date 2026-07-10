@@ -2,6 +2,11 @@
 import { useEffect, useState } from "react";
 import { getDataset, updateDatasetMetadata } from "../api/datasets";
 import { useAuthStore } from "../state/useAuthStore";
+import {
+  DATASET_METADATA_FIELDS,
+  formValuesToMetadataPayload,
+  metadataToFormValues,
+} from "../config/datasetMetadataFields";
 
 // Renders a modal with dataset summary and metadata details.
 export default function DatasetPreviewModal({ id, onClose, onOpen }) {
@@ -14,11 +19,9 @@ export default function DatasetPreviewModal({ id, onClose, onOpen }) {
   // Stores error text when dataset preview loading fails.
   const [error, setError] = useState(null);
   // Stores editable metadata form values shown inside the preview modal.
-  const [editableMetadata, setEditableMetadata] = useState({
-    spring_constant: "",
-    tip_radius: "",
-    tip_geometry: "",
-  });
+  const [editableMetadata, setEditableMetadata] = useState(
+    metadataToFormValues({})
+  );
   // Tracks save state while metadata updates are being sent to backend.
   const [savingMetadata, setSavingMetadata] = useState(false);
   // Stores metadata-specific validation or request errors.
@@ -41,17 +44,7 @@ export default function DatasetPreviewModal({ id, onClose, onOpen }) {
         const data = await getDataset(token, id);
         if (mounted) {
           setDataset(data);
-          setEditableMetadata({
-            spring_constant:
-              data?.metadata?.spring_constant == null
-                ? ""
-                : String(data.metadata.spring_constant),
-            tip_radius:
-              data?.metadata?.tip_radius == null
-                ? ""
-                : String(data.metadata.tip_radius),
-            tip_geometry: data?.metadata?.tip_geometry || "",
-          });
+          setEditableMetadata(metadataToFormValues(data?.metadata || {}));
           setMetadataError("");
           setMetadataSuccess("");
         }
@@ -78,50 +71,33 @@ export default function DatasetPreviewModal({ id, onClose, onOpen }) {
     setMetadataSuccess("");
   };
 
+  // Validates numeric metadata inputs before sending the save request.
+  const validateMetadataForm = () => {
+    for (const { key, label, inputType } of DATASET_METADATA_FIELDS) {
+      if (inputType !== "number") continue;
+      const raw = editableMetadata[key];
+      if (raw === "" || raw == null) continue;
+      if (Number.isNaN(Number(raw))) {
+        return `${label} must be a valid number.`;
+      }
+    }
+    return "";
+  };
+
   // Persists edited metadata values to backend and refreshes local modal data.
   const handleSaveMetadata = async () => {
     if (!dataset || !token) return;
-    // Stores request payload with only changed metadata fields.
-    const payload = {};
 
-    // Stores normalized spring constant input used for numeric validation.
-    const normalizedSpringConstant = editableMetadata.spring_constant.trim();
-    // Stores normalized tip radius input used for numeric validation.
-    const normalizedTipRadius = editableMetadata.tip_radius.trim();
-    // Stores normalized tip geometry input used for change detection.
-    const normalizedTipGeometry = editableMetadata.tip_geometry.trim();
-
-    if (
-      normalizedSpringConstant !== "" &&
-      Number.isNaN(Number(normalizedSpringConstant))
-    ) {
-      setMetadataError("Spring constant must be a valid number.");
-      return;
-    }
-    if (normalizedTipRadius !== "" && Number.isNaN(Number(normalizedTipRadius))) {
-      setMetadataError("Tip radius must be a valid number.");
+    const validationError = validateMetadataForm();
+    if (validationError) {
+      setMetadataError(validationError);
       return;
     }
 
-    // Stores current spring constant for change detection before save.
-    const currentSpringConstant = dataset?.metadata?.spring_constant;
-    // Stores current tip radius for change detection before save.
-    const currentTipRadius = dataset?.metadata?.tip_radius;
-    // Stores current tip geometry for change detection before save.
-    const currentTipGeometry = dataset?.metadata?.tip_geometry || "";
-
-    if (
-      normalizedSpringConstant !== "" &&
-      Number(normalizedSpringConstant) !== currentSpringConstant
-    ) {
-      payload.spring_constant = Number(normalizedSpringConstant);
-    }
-    if (normalizedTipRadius !== "" && Number(normalizedTipRadius) !== currentTipRadius) {
-      payload.tip_radius = Number(normalizedTipRadius);
-    }
-    if (normalizedTipGeometry !== currentTipGeometry) {
-      payload.tip_geometry = normalizedTipGeometry;
-    }
+    const payload = formValuesToMetadataPayload(
+      editableMetadata,
+      dataset?.metadata || {}
+    );
 
     if (Object.keys(payload).length === 0) {
       setMetadataSuccess("No metadata changes to save.");
@@ -136,17 +112,7 @@ export default function DatasetPreviewModal({ id, onClose, onOpen }) {
       const response = await updateDatasetMetadata(token, dataset.id, payload);
       if (response?.dataset) {
         setDataset(response.dataset);
-        setEditableMetadata({
-          spring_constant:
-            response.dataset?.metadata?.spring_constant == null
-              ? ""
-              : String(response.dataset.metadata.spring_constant),
-          tip_radius:
-            response.dataset?.metadata?.tip_radius == null
-              ? ""
-              : String(response.dataset.metadata.tip_radius),
-          tip_geometry: response.dataset?.metadata?.tip_geometry || "",
-        });
+        setEditableMetadata(metadataToFormValues(response.dataset?.metadata || {}));
       }
       setMetadataSuccess("Metadata saved.");
     } catch (requestError) {
@@ -239,38 +205,33 @@ function MetadataEditor({
     <div style={metadataBlockStyle}>
       <div style={infoLabelStyle}>Metadata</div>
       <div style={metadataFieldsStyle}>
-        <label style={metadataFieldLabelStyle}>
-          Spring Constant
-          <input
-            style={metadataInputStyle}
-            value={editableMetadata.spring_constant}
-            onChange={(event) => onChange("spring_constant", event.target.value)}
-            placeholder="e.g. 0.25"
-          />
-        </label>
-        <label style={metadataFieldLabelStyle}>
-          Tip Radius
-          <input
-            style={metadataInputStyle}
-            value={editableMetadata.tip_radius}
-            onChange={(event) => onChange("tip_radius", event.target.value)}
-            placeholder="e.g. 1e-8"
-          />
-        </label>
-        <label style={metadataFieldLabelStyle}>
-          Tip Geometry
-          <select
-            style={metadataInputStyle}
-            value={editableMetadata.tip_geometry}
-            onChange={(event) => onChange("tip_geometry", event.target.value)}
-          >
-            <option value="">Select geometry</option>
-            <option value="cone">cone</option>
-            <option value="sphere">sphere</option>
-            <option value="cylinder">cylinder</option>
-            <option value="pyramid">pyramid</option>
-          </select>
-        </label>
+        {DATASET_METADATA_FIELDS.map(({ key, label, inputType, options }) => (
+          <label key={key} style={metadataFieldLabelStyle}>
+            {label}
+            {inputType === "select" ? (
+              <select
+                style={metadataInputStyle}
+                value={editableMetadata[key] ?? ""}
+                onChange={(event) => onChange(key, event.target.value)}
+              >
+                <option value="">Select geometry</option>
+                {(options || []).map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                style={metadataInputStyle}
+                type={inputType === "number" ? "number" : "text"}
+                value={editableMetadata[key] ?? ""}
+                onChange={(event) => onChange(key, event.target.value)}
+                placeholder="—"
+              />
+            )}
+          </label>
+        ))}
         <div style={metadataActionsStyle}>
           <button
             style={{

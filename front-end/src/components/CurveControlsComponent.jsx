@@ -34,6 +34,12 @@ const CurveControlsComponent = ({
   onApplyChangesShortcut,
   // Disable curve controls when socket is down
   isSocketConnected,
+  // Active HDF5 segment filter (segment0=indent, segment1=retract).
+  selectedSegmentType,
+  // Updates the segment filter and triggers a curve reload.
+  onSegmentTypeChange,
+  // Segment types present in the imported dataset metadata.
+  availableSegmentTypes,
 }) => {
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
 
@@ -49,11 +55,28 @@ const CurveControlsComponent = ({
 
   useEffect(() => { setCurveIdInput(curveId ?? ""); }, [curveId]);
   useEffect(() => { setCurveFromInput(String(curveFrom ?? 0)); }, [curveFrom]);
-  useEffect(() => { setCurveToInput(String(curveTo ?? 10)); }, [curveTo]);  useEffect(() => {
+  useEffect(() => { setCurveToInput(String(curveTo ?? 10)); }, [curveTo]);
+
+  useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, []);  const isMobile = windowWidth < 768;
+  }, []);
+
+  const isMobile = windowWidth < 768;
+
+  // Builds segment dropdown options from metadata, always including indent/retract labels.
+  const segmentOptions = [
+    { value: "segment0", label: "Indent", enabled: true },
+    {
+      value: "segment1",
+      label: "Retract",
+      enabled:
+        !availableSegmentTypes ||
+        availableSegmentTypes.length === 0 ||
+        availableSegmentTypes.includes("segment1"),
+    },
+  ];
 
   // --- Unified toolbar/card look (matches Dashboard/Filters) ---
   const toolbarCardStyle = {
@@ -349,6 +372,29 @@ setSelectedCurveIds((prev) => {
                   />
                 </Box>
               </Box>
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
+
+      {/* Segment selector */}
+      <FormControl style={formControlStyle}>
+        <InputLabel id="segment-select-label" style={inputLabelStyle}>
+          Segment
+        </InputLabel>
+        <Select
+          labelId="segment-select-label"
+          value={selectedSegmentType || "segment0"}
+          onChange={(event) => onSegmentTypeChange?.(event.target.value)}
+          style={{ ...selectStyle, minWidth: isMobile ? "100%" : 140 }}
+        >
+          {segmentOptions.map((option) => (
+            <MenuItem
+              key={option.value}
+              value={option.value}
+              disabled={!option.enabled}
+            >
+              {option.label}
             </MenuItem>
           ))}
         </Select>

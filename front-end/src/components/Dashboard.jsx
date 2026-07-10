@@ -67,6 +67,10 @@ const Dashboard = () => {
     setCurveFrom,
     // Updates the end of the curve range.
     setCurveTo,
+    // Selected HDF5 segment for curve queries.
+    selectedSegmentType,
+    // Updates the active segment filter.
+    setSelectedSegmentType,
     // Stores the current dataset ID from the most recently loaded file.
     datasetId,
     // Updates the dataset ID when a new file is loaded.
@@ -441,7 +445,18 @@ const Dashboard = () => {
 
   const handleCurveFromChange = (value) => setCurveFrom(value);
   // Updates the dashboard's curve-to value from curve controls interactions.
-  const handleCurveToChange = (value) => setCurveTo(value); const [windowWidth, setWindowWidth] = useState(window.innerWidth);  // Update window width on resize
+  const handleCurveToChange = (value) => setCurveTo(value);
+
+  // Switches between indent (segment0) and retract (segment1) curve data.
+  const handleSegmentTypeChange = useCallback(
+    (segmentType) => {
+      setSelectedSegmentType(segmentType);
+      sendCurveRequest();
+    },
+    [setSelectedSegmentType, sendCurveRequest]
+  );
+
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   // Applies the same behavior as the Update Curves action button.
   const handleApplyCurveUpdatesShortcut = useCallback(() => {
     // Sends a curve refresh request whenever shortcut updates are applied.
@@ -1509,6 +1524,9 @@ const Dashboard = () => {
              onApplyChangesShortcut={handleApplyCurveUpdatesShortcut}
              // Disable curve controls when socket is down
              isSocketConnected={isWebSocketConnected}
+             selectedSegmentType={selectedSegmentType}
+             onSegmentTypeChange={handleSegmentTypeChange}
+             availableSegmentTypes={metadataObject?.available_segment_types}
         />
       </div>
     </div>

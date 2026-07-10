@@ -5,7 +5,7 @@ import numpy as np
 from models.force_curve import ForceCurve, Segment
 import logging
 import os
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import duckdb
 
 def get_hdf5_structure(file_path: str) -> Dict[str, Any]:
@@ -73,6 +73,51 @@ def get_hdf5_structure(file_path: str) -> Dict[str, Any]:
     return structure
 
 
+def read_tip_metadata_from_hdf5(file_path: str) -> Dict[str, Any]:
+    """Read experiment metadata from the first curve/tip group in an HDF5 file."""
+    # Stores normalized metadata extracted from tip group attributes.
+    extracted: Dict[str, Any] = {}
+    try:
+        with h5py.File(file_path, "r") as hdf5_file:
+            for curve_name, curve_group in hdf5_file.items():
+                if not isinstance(curve_group, h5py.Group):
+                    continue
+                tip_group = curve_group.get("tip")
+                if tip_group is None or not isinstance(tip_group, h5py.Group):
+                    continue
+                for attr_name, attr_value in tip_group.attrs.items():
+                    if isinstance(attr_value, bytes):
+                        attr_value = attr_value.decode("utf-8")
+                    elif isinstance(attr_value, (np.integer, np.floating)):
+                        attr_value = float(attr_value) if isinstance(attr_value, np.floating) else int(attr_value)
+                    extracted[str(attr_name)] = attr_value
+                break
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Failed to read tip metadata from %s: %s", file_path, exc
+        )
+        return {}
+
+    # Maps barytech tip attrs to canonical metadata keys used by the ingest pipeline.
+    if extracted.get("geometry") and not extracted.get("tip_geometry"):
+        extracted["tip_geometry"] = str(extracted["geometry"])
+    if extracted.get("value") is not None and extracted.get("tip_radius") in (None, ""):
+        tip_value = float(extracted["value"])
+        tip_unit = str(extracted.get("unit", "")).lower()
+        if tip_unit in ("um", "µm", "micrometer", "micrometers"):
+            extracted["tip_radius"] = tip_value * 1e-6
+        elif tip_unit in ("mm", "millimeter", "millimeters"):
+            extracted["tip_radius"] = tip_value * 1e-3
+        else:
+            extracted["tip_radius"] = tip_value
+    if extracted.get("force_conversion_factor") is not None and extracted.get("force_scale_to_n") in (None, ""):
+        extracted["force_scale_to_n"] = float(extracted["force_conversion_factor"])
+    if extracted.get("z_conversion_factor") is not None and extracted.get("z_scale_to_m") in (None, ""):
+        extracted["z_scale_to_m"] = float(extracted["z_conversion_factor"])
+
+    return extracted
+
+
 
 # Configure logging
 logging.basicConfig(
@@ -93,6 +138,118 @@ def validate_dataset(dataset: h5py.Dataset, path: str) -> None:
         raise ValueError(f"Dataset {path} is empty")
     if len(dataset.shape) != 1:
         raise ValueError(f"Dataset {path} must be 1D, got shape {dataset.shape}")
+
+
+# Minimum number of points required to keep an imported segment.
+MIN_SEGMENT_POINTS = 20
+
+# Barytech-style HDF5 layout: indent in segment0, retract in segment1.
+BARYTECH_SEGMENT_SPECS = (
+    ("segment0", "segment0/Force", "segment0/Z", False),
+    ("segment1", "segment1/Force", "segment1/Z", False),
+)
+
+
+def _resolve_hdf5_node(group: h5py.Group, relative_path: str):
+    """Walk a slash-separated HDF5 path under one curve group."""
+    node = group
+    for part in relative_path.split("/"):
+        node = node[part]
+    return node
+
+
+def _infer_segment_type(force_relative_path: str, z_relative_path: str) -> str:
+    """Infer segment type from legacy user-selected dataset paths."""
+    combined = f"{force_relative_path}/{z_relative_path}".lower()
+    if "segment1" in combined or "retract" in combined:
+        return "segment1"
+    if "segment0" in combined or "approach" in combined or "indent" in combined:
+        return "segment0"
+    return "approach"
+
+
+def _clean_segment_arrays(
+    z_sensor: np.ndarray,
+    deflection: np.ndarray,
+    apply_approach_trim: bool,
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """Normalize one segment's Z/Force arrays for DuckDB storage."""
+    keep = np.isfinite(z_sensor) & np.isfinite(deflection)
+    z_sensor = z_sensor[keep]
+    deflection = deflection[keep]
+
+    if len(z_sensor) < MIN_SEGMENT_POINTS:
+        return None
+
+    if apply_approach_trim:
+        end_idx = int(np.argmax(z_sensor))
+        if end_idx > 0:
+            z_sensor = z_sensor[: end_idx + 1]
+            deflection = deflection[: end_idx + 1]
+        if len(z_sensor) < MIN_SEGMENT_POINTS:
+            return None
+
+    order = np.argsort(z_sensor)
+    z_sensor = z_sensor[order]
+    deflection = deflection[order]
+
+    z_sensor, unique_idx = np.unique(z_sensor, return_index=True)
+    deflection = deflection[unique_idx]
+
+    if len(z_sensor) < MIN_SEGMENT_POINTS:
+        return None
+
+    return z_sensor, deflection
+
+
+def _load_segment_from_relative_paths(
+    curve_group: h5py.Group,
+    segment_type: str,
+    force_relative_path: str,
+    z_relative_path: str,
+    validated_metadata: Dict[str, Any],
+    apply_approach_trim: bool,
+) -> Optional[Segment]:
+    """Load one Force/Z pair from a curve group and return a cleaned Segment."""
+    try:
+        force_dataset = _resolve_hdf5_node(curve_group, force_relative_path)
+        z_dataset = _resolve_hdf5_node(curve_group, z_relative_path)
+        validate_dataset(force_dataset, force_relative_path)
+        validate_dataset(z_dataset, z_relative_path)
+    except KeyError:
+        return None
+
+    deflection = np.array(force_dataset[()])
+    z_sensor = np.array(z_dataset[()])
+
+    z_scale_to_m = float(validated_metadata.get("z_scale_to_m", 1.0) or 1.0)
+    # force_scale_to_n = float(validated_metadata.get("force_scale_to_n", 1.0) or 1.0)
+    if z_scale_to_m != 1.0:
+        z_sensor = z_sensor * z_scale_to_m
+    # Disabled: barytech HDF5 export already negates force in _export_force_value,
+    # so multiplying by force_scale_to_n here (especially negative values) would
+    # flip the sign a second time during FileOpener ingestion.
+    # if force_scale_to_n != 1.0:
+    #     deflection = deflection * force_scale_to_n
+
+    cleaned = _clean_segment_arrays(z_sensor, deflection, apply_approach_trim)
+    if cleaned is None:
+        return None
+
+    z_sensor, deflection = cleaned
+    if not all(np.isfinite(deflection)) or not all(np.isfinite(z_sensor)):
+        return None
+
+    point_count = len(z_sensor)
+    return Segment(
+        type=segment_type,
+        deflection=deflection,
+        z_sensor=z_sensor,
+        sampling_rate=float(validated_metadata.get("sampling_rate", 1e5)),
+        velocity=float(validated_metadata.get("velocity", 1e-6)),
+        no_points=point_count,
+    )
+
 
 def process_hdf5(file_path: str, force_path: str, z_path: str, metadata: Dict[str, Any]) -> Dict[str, ForceCurve]:
     """Process all curves in HDF5 file with validation and error handling."""
@@ -120,100 +277,42 @@ def process_hdf5(file_path: str, force_path: str, z_path: str, metadata: Dict[st
             z_relative_path = z_path[len(sample_curve_name) + 1:]
             logger.info(f"Using relative paths: Force={force_relative_path}, Z={z_relative_path}")
 
-            # Process each curve
+            # Process each curve group and import segment0/segment1 when present.
             for curve_name, curve_group in curve_groups:
                 try:
-                    # Validate datasets
-                    force_dataset = curve_group[force_relative_path]
-                    z_dataset = curve_group[z_relative_path]
-                    validate_dataset(force_dataset, force_path)
-                    validate_dataset(z_dataset, z_path)
-
-                    # Validate data compatibility
-                    deflection = np.array(force_dataset[()])
-                    z_sensor = np.array(z_dataset[()])
-                    min_length = min(len(deflection), len(z_sensor))
-                    if min_length == 0:
-                        logger.warning(f"Skipping {curve_name}: Empty Force or Z data")
-                        continue
-
-                    # Validate metadata
                     validated_metadata = validate_and_fill_metadata(metadata, curve_name)
+                    if validated_metadata.get("tip_geometry") in (None, "") and validated_metadata.get("geometry"):
+                        validated_metadata["tip_geometry"] = str(validated_metadata["geometry"])
 
-                    # Convert raw instrument units to SI (meters, Newtons) here, once,
-                    # at ingestion — every downstream consumer (filters, contact-point
-                    # detection, Hertz/other fmodels, the LinearWindowFit K fit) then
-                    # sees correctly-scaled values with no further conversion needed.
-                    # Defaults of 1.0 are a no-op for instruments that already export SI.
-                    z_scale_to_m = float(validated_metadata.get("z_scale_to_m", 1.0) or 1.0)
-                    force_scale_to_n = float(validated_metadata.get("force_scale_to_n", 1.0) or 1.0)
-                    if z_scale_to_m != 1.0:
-                        z_sensor = z_sensor * z_scale_to_m
-                    if force_scale_to_n != 1.0:
-                        deflection = deflection * force_scale_to_n
-
-                    # ── Approach-segment isolation ──────────────────────────
-                    # Mirrors the reference script's prepare_for_analysis():
-                    #   1. Drop non-finite pairs
-                    #   2. Keep only the loading (approach) portion up to the
-                    #      point of maximum Z — everything after that is
-                    #      retraction, which has different force values at the
-                    #      same Z (hysteresis) and would bias downstream fits.
-                    #   3. Sort by Z so smoothing/fitting see a monotonically
-                    #      increasing sequence.
-                    #   4. Remove duplicate Z values to prevent degenerate
-                    #      polyfit behavior.
-                    MIN_POINTS = 20
-
-                    # 1. Drop non-finite
-                    keep = np.isfinite(z_sensor) & np.isfinite(deflection)
-                    z_sensor = z_sensor[keep]
-                    deflection = deflection[keep]
-
-                    if len(z_sensor) < MIN_POINTS:
-                        logger.warning(f"Skipping {curve_name}: only {len(z_sensor)} finite points (need {MIN_POINTS})")
-                        continue
-
-                    # 2. Cut at argmax(Z) — approach only
-                    end_idx = int(np.argmax(z_sensor))
-                    if end_idx > 0:  # guard against all-equal Z
-                        z_sensor = z_sensor[:end_idx + 1]
-                        deflection = deflection[:end_idx + 1]
-
-                    if len(z_sensor) < MIN_POINTS:
-                        logger.warning(f"Skipping {curve_name}: only {len(z_sensor)} points after approach trim (need {MIN_POINTS})")
-                        continue
-
-                    # 3. Sort by Z
-                    order = np.argsort(z_sensor)
-                    z_sensor = z_sensor[order]
-                    deflection = deflection[order]
-
-                    # 4. Remove duplicate Z values
-                    z_sensor, unique_idx = np.unique(z_sensor, return_index=True)
-                    deflection = deflection[unique_idx]
-
-                    if len(z_sensor) < MIN_POINTS:
-                        logger.warning(f"Skipping {curve_name}: only {len(z_sensor)} points after dedup (need {MIN_POINTS})")
-                        continue
-
-                    min_length = len(z_sensor)  # update after trimming
-
-                    # Create segment
-                    segments = [
-                        Segment(
-                            type="approach",
-                            deflection=deflection[:min_length],
-                            z_sensor=z_sensor[:min_length],
-                            sampling_rate=float(validated_metadata.get("sampling_rate", 1e5)),
-                            velocity=float(validated_metadata.get("velocity", 1e-6)),
-                            no_points=min_length
+                    segments: List[Segment] = []
+                    for segment_type, force_rel, z_rel, apply_trim in BARYTECH_SEGMENT_SPECS:
+                        segment = _load_segment_from_relative_paths(
+                            curve_group,
+                            segment_type,
+                            force_rel,
+                            z_rel,
+                            validated_metadata,
+                            apply_trim,
                         )
-                    ]
+                        if segment is not None:
+                            segments.append(segment)
 
-                    # Validate segment data
-                    if not all(np.isfinite(segments[0].deflection)) or not all(np.isfinite(segments[0].z_sensor)):
-                        logger.warning(f"Skipping {curve_name}: Invalid data (non-finite values)")
+                    if not segments:
+                        legacy_segment_type = _infer_segment_type(force_relative_path, z_relative_path)
+                        legacy_trim = legacy_segment_type in ("approach", "segment0")
+                        legacy_segment = _load_segment_from_relative_paths(
+                            curve_group,
+                            legacy_segment_type,
+                            force_relative_path,
+                            z_relative_path,
+                            validated_metadata,
+                            legacy_trim,
+                        )
+                        if legacy_segment is not None:
+                            segments.append(legacy_segment)
+
+                    if not segments:
+                        logger.warning(f"Skipping {curve_name}: no valid segment data found")
                         continue
 
                     curves[curve_name] = ForceCurve(
@@ -225,9 +324,12 @@ def process_hdf5(file_path: str, force_path: str, z_path: str, metadata: Dict[st
                         inv_ols=float(validated_metadata["inv_ols"]),
                         tip_geometry=validated_metadata["tip_geometry"],
                         tip_radius=float(validated_metadata["tip_radius"]),
-                        segments=segments
+                        segments=segments,
                     )
-                    logger.info(f"Processed curve: {curve_name}")
+                    logger.info(
+                        f"Processed curve {curve_name} with segments: "
+                        f"{[segment.type for segment in segments]}"
+                    )
                 except KeyError as e:
                     logger.warning(f"Skipping {curve_name} due to missing dataset: {e}")
                     continue

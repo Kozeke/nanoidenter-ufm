@@ -17,6 +17,10 @@ def create_dataset(
     tip_radius: Optional[float] = None,
     tip_geometry: Optional[str] = None,
     tip_angle: Optional[float] = None,
+    velocity: Optional[float] = None,
+    force_scale_to_n: Optional[float] = None,
+    z_scale_to_m: Optional[float] = None,
+    sensor_type: Optional[str] = None,
 ) -> int:
     """
     Always creates a new dataset record and returns its ID.
@@ -43,9 +47,10 @@ def create_dataset(
         """
         INSERT INTO datasets (
             id, name, description, filename, file_hash, user_id,
-            num_curves, spring_constant, tip_radius, tip_geometry, tip_angle
+            num_curves, spring_constant, tip_radius, tip_geometry, tip_angle,
+            velocity, force_scale_to_n, z_scale_to_m, sensor_type
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             dataset_id,
@@ -59,6 +64,10 @@ def create_dataset(
             tip_radius,
             tip_geometry,
             tip_angle,
+            velocity,
+            force_scale_to_n,
+            z_scale_to_m,
+            sensor_type,
         ),
     )
 
@@ -73,7 +82,8 @@ def get_dataset(dataset_id: int) -> Optional[dict]:
         """
         SELECT id, name, description, filename, file_hash, user_id,
                created_at, updated_at, last_accessed_at, num_curves, spring_constant,
-               tip_radius, tip_geometry, tip_angle
+               tip_radius, tip_geometry, tip_angle,
+               velocity, force_scale_to_n, z_scale_to_m, sensor_type
         FROM datasets
         WHERE id = ?
         """,
@@ -98,6 +108,10 @@ def get_dataset(dataset_id: int) -> Optional[dict]:
         "tip_radius": row[11],
         "tip_geometry": row[12],
         "tip_angle": row[13],
+        "velocity": row[14],
+        "force_scale_to_n": row[15],
+        "z_scale_to_m": row[16],
+        "sensor_type": row[17],
     }
 
 
@@ -109,6 +123,10 @@ def update_dataset(
     tip_radius: Optional[float] = None,
     tip_geometry: Optional[str] = None,
     tip_angle: Optional[float] = None,
+    velocity: Optional[float] = None,
+    force_scale_to_n: Optional[float] = None,
+    z_scale_to_m: Optional[float] = None,
+    sensor_type: Optional[str] = None,
 ) -> bool:
     """Update dataset metadata."""
     conn = get_conn()
@@ -134,6 +152,18 @@ def update_dataset(
     if tip_angle is not None:
         updates.append("tip_angle = ?")
         params.append(tip_angle)
+    if velocity is not None:
+        updates.append("velocity = ?")
+        params.append(velocity)
+    if force_scale_to_n is not None:
+        updates.append("force_scale_to_n = ?")
+        params.append(force_scale_to_n)
+    if z_scale_to_m is not None:
+        updates.append("z_scale_to_m = ?")
+        params.append(z_scale_to_m)
+    if sensor_type is not None:
+        updates.append("sensor_type = ?")
+        params.append(sensor_type)
     
     if not updates:
         return False
@@ -165,6 +195,10 @@ def list_datasets_for_user(user_id: int) -> List[dict]:
             tip_radius,
             tip_geometry,
             tip_angle,
+            velocity,
+            force_scale_to_n,
+            z_scale_to_m,
+            sensor_type,
             created_at
         FROM datasets
         WHERE user_id = ?
@@ -185,12 +219,16 @@ def list_datasets_for_user(user_id: int) -> List[dict]:
                 "filename": row[2],
                 "format": file_format,
                 "length": row[3] if row[3] is not None else 0,
-                "created_at": row[8],
+                "created_at": row[12],
                 "metadata": {
                     "spring_constant": row[4],
                     "tip_radius": row[5],
                     "tip_geometry": row[6],
                     "tip_angle": row[7],
+                    "velocity": row[8],
+                    "force_scale_to_n": row[9],
+                    "z_scale_to_m": row[10],
+                    "sensor_type": row[11],
                 },
             }
         )
@@ -216,6 +254,10 @@ def get_dataset_for_user(dataset_id: int, user_id: int) -> Optional[dict]:
             tip_radius,
             tip_geometry,
             tip_angle,
+            velocity,
+            force_scale_to_n,
+            z_scale_to_m,
+            sensor_type,
             created_at,
             last_accessed_at
         FROM datasets
@@ -237,13 +279,17 @@ def get_dataset_for_user(dataset_id: int, user_id: int) -> Optional[dict]:
         "filename": row[3],
         "format": file_format,
         "length": row[4] if row[4] is not None else 0,
-        "created_at": row[9],
-        "last_accessed_at": row[10],
+        "created_at": row[13],
+        "last_accessed_at": row[14],
         "metadata": {
             "spring_constant": row[5],
             "tip_radius": row[6],
             "tip_geometry": row[7],
             "tip_angle": row[8],
+            "velocity": row[9],
+            "force_scale_to_n": row[10],
+            "z_scale_to_m": row[11],
+            "sensor_type": row[12],
         },
     }
 
@@ -316,6 +362,10 @@ def update_dataset_metadata_for_user(
     tip_radius: Optional[float] = None,
     tip_geometry: Optional[str] = None,
     tip_angle: Optional[float] = None,
+    velocity: Optional[float] = None,
+    force_scale_to_n: Optional[float] = None,
+    z_scale_to_m: Optional[float] = None,
+    sensor_type: Optional[str] = None,
 ) -> Tuple[bool, str]:
     # Stores shared DB connection for ownership checks and update operations.
     conn = get_conn()
@@ -349,6 +399,18 @@ def update_dataset_metadata_for_user(
     if tip_angle is not None:
         update_parts.append("tip_angle = ?")
         query_params.append(tip_angle)
+    if velocity is not None:
+        update_parts.append("velocity = ?")
+        query_params.append(velocity)
+    if force_scale_to_n is not None:
+        update_parts.append("force_scale_to_n = ?")
+        query_params.append(force_scale_to_n)
+    if z_scale_to_m is not None:
+        update_parts.append("z_scale_to_m = ?")
+        query_params.append(z_scale_to_m)
+    if sensor_type is not None:
+        update_parts.append("sensor_type = ?")
+        query_params.append(sensor_type)
 
     if not update_parts:
         return False, "No metadata fields provided for update"

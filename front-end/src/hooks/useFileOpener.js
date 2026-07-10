@@ -1,6 +1,12 @@
 // Manages file opening workflow, validation, and metadata entry for experiment files (JSON, HDF5, CSV, TXT).
 import { useState, useEffect, useCallback } from 'react';
 import { useAuthStore } from '../state/useAuthStore';
+import {
+  applyDisplayValueToMetadata,
+  buildInitialMetadata,
+  getGroupAttributes,
+  normalizeTipAttributes,
+} from '../config/fileOpenerMetadata';
 
 // Defines validation rules for metadata fields to ensure data integrity.
 const metadataValidationRules = {
@@ -53,6 +59,22 @@ const metadataValidationRules = {
     type: 'number',
     nonzero: true,
   },
+  velocity: {
+    required: 'number',
+    label: 'Velocity (µm/s)',
+    type: 'number',
+    min: 0,
+  },
+  sensor_type: {
+    required: 'boolean',
+    label: 'Sensor type',
+    type: 'text',
+  },
+  geometry: {
+    required: 'boolean',
+    label: 'Geometry',
+    type: 'text',
+  },
 };
 
 // Active validation rules used during file processing workflow.
@@ -66,9 +88,19 @@ const activeValidationRules = {
   // Unit-conversion factors surfaced in the metadata step so they can be set per file.
   z_scale_to_m: metadataValidationRules.z_scale_to_m,
   force_scale_to_n: metadataValidationRules.force_scale_to_n,
+  velocity: metadataValidationRules.velocity,
+  sensor_type: metadataValidationRules.sensor_type,
+  geometry: metadataValidationRules.geometry,
 };
 
 // --- helpers that don't depend on React state ---
+
+// Detects empty metadata values while allowing numeric zero as valid input.
+const isEmptyMetadataValue = (value) => {
+  if (value == null) return true;
+  if (typeof value === 'string' && value.trim() === '') return true;
+  return false;
+};
 
 // Converts flat file structure (CSV/TXT) into a normalized group structure for consistent processing.
 const getFakeGroupForFlatFile = (struct) => {
@@ -120,6 +152,28 @@ const navigateToFirstSegment = (initialGroup, initialPath = []) => {
     path = [...path, firstSegment];
   }
   return { group, path };
+};
+
+// Navigates to the default HDF5 metadata location (curve0/tip) with sensible fallbacks.
+const navigateToDefaultMetadataLocation = (structure) => {
+  if (structure?.groups?.curve0?.groups?.tip) {
+    return {
+      group: structure.groups.curve0.groups.tip,
+      path: ['curve0', 'tip'],
+    };
+  }
+
+  const curveKeys = Object.keys(structure?.groups || {}).filter(
+    (key) => key !== 'datasets' && key !== 'attributes'
+  );
+  for (const curveKey of curveKeys) {
+    const tipGroup = structure.groups[curveKey]?.groups?.tip;
+    if (tipGroup) {
+      return { group: tipGroup, path: [curveKey, 'tip'] };
+    }
+  }
+
+  return navigateToFirstSegment(structure);
 };
 
 export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
@@ -174,7 +228,7 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
     const newErrors = [];
     Object.entries(metadata).forEach(([key, value]) => {
       const rule = activeValidationRules[key] || { required: false, label: key };
-      if (rule.required && (!value || value.toString().trim() === '')) {
+      if (rule.required && isEmptyMetadataValue(value)) {
         newErrors.push(`${rule.label} is required`);
       }
       if (rule.type === 'number' && value) {
@@ -390,20 +444,14 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
 
       let group = structure;
       try {
-        if (group.groups?.curve0?.groups?.segment0) {
-          newGroup = group.groups.curve0.groups.segment0;
-          newPath = ['curve0', 'segment0'];
-        } else {
-          const { group: fallbackGroup, path: fallbackPath } = navigateToFirstSegment(structure);
-          newGroup = fallbackGroup;
-          newPath = fallbackPath;
-        }
-        setCurrentGroup(newGroup);
-        setNavigationPath(newPath);
+        const { group: metadataGroup, path: metadataPath } =
+          navigateToDefaultMetadataLocation(group);
+        setCurrentGroup(metadataGroup);
+        setNavigationPath(metadataPath);
         setStep(2);
       } catch {
-        // Prevent crash if navigation to segment0 fails
-        setErrors(['Failed to navigate to segment0 for metadata selection']);
+        // Prevent crash if navigation to default metadata location fails
+        setErrors(['Failed to navigate to curve0/tip for metadata selection']);
         setCurrentGroup(structure);
         setNavigationPath([]);
         setStep(2);
@@ -431,28 +479,12 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
           attributes = dataset.attributes || {};
         }
 
-        // Initializes metadata object with empty values for all required fields.
-        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+        const initializedMetadata = buildInitialMetadata(filePath);
 
-        const initializedMetadata = Object.keys(activeValidationRules).reduce((acc, key) => {
-          if (key === 'date') {
-            acc[key] = today;
-          } else if (key === 'file_id' && filePath) {
-            // Auto-populate file_id with filename from file path
-            acc[key] = filePath.split('/').pop() || filePath.split('\\').pop() || filePath;
-          } else if (key === 'z_scale_to_m') {
-            // Default Z conversion: raw values in mm -> meters (x 1e-3). Editable per file.
-            acc[key] = 1e-3;
-          } else if (key === 'force_scale_to_n') {
-            // Default Force conversion: raw Volts at 0.05 mN/V -> Newtons (x -5e-5 flips sign and scales). Editable per file.
-            acc[key] = -5e-5;
-          } else {
-            acc[key] = '';
-          }
-          return acc;
-        }, {});
-
-        const mergedMetadata = { ...initializedMetadata, ...attributes };
+        const mergedMetadata = {
+          ...initializedMetadata,
+          ...normalizeTipAttributes(attributes),
+        };
 
         if (Object.keys(attributes).length === 0) {
           setWarnings((prev) => [
@@ -463,7 +495,7 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
 
         setMetadata(mergedMetadata);
         setMetadataPath(path);
-        setStep(4);
+        setStep(3);
         return;
       }
 
@@ -518,31 +550,15 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
           }
         }
 
-        // Initializes metadata object with empty values for all required fields.
-        const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-
-        const initializedMetadata = Object.keys(activeValidationRules).reduce(
-          (acc, key) => {
-            if (key === 'date') {
-              acc[key] = today;
-            } else if (key === 'file_id' && filePath) {
-              // Auto-populate file_id with filename from file path
-              acc[key] = filePath.split('/').pop() || filePath.split('\\').pop() || filePath;
-            } else if (key === 'z_scale_to_m') {
-              // Default Z conversion: raw values in mm -> meters (x 1e-3). Editable per file.
-              acc[key] = 1e-3;
-            } else if (key === 'force_scale_to_n') {
-              // Default Force conversion: raw Volts at 0.05 mN/V -> Newtons (x -5e-5 flips sign and scales). Editable per file.
-              acc[key] = -5e-5;
-            } else {
-              acc[key] = '';
-            }
-            return acc;
-          },
-          {}
+        const initializedMetadata = buildInitialMetadata(
+          filePath,
+          Object.keys(attributes)
         );
 
-        const mergedMetadata = { ...initializedMetadata, ...attributes };
+        const mergedMetadata = {
+          ...initializedMetadata,
+          ...normalizeTipAttributes(attributes),
+        };
 
         if (Object.keys(attributes).length === 0) {
           setWarnings((prev) => [
@@ -553,7 +569,7 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
 
         setMetadata(mergedMetadata);
         setMetadataPath(path);
-        setStep(4);
+        setStep(3);
       } catch (error) {
         // Prevent crash if metadata path is invalid
         setErrors([`Invalid metadata location: ${path}. ${error.message}`]);
@@ -561,6 +577,32 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
     },
     [fileType, currentGroup, structure, filePath]
   );
+
+  // Confirms the browsed HDF5 group as the metadata source and advances to entry step.
+  const handleUseCurrentMetadataLocation = useCallback(() => {
+    const path = navigationPath.join('/') || 'root';
+    const attributes = getGroupAttributes(currentGroup);
+    const initializedMetadata = buildInitialMetadata(
+      filePath,
+      Object.keys(attributes)
+    );
+    const mergedMetadata = {
+      ...initializedMetadata,
+      ...normalizeTipAttributes(attributes),
+    };
+
+    if (Object.keys(attributes).length === 0) {
+      setWarnings((prev) => [
+        ...prev,
+        `No attributes found at ${path}. Enter metadata manually.`,
+      ]);
+    }
+
+    setMetadata(mergedMetadata);
+    setMetadataPath(path);
+    setStep(3);
+    setErrors([]);
+  }, [navigationPath, currentGroup, filePath]);
 
   // Handles changes to metadata input fields and clears ALL current errors.
   // Clearing all errors (not just field-specific ones) ensures that server-side
@@ -577,6 +619,12 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
     []
   );
 
+  // Updates one visible metadata field and converts display units back to stored SI values.
+  const handleVisibleMetadataChange = useCallback((field, displayValue) => {
+    setMetadata((prev) => applyDisplayValueToMetadata(field, displayValue, prev));
+    setErrors([]);
+  }, []);
+
   // Handles clicking on a previous step in the wizard to navigate backwards.
   const handleStepClick = useCallback(
     (stepIndex) => {
@@ -589,6 +637,10 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
         if (fileType === 'csv' || fileType === 'txt') {
           newGroup = getFakeGroupForFlatFile(structure);
           newPath = [];
+        } else if (stepIndex === 2) {
+          const { group, path } = navigateToDefaultMetadataLocation(structure);
+          newGroup = { ...group };
+          newPath = path;
         } else {
           const { group, path } = navigateToFirstSegment(structure);
           newGroup = { ...group };
@@ -617,7 +669,8 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
       const processedMetadata = { ...metadata };
       Object.keys(processedMetadata).forEach((key) => {
         if (metadataValidationRules[key]?.type === 'number') {
-          processedMetadata[key] = parseFloat(processedMetadata[key]);
+          const parsed = parseFloat(processedMetadata[key]);
+          processedMetadata[key] = Number.isFinite(parsed) ? parsed : processedMetadata[key];
         }
       });
       console.log("processedMetadata",processedMetadata)
@@ -732,10 +785,11 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
     handleSelectForce,
     handleSelectZ,
     handleSelectMetadata,
+    handleUseCurrentMetadataLocation,
     handleMetadataChange,
+    handleVisibleMetadataChange,
     handleSubmit,
     goBack,
     navigateToGroup,
   };
 };
-

@@ -79,6 +79,11 @@ export const useDashboardStore = create(
       curveFrom: 0,
       // End index (exclusive) of the curve range to request.
       curveTo: 10,
+      // Selected HDF5 segment: segment0 (indent) or segment1 (retract).
+      selectedSegmentType: "segment0",
+      // Updates the active segment filter sent to the backend.
+      setSelectedSegmentType: (segmentType) =>
+        set({ selectedSegmentType: segmentType || "segment0" }),
       // Updates the start of the curve range, defaulting to 0 on invalid input.
       setCurveFrom: (value) =>
         set({ curveFrom: Number.isNaN(+value) ? 0 : Math.max(0, parseInt(value, 10)) }),
@@ -205,6 +210,7 @@ export const useDashboardStore = create(
           elasticModelParams: createDefaultElasticModelParams(),
           forceModelParams: createDefaultForceModelParams(),
           setZeroForce: true,
+          selectedSegmentType: "segment0",
         }),
       // Restores all dashboard state to defaults so components can reset their view.
       reset: () =>
@@ -228,6 +234,7 @@ export const useDashboardStore = create(
           forceModelParams: createDefaultForceModelParams(),
           curveFrom: 0,
           curveTo: 10,
+          selectedSegmentType: "segment0",
           datasetId: null,
           filename: null,
           activeTab: "forceDisplacement",

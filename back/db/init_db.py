@@ -139,6 +139,11 @@ def init_datasets_table(conn: duckdb.DuckDBPyConnection) -> None:
     _run_migration(conn, "ALTER TABLE datasets ADD COLUMN retract_trimmed BOOLEAN DEFAULT FALSE")
     _run_migration(conn, "ALTER TABLE datasets ADD COLUMN z_normalized BOOLEAN DEFAULT FALSE")
     _run_migration(conn, "ALTER TABLE datasets ADD COLUMN tip_angle DOUBLE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN velocity DOUBLE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN force_scale_to_n DOUBLE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN z_scale_to_m DOUBLE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN sensor_type VARCHAR")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN sampling_rate DOUBLE")
 
 
 def init_experiment_tables(conn):

@@ -24,6 +24,14 @@ class UpdateDatasetMetadataRequest(BaseModel):
     tip_geometry: Optional[str] = None
     # Stores optional tip angle metadata submitted by the frontend.
     tip_angle: Optional[float] = None
+    # Stores optional approach velocity in m/s (UI displays µm/s).
+    velocity: Optional[float] = None
+    # Stores optional force calibration factor (N/mm in barytech exports).
+    force_scale_to_n: Optional[float] = None
+    # Stores optional Z unit scale factor applied at ingestion.
+    z_scale_to_m: Optional[float] = None
+    # Stores optional sensor type label (e.g. aurora).
+    sensor_type: Optional[str] = None
 
 
 @router.get("")
@@ -95,6 +103,10 @@ async def update_dataset_metadata(
         tip_radius=payload.tip_radius,
         tip_geometry=payload.tip_geometry,
         tip_angle=payload.tip_angle,
+        velocity=payload.velocity,
+        force_scale_to_n=payload.force_scale_to_n,
+        z_scale_to_m=payload.z_scale_to_m,
+        sensor_type=payload.sensor_type,
     )
     if not updated:
         if message == "Dataset not found":

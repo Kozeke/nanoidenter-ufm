@@ -21,7 +21,7 @@ from db.connection import get_conn
 from db.init_db import ensure_cache_tables
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any, Optional
-from utils.stats import format_stat, is_valid_param_vector
+from segment_utils import segment_types_sql, normalize_segment_type
 from utils.cache import warmup_cp_cache, clear_cache, CACHE_ENABLED
 
 # Detect OS for parallel processing strategy
@@ -236,6 +236,7 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
             force_model_params = compute_spec.get("force_model_params", None)  # Force model parameters
             set_zero_force = compute_spec.get("set_zero_force", True)  # Whether to zero force at contact point
             worker_dataset_id = compute_spec.get("dataset_id", None)  # Dataset ID for cache queries
+            worker_segment_type = compute_spec.get("segment_type", "segment0")
 
             # Extract elastic_model_params from emodel_params or use defaults
             if isinstance(emodel_params, dict):
@@ -267,6 +268,7 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
                 force_model_params=force_model_params,
                 set_zero_force=set_zero_force,
                 dataset_id=worker_dataset_id,
+                segment_type=worker_segment_type,
             )
 
             print(f"[Worker] Pipeline complete. g_fi type: {type(g_fi)}, g_el type: {type(g_el)}")
@@ -471,6 +473,9 @@ async def websocket_data_stream(websocket: WebSocket):
                 # Update last accessed timestamp
                 update_dataset_last_accessed(conn, dataset_id)
 
+                # Selected segment (indent=segment0, retract=segment1) for curve queries.
+                segment_type = request_data.get("segment_type") or "segment0"
+
                 # --- New: action / compute_scope handling ---
                 # Identifies requested operation for downstream handling
                 action = request_data.get("action")
@@ -480,7 +485,7 @@ async def websocket_data_stream(websocket: WebSocket):
                 # If client asked for metadata, send it,
                 # but DO NOT skip curve processing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å" we still fall through.
                 if action == "get_metadata":
-                    await get_metadata(conn, websocket, dataset_id=dataset_id)
+                    await get_metadata(conn, websocket, dataset_id=dataset_id, segment_type=segment_type)
 
                 # Derive compute_scope if not explicitly passed
                 if compute_scope is None:
@@ -518,12 +523,18 @@ async def websocket_data_stream(websocket: WebSocket):
                     "minInd": 0,
                     "poisson": 0.5
                 })  # Extract force model parameters
-                print(f"Received request: curve_from={curve_from}, curve_to={curve_to}, dataset_id={dataset_id}, curve_id={curve_id}, filters={filters}")
+                print(f"Received request: curve_from={curve_from}, curve_to={curve_to}, dataset_id={dataset_id}, segment_type={segment_type}, curve_id={curve_id}, filters={filters}")
+
+                seg_sql = segment_types_sql(segment_type)
 
                 # --- Population stats ignore curve_id ---
                 if compute_scope == "model_stats":
                     curve_ids_result = conn.execute(
-                        "SELECT curve_id FROM force_vs_z WHERE dataset_id = ?",
+                        f"""
+                        SELECT DISTINCT curve_id FROM force_vs_z
+                        WHERE dataset_id = ? AND {seg_sql}
+                        ORDER BY curve_id
+                        """,
                         (dataset_id,)
                     ).fetchall()
                     curve_ids = [str(row[0]) for row in curve_ids_result]
@@ -552,7 +563,12 @@ async def websocket_data_stream(websocket: WebSocket):
                     else:
                         limit = curve_to - curve_from
                         curve_ids_result = conn.execute(
-                            "SELECT curve_id FROM force_vs_z WHERE dataset_id = ? LIMIT ? OFFSET ?",
+                            f"""
+                            SELECT DISTINCT curve_id FROM force_vs_z
+                            WHERE dataset_id = ? AND {seg_sql}
+                            ORDER BY curve_id
+                            LIMIT ? OFFSET ?
+                            """,
                             (dataset_id, limit, curve_from)
                         ).fetchall()
                         curve_ids = [str(row[0]) for row in curve_ids_result]
@@ -583,6 +599,7 @@ async def websocket_data_stream(websocket: WebSocket):
                     "force_model_params": force_model_params,
                     "set_zero_force": set_zero_force,
                     "dataset_id": dataset_id,
+                    "segment_type": segment_type,
                 }
 
                 # ── Parallel path (model_stats only, adequate resources) ──────────────
@@ -695,6 +712,7 @@ async def websocket_data_stream(websocket: WebSocket):
                             global_elastic_params=global_elastic_params,
                             global_k_params=global_k_params,
                             dataset_id=dataset_id,
+                            segment_type=segment_type,
                         )
                         await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
 
@@ -865,8 +883,9 @@ def update_dataset_last_accessed(conn: duckdb.DuckDBPyConnection, dataset_id: in
         logger.warning(f"Failed to update last_accessed_at for dataset {dataset_id}: {str(e)}")
 
 
-async def get_metadata(conn, websocket, dataset_id: int = None):
+async def get_metadata(conn, websocket, dataset_id: int = None, segment_type: str = "segment0"):
     try:
+        seg_sql = segment_types_sql(segment_type)
         # Execute query to fetch one row from force_vs_z
         # Rename file_id to file_name and exclude: instrument, inv_ols, no_points, sample, sampling_rate, tip_angle, velocity
         query = """
@@ -892,23 +911,37 @@ async def get_metadata(conn, websocket, dataset_id: int = None):
             FROM force_vs_z
         """
         if dataset_id is not None:
-            query += " WHERE dataset_id = ? LIMIT 1"
+            query += f" WHERE dataset_id = ? AND {seg_sql} LIMIT 1"
             cursor = conn.execute(query, (dataset_id,))
         else:
-            query += " LIMIT 1"
+            query += f" WHERE {seg_sql} LIMIT 1"
             cursor = conn.execute(query)
         row = cursor.fetchone()
         
         # Get column names from cursor description
         columns = [description[0] for description in cursor.description]
 
-        # Count total curves for this dataset
+        # Count distinct curves for this dataset and segment.
         if dataset_id is not None:
             num_curves = conn.execute(
-                "SELECT COUNT(*) FROM force_vs_z WHERE dataset_id = ?", (dataset_id,)
+                f"SELECT COUNT(DISTINCT curve_id) FROM force_vs_z WHERE dataset_id = ? AND {seg_sql}",
+                (dataset_id,),
             ).fetchone()[0]
+            available_rows = conn.execute(
+                "SELECT DISTINCT segment_type FROM force_vs_z WHERE dataset_id = ?",
+                (dataset_id,),
+            ).fetchall()
         else:
-            num_curves = conn.execute("SELECT COUNT(*) FROM force_vs_z").fetchone()[0]
+            num_curves = conn.execute(
+                f"SELECT COUNT(DISTINCT curve_id) FROM force_vs_z WHERE {seg_sql}"
+            ).fetchone()[0]
+            available_rows = conn.execute(
+                "SELECT DISTINCT segment_type FROM force_vs_z"
+            ).fetchall()
+
+        available_segment_types = sorted(
+            {normalize_segment_type(row[0]) for row in available_rows if row[0]}
+        )
         
         # If a row exists, include its data; otherwise, send only column names
         metadata = {
@@ -917,6 +950,8 @@ async def get_metadata(conn, websocket, dataset_id: int = None):
                 "columns": columns,
                 "sample_row": dict(zip(columns, row)) if row else None,
                 "num_curves": num_curves,
+                "segment_type": normalize_segment_type(segment_type),
+                "available_segment_types": available_segment_types,
             }
         }
         
@@ -951,6 +986,7 @@ async def process_and_stream_batch(
     global_elastic_params: list = None,
     global_k_params: list = None,  # NEW: stiffness (K) values from LinearWindowFit
     dataset_id: int = None,
+    segment_type: str = "segment0",
 ) -> None:
     """
     Process a batch of curve IDs and optionally a single curve ID, fetch data from DuckDB,
@@ -1045,6 +1081,7 @@ async def process_and_stream_batch(
                     force_model_params=force_model_params,
                     compute_elspectra=compute_elspectra_flag,
                     dataset_id=dataset_id,
+                    segment_type=segment_type,
                 )
 
             # ---- BATCH PATH (full graphs) ----
@@ -1071,6 +1108,7 @@ async def process_and_stream_batch(
                         force_model_population=run_force_population,
                         elastic_model_population=run_elastic_population,
                         dataset_id=dataset_id,
+                        segment_type=segment_type,
                     ),
                 )
 

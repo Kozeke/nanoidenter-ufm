@@ -281,7 +281,7 @@ def get_metadata_for_curves(conn: duckdb.DuckDBPyConnection, curve_ids: List[str
 
 
 
-def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict, single = False, metadata: Dict = None, set_zero_force: bool = True, elasticity_params: Dict = None, elastic_model_params: Dict = None, force_model_params: Dict = None, compute_elspectra: bool = True, force_model_population: bool = False, elastic_model_population: bool = False, dataset_id: int = None) -> Tuple[List[Dict], Dict]:
+def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict, single = False, metadata: Dict = None, set_zero_force: bool = True, elasticity_params: Dict = None, elastic_model_params: Dict = None, force_model_params: Dict = None, compute_elspectra: bool = True, force_model_population: bool = False, elastic_model_population: bool = False, dataset_id: int = None, segment_type: str = "segment0") -> Tuple[List[Dict], Dict]:
     """
     Fetches a batch of curve data from DuckDB and applies filters dynamically in SQL.
     
@@ -413,19 +413,21 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             cp_params_hash = _json_hash(cp_hash_payload)
             break
     
-    # Build base query with dataset_id filter
+    # Build base query with dataset_id and segment filters.
+    from segment_utils import segment_types_sql, segment_types_for_filter
+    segment_sql = segment_types_sql(segment_type)
     if dataset_id is not None:
         base_query = """
             SELECT curve_id, z_values, force_values 
             FROM force_vs_z 
-            WHERE dataset_id = {} AND curve_id IN ({})
-        """.format(dataset_id, ",".join(map(str, numeric_curve_ids)))
+            WHERE dataset_id = {} AND {} AND curve_id IN ({})
+        """.format(dataset_id, segment_sql, ",".join(map(str, numeric_curve_ids)))
     else:
         base_query = """
             SELECT curve_id, z_values, force_values 
             FROM force_vs_z 
-            WHERE curve_id IN ({})
-        """.format(",".join(map(str, numeric_curve_ids)))
+            WHERE {} AND curve_id IN ({})
+        """.format(segment_sql, ",".join(map(str, numeric_curve_ids)))
 
     # --- Graph 1: Force vs Z (Regular Filters) ---
     # Pull FixedBaseline and LinearWindowFit out of the SQL chain so neither
@@ -622,15 +624,19 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         # IMPORTANT: always join force_vs_z with dataset_id so we use the trimmed data,
         # not stale rows from another dataset that shares the same curve_id numbering.
         _ds_join = f"AND f.dataset_id = {dataset_id}" if dataset_id is not None else ""
+        _segment_types = ", ".join(
+            f"'{value}'" for value in segment_types_for_filter(segment_type)
+        )
+        _segment_join = f"AND f.segment_type IN ({_segment_types})"
         cp_data_cte = f"""
         cp_data AS (
             SELECT c.curve_id, f.z_values, f.force_values, c.cp_values, c.spring_constant, c.tip_radius, c.tip_geometry
             FROM cp_compute c
-            LEFT JOIN force_vs_z f ON f.curve_id = c.curve_id {_ds_join}
+            LEFT JOIN force_vs_z f ON f.curve_id = c.curve_id {_ds_join} {_segment_join}
             UNION ALL
             SELECT c.curve_id, f.z_values, f.force_values, c.cp_values, c.spring_constant, c.tip_radius, c.tip_geometry
             FROM cp_cached c
-            LEFT JOIN force_vs_z f ON f.curve_id = c.curve_id {_ds_join}
+            LEFT JOIN force_vs_z f ON f.curve_id = c.curve_id {_ds_join} {_segment_join}
         )
         """
         
