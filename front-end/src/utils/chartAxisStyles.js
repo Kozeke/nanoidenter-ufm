@@ -14,15 +14,23 @@ export const CHART_AXIS_NAME_TEXT_STYLE = {
   color: "#1d1e2c",
 };
 
-// Builds a readable scale prefix like "×10^-3 mm" instead of tiny Unicode superscripts.
-export function formatScaledUnit(displayPower, unitSymbol) {
-  if (!displayPower) return unitSymbol;
-  return `×10^${displayPower} ${unitSymbol}`;
+// Distance from the X axis line to its title; large enough to sit below the zoom slider.
+export const CHART_X_AXIS_NAME_GAP = 58;
+
+// Bottom grid margin so the X axis title and horizontal zoom slider do not overlap.
+export const CHART_GRID_BOTTOM = "18%";
+
+// Bottom offset for the horizontal zoom slider, leaving room for the X axis title beneath it.
+export const CHART_X_DATAZOOM_BOTTOM = 28;
+
+// Returns the unit symbol as-is (no ×10^n prefix on axis labels).
+export function formatScaledUnit(_displayPower, unitSymbol) {
+  return unitSymbol;
 }
 
-// Wraps a quantity label with its (possibly scaled) unit for axis titles.
-export function formatAxisQuantityLabel(quantityLabel, displayPower, unitSymbol) {
-  return `${quantityLabel} (${formatScaledUnit(displayPower, unitSymbol)})`;
+// Wraps a quantity label with its unit for axis titles.
+export function formatAxisQuantityLabel(quantityLabel, _displayPower, unitSymbol) {
+  return `${quantityLabel} (${unitSymbol})`;
 }
 
 // Returns ECharts axisLabel config with shared tick typography.

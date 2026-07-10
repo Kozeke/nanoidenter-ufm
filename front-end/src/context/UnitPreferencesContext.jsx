@@ -19,10 +19,10 @@ const UnitPreferencesContext = createContext(null);
 
 // Provider: place this above any component tree that contains graph panels
 export const UnitPreferencesProvider = ({ children }) => {
-  // Default X axis prefix: nano (nm) — typical displacement scale for nanoindentation
-  const [xUnitPrefix, setXUnitPrefix] = useState("nano");
-  // Default Y axis prefix: milli (mN / mPa) — comfortable scale for typical force/modulus values
-  const [yUnitPrefix, setYUnitPrefix] = useState("milli");
+  // Default X axis prefix: micro (µm) — typical displacement scale for nanoindentation
+  const [xUnitPrefix, setXUnitPrefix] = useState("micro");
+  // Default Y axis prefix: micro (µN / µPa) — comfortable scale for typical force/modulus values
+  const [yUnitPrefix, setYUnitPrefix] = useState("micro");
 
   return (
     <UnitPreferencesContext.Provider

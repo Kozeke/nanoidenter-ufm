@@ -4,9 +4,11 @@ import echarts from "../../utils/echartsConfig";
 import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesContext";
 import {
   CHART_AXIS_NAME_TEXT_STYLE,
+  CHART_GRID_BOTTOM,
+  CHART_X_AXIS_NAME_GAP,
+  CHART_X_DATAZOOM_BOTTOM,
   buildValueAxisTickLabel,
   formatAxisQuantityLabel,
-  formatScaledUnit,
 } from "../../utils/chartAxisStyles";
 
 const ForceIndentationDataSet = ({
@@ -149,13 +151,6 @@ const ForceIndentationDataSet = ({
     800 // Max 800px
   );
 
-  // Returns the floor of log10 of the max-abs value in the chosen unit scale, used for tick power-of-10
-  function computeDisplayPower(maxAbsScaled) {
-    if (!isFinite(maxAbsScaled) || maxAbsScaled <= 0) return 0;
-    return Math.floor(Math.log10(maxAbsScaled));
-  }
-
-  // Downsample data when there are many curves to improve rendering performance
   const MAX_POINTS_PER_CURVE = 700;
   function downsampleXY(xArr, yArr, maxPoints = MAX_POINTS_PER_CURVE) {
     if (!xArr || !yArr || xArr.length !== yArr.length) return [[], []];
@@ -273,24 +268,9 @@ const ForceIndentationDataSet = ({
   const xSiFactor = xUnitOption.factor;
   const ySiFactor = yUnitOption.factor;
 
-  // Determine display power-of-10 so ticks stay in a comfortable numeric range
-  const xDisplayPower = useMemo(() => {
-    const maxAbs = Math.max(Math.abs(domainRange.xMax ?? 0), Math.abs(domainRange.xMin ?? 0)) * xSiFactor;
-    return computeDisplayPower(maxAbs);
-  }, [domainRange.xMax, domainRange.xMin, xSiFactor]);
-
-  const yDisplayPower = useMemo(() => {
-    const maxAbs = Math.max(Math.abs(domainRange.yMax ?? 0), Math.abs(domainRange.yMin ?? 0)) * ySiFactor;
-    return computeDisplayPower(maxAbs);
-  }, [domainRange.yMax, domainRange.yMin, ySiFactor]);
-
-  // 10^power divisors used to normalise tick values to human-readable numbers
-  const xDisplayDivisor = useMemo(() => Math.pow(10, xDisplayPower), [xDisplayPower]);
-  const yDisplayDivisor = useMemo(() => Math.pow(10, yDisplayPower), [yDisplayPower]);
-
-  // Final scale factors: raw SI value × scaleFactor = graph display value
-  const xScaleFactor = useMemo(() => xSiFactor / xDisplayDivisor, [xSiFactor, xDisplayDivisor]);
-  const yScaleFactor = useMemo(() => ySiFactor / yDisplayDivisor, [ySiFactor, yDisplayDivisor]);
+  // Raw SI value × scaleFactor = graph display value in the selected unit (e.g. µm, µN)
+  const xScaleFactor = xSiFactor;
+  const yScaleFactor = ySiFactor;
 
   // Scaled ranges used to compute how many decimal places are needed on tick labels
   const xScaledRange = useMemo(() => (domainRange.xMax - domainRange.xMin) * xScaleFactor, [domainRange.xMax, domainRange.xMin, xScaleFactor]);
@@ -306,15 +286,9 @@ const ForceIndentationDataSet = ({
   // Y axis base symbol for force: prepend selected metric prefix to "N" (e.g. milli → "mN")
   const yBaseSymbol = yUnitOption.prefix ? `${yUnitOption.prefix}N` : "N";
 
-  // Axis unit labels; omit "×10^n" when exponent is 0
-  const xUnit = useMemo(
-    () => formatScaledUnit(xDisplayPower, xUnitOption.xSymbol),
-    [xDisplayPower, xUnitOption],
-  );
-  const yUnit = useMemo(
-    () => formatScaledUnit(yDisplayPower, yBaseSymbol),
-    [yDisplayPower, yBaseSymbol],
-  );
+  // Axis unit labels use the selected prefix directly (e.g. µm, µN)
+  const xUnit = xUnitOption.xSymbol;
+  const yUnit = yBaseSymbol;
 
   // Debug: Log curve data before building chartOptions
   console.log("FI curves_cp len:", curvesCpData[0]?.x?.length, "fparams len:", curvesFparamData.length, "domain:", domainRange);
@@ -404,9 +378,9 @@ const ForceIndentationDataSet = ({
         },
     xAxis: {
       type: "value",
-      name: formatAxisQuantityLabel("Indentation", xDisplayPower, xUnitOption.xSymbol),
+      name: formatAxisQuantityLabel("Indentation", 0, xUnitOption.xSymbol),
       nameLocation: "middle",
-      nameGap: 34,
+      nameGap: CHART_X_AXIS_NAME_GAP,
       nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       min: domainRange.xMin !== null ? domainRange.xMin * xScaleFactor : undefined,
       max: domainRange.xMax !== null ? domainRange.xMax * xScaleFactor : undefined,
@@ -414,7 +388,7 @@ const ForceIndentationDataSet = ({
     },
     yAxis: {
       type: "value",
-      name: formatAxisQuantityLabel("Force", yDisplayPower, yBaseSymbol),
+      name: formatAxisQuantityLabel("Force", 0, yBaseSymbol),
       nameLocation: "middle",
       nameGap: 50,
       nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
@@ -426,7 +400,7 @@ const ForceIndentationDataSet = ({
     series,
 
     legend: { show: false },
-    grid: { left: "12%", right: "10%", bottom: "15%", top: "8%" },
+    grid: { left: "12%", right: "10%", bottom: CHART_GRID_BOTTOM, top: "8%" },
     dataZoom: [
       {
         type: "slider",
@@ -434,7 +408,7 @@ const ForceIndentationDataSet = ({
         start: 0,
         end: 100,
         height: 20,
-        bottom: 10,
+        bottom: CHART_X_DATAZOOM_BOTTOM,
       },
       {
         type: "slider",

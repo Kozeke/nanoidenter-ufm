@@ -4,9 +4,11 @@ import echarts from "../../utils/echartsConfig";
 import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesContext";
 import {
   CHART_AXIS_NAME_TEXT_STYLE,
+  CHART_GRID_BOTTOM,
+  CHART_X_AXIS_NAME_GAP,
+  CHART_X_DATAZOOM_BOTTOM,
   buildValueAxisTickLabel,
   formatAxisQuantityLabel,
-  formatScaledUnit,
 } from "../../utils/chartAxisStyles";
 
 const ElasticitySpectra = ({
@@ -71,12 +73,6 @@ const ElasticitySpectra = ({
   );
 
   // ---------- Scale helpers ----------
-  // Returns floor of log10 of the max-abs value in chosen unit scale, used for power-of-10 tick alignment
-  function computeDisplayPower(maxAbsScaled) {
-    if (!isFinite(maxAbsScaled) || maxAbsScaled <= 0) return 0;
-    return Math.floor(Math.log10(maxAbsScaled));
-  }
-
   // Downsample data when there are many curves to improve rendering performance
   const MAX_POINTS_PER_CURVE = 700;
   function downsampleXY(xArr, yArr, maxPoints = MAX_POINTS_PER_CURVE) {
@@ -158,24 +154,9 @@ const ElasticitySpectra = ({
   const xSiFactor = xUnitOption.factor;
   const ySiFactor = yUnitOption.factor;
 
-  // Determine display power-of-10 so ticks remain in a comfortable numeric range
-  const xDisplayPower = useMemo(() => {
-    const maxAbs = Math.max(Math.abs(domainRange.xMax ?? 0), Math.abs(domainRange.xMin ?? 0)) * xSiFactor;
-    return computeDisplayPower(maxAbs);
-  }, [domainRange.xMax, domainRange.xMin, xSiFactor]);
-
-  const yDisplayPower = useMemo(() => {
-    const maxAbs = Math.max(Math.abs(domainRange.yMax ?? 0), Math.abs(domainRange.yMin ?? 0)) * ySiFactor;
-    return computeDisplayPower(maxAbs);
-  }, [domainRange.yMax, domainRange.yMin, ySiFactor]);
-
-  // 10^power divisors to normalise tick values to human-readable numbers
-  const xDisplayDivisor = useMemo(() => Math.pow(10, xDisplayPower), [xDisplayPower]);
-  const yDisplayDivisor = useMemo(() => Math.pow(10, yDisplayPower), [yDisplayPower]);
-
-  // Final scale factors: raw SI value × scaleFactor = graph display value
-  const xScaleFactor = useMemo(() => xSiFactor / xDisplayDivisor, [xSiFactor, xDisplayDivisor]);
-  const yScaleFactor = useMemo(() => ySiFactor / yDisplayDivisor, [ySiFactor, yDisplayDivisor]);
+  // Raw SI value × scaleFactor = graph display value in the selected unit (e.g. µm, µPa)
+  const xScaleFactor = xSiFactor;
+  const yScaleFactor = ySiFactor;
 
   // Scaled ranges used to compute required decimal places on tick labels
   const xScaledRange = useMemo(() => (domainRange.xMax - domainRange.xMin) * xScaleFactor, [domainRange.xMax, domainRange.xMin, xScaleFactor]);
@@ -197,15 +178,9 @@ const ElasticitySpectra = ({
   // Y axis base symbol for elastic modulus: prepend selected prefix to "Pa" (e.g. milli → "mPa")
   const yBaseSymbol = yUnitOption.prefix ? `${yUnitOption.prefix}Pa` : "Pa";
 
-  // Axis unit labels; omit "×10^n" when exponent is 0
-  const xUnit = useMemo(
-    () => formatScaledUnit(xDisplayPower, xUnitOption.xSymbol),
-    [xDisplayPower, xUnitOption],
-  );
-  const yUnit = useMemo(
-    () => formatScaledUnit(yDisplayPower, yBaseSymbol),
-    [yDisplayPower, yBaseSymbol],
-  );
+  // Axis unit labels use the selected prefix directly (e.g. µm, µPa)
+  const xUnit = xUnitOption.xSymbol;
+  const yUnit = yBaseSymbol;
 
   // ---------- Toolbar styles ----------
   const toolbarCardStyle = {
@@ -385,9 +360,9 @@ const ElasticitySpectra = ({
         },
     xAxis: {
       type: "value",
-      name: formatAxisQuantityLabel("Z", xDisplayPower, xUnitOption.xSymbol),
+      name: formatAxisQuantityLabel("Z", 0, xUnitOption.xSymbol),
       nameLocation: "middle",
-      nameGap: 34,
+      nameGap: CHART_X_AXIS_NAME_GAP,
       nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       min: safeMin(domainRange.xMin * xScaleFactor),
       max: safeMin(domainRange.xMax * xScaleFactor),
@@ -395,7 +370,7 @@ const ElasticitySpectra = ({
     },
     yAxis: {
       type: "value",
-      name: formatAxisQuantityLabel("E", yDisplayPower, yBaseSymbol),
+      name: formatAxisQuantityLabel("E", 0, yBaseSymbol),
       nameLocation: "middle",
       nameGap: 50,
       nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
@@ -406,9 +381,9 @@ const ElasticitySpectra = ({
     },
     series,
     legend: { show: false },
-    grid: { left: "12%", right: "10%", bottom: "15%", top: "8%" },
+    grid: { left: "12%", right: "10%", bottom: CHART_GRID_BOTTOM, top: "8%" },
     dataZoom: [
-      { type: "slider", xAxisIndex: 0, start: 0, end: 100, height: 20, bottom: 10 },
+      { type: "slider", xAxisIndex: 0, start: 0, end: 100, height: 20, bottom: CHART_X_DATAZOOM_BOTTOM },
       { type: "slider", yAxisIndex: 0, start: 0, end: 100, width: 20, right: 10 },
       { type: "inside", xAxisIndex: 0, start: 0, end: 100 },
       { type: "inside", yAxisIndex: 0, start: 0, end: 100 },

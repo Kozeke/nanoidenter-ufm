@@ -5,17 +5,12 @@ import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesC
 import { useDashboardStore } from "../../state/useDashboardStore";
 import {
   CHART_AXIS_NAME_TEXT_STYLE,
+  CHART_GRID_BOTTOM,
+  CHART_X_AXIS_NAME_GAP,
+  CHART_X_DATAZOOM_BOTTOM,
   buildValueAxisTickLabel,
   formatAxisQuantityLabel,
-  formatScaledUnit,
 } from "../../utils/chartAxisStyles";
-
-// Given the maximum absolute value in the chosen unit scale, returns the floor power of 10 for tick scaling
-function computeDisplayPower(maxAbsScaled) {
-  if (!isFinite(maxAbsScaled) || maxAbsScaled <= 0) return 0;
-  return Math.floor(Math.log10(maxAbsScaled));
-}
-
 
 const ForceDisplacementDataSet = ({
   forceData = [],
@@ -214,59 +209,16 @@ const ForceDisplacementDataSet = ({
   const xSiFactor = xUnitOption.factor;
   const ySiFactor = yUnitOption.factor;
 
-  // Determine X-axis display power-of-10 from the selected-unit-scale range
-  const xDisplayPower = useMemo(() => {
-    const xMaxAbsScaled =
-      Math.max(
-        Math.abs(domainRange.xMax ?? 0),
-        Math.abs(domainRange.xMin ?? 0),
-      ) * xSiFactor;
-    return computeDisplayPower(xMaxAbsScaled);
-  }, [domainRange.xMax, domainRange.xMin, xSiFactor]);
-
-  // Determine Y-axis display power-of-10 from the selected-unit-scale range
-  const yDisplayPower = useMemo(() => {
-    const yMaxAbsScaled =
-      Math.max(
-        Math.abs(domainRange.yMax ?? 0),
-        Math.abs(domainRange.yMin ?? 0),
-      ) * ySiFactor;
-    return computeDisplayPower(yMaxAbsScaled);
-  }, [domainRange.yMax, domainRange.yMin, ySiFactor]);
-
-  // 10^power divisors used to bring axis values down to human-readable tick numbers
-  const xDisplayDivisor = useMemo(
-    () => Math.pow(10, xDisplayPower),
-    [xDisplayPower],
-  );
-  const yDisplayDivisor = useMemo(
-    () => Math.pow(10, yDisplayPower),
-    [yDisplayPower],
-  );
-
-  // Combined factors: raw SI value × scaleFactor = graph display value
-  const xScaleFactor = useMemo(
-    () => xSiFactor / xDisplayDivisor,
-    [xSiFactor, xDisplayDivisor],
-  );
-  const yScaleFactor = useMemo(
-    () => ySiFactor / yDisplayDivisor,
-    [ySiFactor, yDisplayDivisor],
-  );
+  // Raw SI value × scaleFactor = graph display value in the selected unit (e.g. µm, µN)
+  const xScaleFactor = xSiFactor;
+  const yScaleFactor = ySiFactor;
 
   // Y axis base symbol for force: prepend the selected metric prefix to "N" (e.g. milli → "mN")
   const yBaseSymbol = yUnitOption.prefix ? `${yUnitOption.prefix}N` : "N";
 
-  // Axis unit labels: omit "×10^n" prefix when exponent is 0 (10^0 = 1, no scaling needed)
-  const xUnit = useMemo(
-    () => formatScaledUnit(xDisplayPower, xUnitOption.xSymbol),
-    [xDisplayPower, xUnitOption],
-  );
-  // Y unit label uses the selected force symbol (e.g. mN, µN, nN, N)
-  const yUnit = useMemo(
-    () => formatScaledUnit(yDisplayPower, yBaseSymbol),
-    [yDisplayPower, yBaseSymbol],
-  );
+  // Axis unit labels use the selected prefix directly (e.g. µm, µN)
+  const xUnit = xUnitOption.xSymbol;
+  const yUnit = yBaseSymbol;
 
   // Downsample data when there are many curves to improve rendering performance
   const MAX_POINTS_PER_CURVE = 700;
@@ -553,9 +505,9 @@ const ForceDisplacementDataSet = ({
           },
       xAxis: {
         type: "value",
-        name: formatAxisQuantityLabel("Z", xDisplayPower, xUnitOption.xSymbol),
+        name: formatAxisQuantityLabel("Z", 0, xUnitOption.xSymbol),
         nameLocation: "middle",
-        nameGap: 34,
+        nameGap: CHART_X_AXIS_NAME_GAP,
         nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
         min: domainRange.xMin ? domainRange.xMin * xScaleFactor : undefined,
         max: domainRange.xMax ? domainRange.xMax * xScaleFactor : undefined,
@@ -563,7 +515,7 @@ const ForceDisplacementDataSet = ({
       },
       yAxis: {
         type: "value",
-        name: formatAxisQuantityLabel("Force", yDisplayPower, yBaseSymbol),
+        name: formatAxisQuantityLabel("Force", 0, yBaseSymbol),
         nameLocation: "middle",
         nameGap: 50,
         nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
@@ -579,7 +531,7 @@ const ForceDisplacementDataSet = ({
       grid: {
         left: "12%",
         right: "10%",
-        bottom: "15%",
+        bottom: CHART_GRID_BOTTOM,
         top: "8%",
       },
       dataZoom: [
@@ -589,7 +541,7 @@ const ForceDisplacementDataSet = ({
           start: zoomRef.current.xStart,
           end: zoomRef.current.xEnd,
           height: 20,
-          bottom: 10,
+          bottom: CHART_X_DATAZOOM_BOTTOM,
         },
         {
           type: "slider",
