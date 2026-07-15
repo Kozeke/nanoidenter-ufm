@@ -1,6 +1,7 @@
+import os
 import duckdb
 
-DB_PATH = "data/all.db"
+DB_PATH = os.environ.get("DB_PATH", "data/all.db")
 conn = duckdb.connect(DB_PATH)
 
 cursor = conn.execute("SELECT * FROM users;")

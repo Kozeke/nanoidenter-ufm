@@ -13,6 +13,11 @@ from auth.dependencies import get_current_user
 
 SUPPORTED_EXTENSIONS = [".json", ".hdf5", ".csv", ".txt"]
 
+# Directory where uploaded raw experiment files are stored. Read from the
+# environment so a Render Persistent Disk mount (e.g. UPLOADS_DIR=/var/data/uploads)
+# survives redeploys instead of the container's ephemeral local disk.
+UPLOADS_DIR = os.environ.get("UPLOADS_DIR", "uploads")
+
 def detect_file_type(file_path: str) -> str:
     """Detect the type of the input file based on its extension."""
     _, ext = os.path.splitext(file_path)
@@ -29,8 +34,8 @@ logger = logging.getLogger(__name__)  # Or import a shared logger
 @router.post("/load-experiment")  # Updated decorator to match the client's requested path
 async def load_experiment_endpoint(file: UploadFile = File(...), user=Depends(get_current_user)):
     """Handle file upload and return file structure."""
-    file_path = os.path.join("uploads", file.filename)
-    os.makedirs("uploads", exist_ok=True)
+    file_path = os.path.join(UPLOADS_DIR, file.filename)
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
     
     try:
         with open(file_path, "wb") as f:

@@ -40,8 +40,11 @@ app.add_middleware(
 )
 
 # Paths
-HDF5_FILE_PATH = "data/all.hdf5"  # HDF5 file path
-DB_PATH = "data/all.db"  # DuckDB database file
+# Read from the environment first so a Render Persistent Disk mount (e.g.
+# DB_PATH=/var/data/all.db) survives redeploys instead of the container's
+# ephemeral local disk, which is wiped on every deploy.
+HDF5_FILE_PATH = os.environ.get("HDF5_FILE_PATH", "data/all.hdf5")  # HDF5 file path
+DB_PATH = os.environ.get("DB_PATH", "data/all.db")  # DuckDB database file
 BATCH_SIZE = 10  # Process 10 curves per batch (adjust based on your needs)
 MAX_WORKERS = 8  # Number of parallel workers (tune based on CPU cores)
 

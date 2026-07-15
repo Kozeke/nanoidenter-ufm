@@ -9,7 +9,15 @@ from db.init_db import init_auth_tables
 from db.init_db import init_cache_tables
 from db.init_db import init_experiment_tables
 
-DB_PATH = "data/all.db"
+# Resolves the DuckDB file location from the environment first so a Render
+# Persistent Disk mount (e.g. DB_PATH=/var/data/all.db) survives redeploys;
+# falls back to the old relative path for local development.
+DB_PATH = os.environ.get("DB_PATH", "data/all.db")
+
+# Ensure the parent directory exists before DuckDB tries to open/create the file.
+_db_dir = os.path.dirname(DB_PATH)
+if _db_dir:
+    os.makedirs(_db_dir, exist_ok=True)
 
 _conn_singleton = None
 

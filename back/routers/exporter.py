@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_EXPORT_EXTENSIONS = ["hdf5", "json", "csv", "txt"]
 
+# Read from the environment so a Render Persistent Disk mount (e.g.
+# DB_PATH=/var/data/all.db) survives redeploys instead of the container's
+# ephemeral local disk; falls back to the old relative path for local dev.
+DB_PATH = os.environ.get("DB_PATH", "data/all.db")
+
 
 # Sanitize file system paths
 def sanitize_file_path(path: str) -> str:
@@ -48,7 +53,7 @@ async def export_endpoint(extension: str, data: Dict[str, Any], user=Depends(get
     # Stores force model parameters (maxInd, minInd, poisson) used for Hertz fit calculations.
     force_model_params = data.get("force_model_params")
     
-    db_path = "data/all.db"
+    db_path = DB_PATH
     errors = []
 
     # Validate export_path
@@ -193,7 +198,7 @@ async def calculate_softmech_metadata(data: Dict[str, Any], user=Depends(get_cur
         loose = data.get("loose", 100)
         filters = data.get("filters", {})
         
-        db_path = "data/all.db"
+        db_path = DB_PATH
         
         # Convert curve_ids
         converted_curve_ids = None

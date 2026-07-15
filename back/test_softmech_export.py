@@ -12,7 +12,7 @@ import os
 
 # Configuration
 BASE_URL = "http://localhost:8000"  # Adjust if your server runs on a different port
-DB_PATH = "data/all.db"
+DB_PATH = os.environ.get("DB_PATH", "data/all.db")
 
 def test_raw_export():
     """Test raw data export (original functionality)."""
