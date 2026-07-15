@@ -112,8 +112,11 @@ def read_tip_metadata_from_hdf5(file_path: str) -> Dict[str, Any]:
             extracted["tip_radius"] = tip_value
     if extracted.get("force_conversion_factor") is not None and extracted.get("force_scale_to_n") in (None, ""):
         extracted["force_scale_to_n"] = float(extracted["force_conversion_factor"])
-    if extracted.get("z_conversion_factor") is not None and extracted.get("z_scale_to_m") in (None, ""):
-        extracted["z_scale_to_m"] = float(extracted["z_conversion_factor"])
+    # z_scale_to_m / z_conversion_factor are not applied during ingest — Z is stored as µm.
+    # if extracted.get("z_conversion_factor") is not None and extracted.get("z_scale_to_m") in (None, ""):
+    #     extracted["z_scale_to_m"] = float(extracted["z_conversion_factor"])
+    extracted.pop("z_scale_to_m", None)
+    extracted.pop("z_conversion_factor", None)
 
     return extracted
 
@@ -222,13 +225,11 @@ def _load_segment_from_relative_paths(
     deflection = np.array(force_dataset[()])
     z_sensor = np.array(z_dataset[()])
 
-    z_scale_to_m = float(validated_metadata.get("z_scale_to_m", 1.0) or 1.0)
+    # Z and Force are stored as-is in micrometers (µm) and micronewtons (µN).
+    # z_scale_to_m = float(validated_metadata.get("z_scale_to_m", 1.0) or 1.0)
+    # if z_scale_to_m != 1.0:
+    #     z_sensor = z_sensor * z_scale_to_m
     # force_scale_to_n = float(validated_metadata.get("force_scale_to_n", 1.0) or 1.0)
-    if z_scale_to_m != 1.0:
-        z_sensor = z_sensor * z_scale_to_m
-    # Disabled: barytech HDF5 export already negates force in _export_force_value,
-    # so multiplying by force_scale_to_n here (especially negative values) would
-    # flip the sign a second time during FileOpener ingestion.
     # if force_scale_to_n != 1.0:
     #     deflection = deflection * force_scale_to_n
 
@@ -362,8 +363,8 @@ def validate_and_fill_metadata(metadata: Dict, curve_name: str) -> Dict:
         "tip_radius": 1e-5,
         "sampling_rate": 1e5,
         "velocity": 1e-6,
-        # Unit-calibration factors applied in process_hdf5. 1.0 = raw data is
-        # already SI (meters / Newtons); no-op for most instruments.
+        # Unit-calibration factors are accepted in metadata but not applied —
+        # Z and Force arrays are stored as micrometers (µm) and micronewtons (µN).
         "z_scale_to_m": 1.0,
         "force_scale_to_n": 1.0,
     }

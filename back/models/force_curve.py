@@ -5,8 +5,8 @@ import numpy as np
 @dataclass
 class Segment:
     type: str  # e.g., "approach", "retract", "pause"
-    deflection: np.ndarray  # Deflection in meters
-    z_sensor: np.ndarray  # Z position in meters
+    deflection: np.ndarray  # Force in micronewtons (µN)
+    z_sensor: np.ndarray  # Z displacement in micrometers (µm)
     sampling_rate: float  # Hz
     velocity: float  # m/s
     no_points: int

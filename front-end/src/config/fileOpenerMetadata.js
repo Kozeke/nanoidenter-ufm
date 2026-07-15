@@ -181,7 +181,7 @@ export const buildInitialMetadata = (filePath, attributeKeys = []) => {
     tip_angle: 0,
     sensor_type: "",
     velocity: "",
-    z_scale_to_m: 1e-3,
+    z_scale_to_m: 1.0,
     force_scale_to_n: 1.0,
   };
 

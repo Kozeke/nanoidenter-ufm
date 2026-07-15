@@ -4,14 +4,14 @@ import React, { createContext, useContext, useState } from "react";
 
 // Available unit prefix options shared across all graph components.
 // Each entry carries:
-//   factor   – SI multiplier to convert raw SI values into this unit scale
+//   factor   – multiplier from native DB units (Z in µm, force in µN) to the display unit
 //   prefix   – metric prefix string used by each graph to build its own Y-axis symbol
-//   xSymbol  – display symbol for the X axis (always metres-based, i.e. displacement)
+//   xSymbol  – display symbol for the X axis (displacement)
 export const UNIT_OPTIONS = [
-  { value: "nano",  factor: 1e9, prefix: "n", xSymbol: "nm" },
-  { value: "micro", factor: 1e6, prefix: "µ", xSymbol: "µm" },
-  { value: "milli", factor: 1e3, prefix: "m", xSymbol: "mm" },
-  { value: "none",  factor: 1,   prefix: "",  xSymbol: "m"  },
+  { value: "nano",  factor: 1e3,   prefix: "n", xSymbol: "nm" },
+  { value: "micro", factor: 1,     prefix: "µ", xSymbol: "µm" },
+  { value: "milli", factor: 1e-3,  prefix: "m", xSymbol: "mm" },
+  { value: "none",  factor: 1e-6,  prefix: "",  xSymbol: "m"  },
 ];
 
 // React context that stores selected unit prefixes for X and Y axes

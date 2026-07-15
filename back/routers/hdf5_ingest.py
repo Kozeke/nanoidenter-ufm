@@ -64,13 +64,7 @@ INGEST_USER_ID          = int(os.getenv("HDF5_INGEST_USER_ID", "1"))
 INGEST_SPRING_CONSTANT  = float(os.getenv("HDF5_INGEST_SPRING_CONSTANT", "0.1"))
 INGEST_TIP_GEOMETRY     = os.getenv("HDF5_INGEST_TIP_GEOMETRY", "sphere")
 INGEST_TIP_RADIUS       = float(os.getenv("HDF5_INGEST_TIP_RADIUS", "1e-6"))
-# Unit-calibration factors applied to raw Z/Force at ingestion (see hdf5.py's
-# process_hdf5). Defaults are a no-op (1.0); set these for instruments whose
-# raw export isn't already SI — e.g. the Aurora sensor exports Z in
-# micrometers (HDF5_INGEST_Z_SCALE_TO_M=1e-6) and Force as raw voltage
-# (HDF5_INGEST_FORCE_SCALE_TO_N=5e-5, i.e. 0.05 mN/V * 1e-3 N/mN).
-INGEST_Z_SCALE_TO_M     = float(os.getenv("HDF5_INGEST_Z_SCALE_TO_M", "1.0"))
-INGEST_FORCE_SCALE_TO_N = float(os.getenv("HDF5_INGEST_FORCE_SCALE_TO_N", "1.0"))
+# Z and Force are stored as micrometers (µm) and micronewtons (µN) — no unit scaling at ingest.
 
 ingest_router = APIRouter(prefix="/hdf5", tags=["HDF5 Ingest"])
 
@@ -149,12 +143,14 @@ async def ingest(request: Request):
         "spring_constant": INGEST_SPRING_CONSTANT,
         "tip_geometry":    INGEST_TIP_GEOMETRY,
         "tip_radius":      INGEST_TIP_RADIUS,
-        "z_scale_to_m":       INGEST_Z_SCALE_TO_M,
-        "force_scale_to_n":   INGEST_FORCE_SCALE_TO_N,
     }
     # Prefer metadata embedded in the HDF5 tip group (barytech exports).
+    # Z/Force arrays are stored as µm/µN — do not merge unit-scale factors from tip attrs.
+    _tip_scale_keys = {"z_scale_to_m", "z_conversion_factor", "force_scale_to_n", "force_conversion_factor"}
     tip_metadata = read_tip_metadata_from_hdf5(resolved_path)
-    ingest_metadata.update({k: v for k, v in tip_metadata.items() if v is not None})
+    ingest_metadata.update(
+        {k: v for k, v in tip_metadata.items() if v is not None and k not in _tip_scale_keys}
+    )
 
     try:
         hdf5_opener = get_opener("hdf5")
