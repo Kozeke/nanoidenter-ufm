@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional
 from pydantic import BaseModel
@@ -13,6 +15,9 @@ from auth.security import (
 from db.users import create_user, get_user_by_email
 from schemas.user import UpdateProfile
 
+# Logger for auth flow diagnostics (registration/login outcomes). Never logs
+# raw passwords or password hashes, only emails and boolean outcomes.
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -37,11 +42,20 @@ class ChangePasswordRequest(BaseModel):
 @router.post("/register")
 def register(data: RegisterRequest):
     if get_user_by_email(data.email):
+        logger.info(f"[auth.register] Rejected duplicate registration attempt for {data.email}")
         raise HTTPException(400, "User already exists")
 
     create_user(
         email=data.email,
         password_hash=hash_password(data.password),
+    )
+    # Re-read immediately after insert so the log confirms the row is actually
+    # visible via get_conn() (same connection/DB file registration and login use),
+    # not just that the INSERT statement ran without raising.
+    persisted = get_user_by_email(data.email)
+    logger.info(
+        f"[auth.register] Registered {data.email} "
+        f"(persisted_check={'ok, id=' + str(persisted['id']) if persisted else 'MISSING after insert!'})"
     )
 
     return {"status": "ok"}
@@ -51,9 +65,18 @@ def register(data: RegisterRequest):
 def login(data: LoginRequest):
     user = get_user_by_email(data.email)
 
-    if not user or not verify_password(data.password, user["password_hash"]):
+    if not user:
+        # Distinguishes "no such user" from "wrong password" in logs only; the
+        # HTTP response intentionally stays generic to avoid leaking which
+        # emails are registered.
+        logger.info(f"[auth.login] Failed login for {data.email}: no user found with this email")
         raise HTTPException(401, "Invalid credentials")
 
+    if not verify_password(data.password, user["password_hash"]):
+        logger.info(f"[auth.login] Failed login for {data.email}: password mismatch")
+        raise HTTPException(401, "Invalid credentials")
+
+    logger.info(f"[auth.login] Successful login for {data.email}")
     token = create_access_token({"sub": user["email"]})
     return {"access_token": token}
 

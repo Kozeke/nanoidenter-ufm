@@ -1,4 +1,5 @@
 """Shared DuckDB connection lifecycle for backend data access."""
+import logging
 import os
 import shutil
 from datetime import datetime
@@ -8,6 +9,12 @@ from filters.register_all import register_filters
 from db.init_db import init_auth_tables
 from db.init_db import init_cache_tables
 from db.init_db import init_experiment_tables
+
+# Logger for connection lifecycle events (path resolution, WAL recovery).
+# Module-level code below runs at import time, before main.py configures
+# logging.basicConfig(), so we also `print()` the same diagnostic to
+# guarantee it reaches stdout/Render logs regardless of import order.
+logger = logging.getLogger(__name__)
 
 # Resolves the DuckDB file location from the environment first so a Render
 # Persistent Disk mount (e.g. DB_PATH=/var/data/all.db) survives redeploys;
@@ -19,6 +26,18 @@ _db_dir = os.path.dirname(DB_PATH)
 if _db_dir:
     os.makedirs(_db_dir, exist_ok=True)
 
+# Prints the resolved absolute DB path plus whether a file already exists there
+# and its size, so a Render log dump makes it obvious whether the app is
+# pointing at a fresh/empty file (e.g. after attaching a disk) or an existing one.
+_db_abspath = os.path.abspath(DB_PATH)
+_db_preexisting = os.path.exists(DB_PATH)
+_db_size_bytes = os.path.getsize(DB_PATH) if _db_preexisting else 0
+print(
+    f"[db.connection] Using DuckDB file at {_db_abspath} "
+    f"(DB_PATH env var {'set' if 'DB_PATH' in os.environ else 'NOT set, using default'}, "
+    f"pre-existing={_db_preexisting}, size={_db_size_bytes} bytes)"
+)
+
 _conn_singleton = None
 
 
@@ -28,13 +47,33 @@ def _wal_path_for_db(db_path: str) -> str:
 
 
 def _recover_corrupt_wal(db_path: str) -> bool:
-    """Rename a corrupt WAL so DuckDB can open from the last checkpoint."""
+    """Rename a corrupt WAL so DuckDB can open from the last checkpoint.
+
+    IMPORTANT: any writes that were committed to the WAL but not yet
+    checkpointed into the main .db file are DISCARDED by this move (they end
+    up sitting in the renamed .broken-* file instead of being replayed). This
+    is a last-resort recovery to keep the app booting; it is NOT a safe/lossless
+    operation, so we log loudly whenever it fires.
+    """
     wal_path = _wal_path_for_db(db_path)
     if not os.path.exists(wal_path):
         return False
     # Stores a timestamped backup path for the broken WAL file.
     backup_path = f"{wal_path}.broken-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    wal_size_bytes = os.path.getsize(wal_path)
     shutil.move(wal_path, backup_path)
+    # Surfaced as a warning (not just info) because this indicates potential
+    # silent data loss: any un-checkpointed writes in the WAL are gone.
+    logger.warning(
+        f"[db.connection] Recovered from unreadable WAL for {db_path}: moved "
+        f"{wal_path} ({wal_size_bytes} bytes) to {backup_path}. Any writes that "
+        f"were only in the WAL (not yet checkpointed) have been LOST. Inspect "
+        f"{backup_path} if recent data appears missing."
+    )
+    print(
+        f"[db.connection] WARNING: WAL recovery discarded {wal_size_bytes} bytes "
+        f"of possibly-uncommitted-to-disk writes, backed up at {backup_path}"
+    )
     return True
 
 
@@ -47,6 +86,7 @@ def _open_duckdb_connection(db_path: str) -> duckdb.DuckDBPyConnection:
         # Prevent crash when an interrupted migration or hard kill leaves a bad WAL.
         if "wal" not in error_message and "replay" not in error_message:
             raise
+        logger.warning(f"[db.connection] Failed to open {db_path} due to WAL issue: {open_error}")
         if not _recover_corrupt_wal(db_path):
             raise
         return duckdb.connect(db_path)
