@@ -513,10 +513,15 @@ def export_from_duckdb_to_hdf5(
                 tip_group.attrs["geometry"] = str((metadata.get("tip_geometry") or tip_geometry or "sphere"))
                 # Stores the fixed parameter label expected by consumers.
                 tip_group.attrs["parameter"] = "Radius"
-                # Stores the fixed unit label expected by consumers.
-                tip_group.attrs["unit"] = "um"
-                # Stores the tip radius value used by consumers.
-                tip_group.attrs["value"] = float(metadata.get("tip_radius") or tip_radius or 1e-5)
+                # Stores the fixed unit label expected by consumers (tip radius is always exported in mm).
+                tip_group.attrs["unit"] = "mm"
+                # Tip radius from the request payload is already in mm (matches the export dialog UI).
+                # Fall back to the DB's SI (meters) tip_radius, converted to mm, when the payload omits it.
+                payload_tip_radius_mm = metadata.get("tip_radius")
+                if payload_tip_radius_mm in (None, "", 0):
+                    payload_tip_radius_mm = (float(tip_radius) if tip_radius else 1e-5) * 1e3
+                # Stores the tip radius value (mm) used by consumers.
+                tip_group.attrs["value"] = float(payload_tip_radius_mm)
 
                 num_exported += 1
 

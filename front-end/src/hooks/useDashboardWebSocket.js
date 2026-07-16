@@ -565,6 +565,7 @@ export const useDashboardWebSocket = () => {
         const liveFilters = useDashboardStore.getState().filters;
         // const liveElasticityModels = liveFilters.e_models;
         const stats = response.data.stats
+        console.log("MODEL_STATS received:", stats);
         console.log("filters (LIVE)", liveFilters);
         // console.log("elasticityModel (LIVE)", liveElasticityModels);
         const normalizedForceStats = normalizeForceStats(stats, liveFilters);
@@ -579,8 +580,20 @@ export const useDashboardWebSocket = () => {
         // style notation whenever std's exponent is small — which is exactly the case
         // for K (~O(1) N/m), producing an unreadable result. So K gets its own plain
         // decimal formatting from the raw mean/std instead of using .formatted.
+        // K-stiffness, compliance-corrected k_contact, and Young's modulus E
+        // all come from the LinearWindowFit pipeline. k_raw is always present;
+        // k_contact and E only appear when the dataset's spring_constant
+        // (k_spring) is large enough for the compliance correction to be valid.
         const stiffnessStats = stats.k_stiffness
-          ? [{ label: "K =", value: formatMeanStd(stats.k_stiffness.mean, stats.k_stiffness.std, "N/m") }]
+          ? [
+              { label: "K_raw =", value: formatMeanStd(stats.k_stiffness.mean, stats.k_stiffness.std, "N/m") },
+              ...(stats.k_contact
+                ? [{ label: "K_contact =", value: formatMeanStd(stats.k_contact.mean, stats.k_contact.std, "N/m") }]
+                : []),
+              ...(stats.youngs_modulus
+                ? [{ label: "E =", value: formatMeanStd(stats.youngs_modulus.mean, stats.youngs_modulus.std, "Pa") }]
+                : []),
+            ]
           : [];
         useDashboardStore.getState().setModelStats("stiffness", stiffnessStats);
 

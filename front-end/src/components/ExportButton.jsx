@@ -705,7 +705,7 @@ const ExportButton = ({
                             </FormControl>
                       
                             <TextField
-                        label="Tip Radius [nm]"
+                        label="Tip Radius [mm]"
                         type="number"
                         value={editableSoftMechMetadata.tip_radius}
                         onChange={(e) => {
@@ -724,12 +724,12 @@ const ExportButton = ({
                               margin="normal"
                         required
                         inputProps={{ min: 0, step: 0.1 }}
-                        helperText="Tip radius in nanometers"
+                        helperText="Tip radius in millimeters"
                               disabled={loading}
                             />
 
                       <TextField
-                        label="Velocity [m/s]"
+                        label="Velocity [µm/s]"
                         type="number"
                         value={editableSoftMechMetadata.velocity ?? ''}
                         onChange={(e) => {
@@ -748,8 +748,8 @@ const ExportButton = ({
                         fullWidth
                         margin="normal"
                         required
-                        inputProps={{ min: 0, step: 0.000001 }}
-                        helperText="Approach/retract velocity in meters per second"
+                        inputProps={{ min: 0, step: 0.1 }}
+                        helperText="Approach/retract velocity in micrometers per second"
                         disabled={loading}
                       />
                     </>
@@ -857,7 +857,7 @@ const ExportButton = ({
                   </FormControl>
                   
                   <TextField
-                    label="Tip Radius [nm]"
+                    label="Tip Radius [mm]"
                     type="number"
                     value={editableSoftMechMetadata.tip_radius}
                     onChange={(e) => {
@@ -876,11 +876,11 @@ const ExportButton = ({
                     margin="normal"
                     required
                     inputProps={{ min: 0, step: 0.1 }}
-                    helperText="Tip radius in nanometers"
+                    helperText="Tip radius in millimeters"
                   />
 
                   <TextField
-                    label="Velocity [m/s]"
+                    label="Velocity [µm/s]"
                     type="number"
                     value={editableSoftMechMetadata.velocity ?? ''}
                     onChange={(e) => {
@@ -899,8 +899,8 @@ const ExportButton = ({
                     fullWidth
                     margin="normal"
                     required
-                    inputProps={{ min: 0, step: 0.000001 }}
-                    helperText="Approach/retract velocity in meters per second"
+                    inputProps={{ min: 0, step: 0.1 }}
+                    helperText="Approach/retract velocity in micrometers per second"
                   />
                 </Box>
               )}
@@ -933,8 +933,8 @@ const ExportButton = ({
                           <strong>Date:</strong> {editableSoftMechMetadata.date || 'Not provided'}<br/>
                           <strong>Spring Constant [N/m]:</strong> {editableSoftMechMetadata.spring_constant}<br/>
                           <strong>Tip Geometry:</strong> {editableSoftMechMetadata.tip_geometry}<br/>
-                          <strong>Tip Radius [nm]:</strong> {editableSoftMechMetadata.tip_radius}<br/>
-                          <strong>Velocity [m/s]:</strong> {editableSoftMechMetadata.velocity}<br/>
+                          <strong>Tip Radius [mm]:</strong> {editableSoftMechMetadata.tip_radius}<br/>
+                          <strong>Velocity [µm/s]:</strong> {editableSoftMechMetadata.velocity}<br/>
                         </Typography>
                       </Box>
                     </>

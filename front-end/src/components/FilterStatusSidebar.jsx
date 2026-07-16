@@ -265,11 +265,12 @@ const ComputedResults = ({ title, stats, emphasizeLabel = false }) => {
 
   if (validStats.length === 0) return null;
 
-  // Use one column for a single stat (full width); two columns when there are two or more.
-  const columnCount = Math.min(validStats.length, 2);
+  // Stiffness (emphasizeLabel) stacks K_raw / K_contact / E on separate rows so
+  // long "mean ± std" values stay readable; other result cards keep a 2-col grid.
+  const columnCount = emphasizeLabel ? 1 : Math.min(validStats.length, 2);
 
   return (
-    <Box sx={{ mt: 1 }}>
+    <Box sx={{ mt: 1, width: "100%", minWidth: 0, maxWidth: "100%", boxSizing: "border-box" }}>
       <Typography
         variant="caption"
         sx={{
@@ -290,6 +291,10 @@ const ComputedResults = ({ title, stats, emphasizeLabel = false }) => {
           display: "grid",
           gridTemplateColumns: `repeat(${columnCount}, 1fr)`,
           gap: 1,
+          // Keeps long stiffness mean±std strings inside the 300px drawer.
+          width: "100%",
+          minWidth: 0,
+          maxWidth: "100%",
         }}
       >
         {validStats.map((item, idx) => (
@@ -298,20 +303,26 @@ const ComputedResults = ({ title, stats, emphasizeLabel = false }) => {
             sx={{
               border: emphasizeLabel ? "2px solid #3DA58A" : "1px dashed #dbe2ff",
               borderRadius: "8px",
-              px: emphasizeLabel ? 1.25 : 1,
-              py: emphasizeLabel ? 1 : 0.75,
+              px: emphasizeLabel ? 1 : 1,
+              py: emphasizeLabel ? 0.75 : 0.75,
               backgroundColor: emphasizeLabel ? "#ffffff" : "#f9faff",
               boxShadow: emphasizeLabel ? "0 1px 4px rgba(0, 0, 0, 0.08)" : "none",
               display: "flex",
+              flexDirection: "row",
               alignItems: "baseline",
-              gap: 0.75,
+              gap: 0.5,
               flexWrap: "nowrap",
+              minWidth: 0,
+              maxWidth: "100%",
+              overflow: "hidden",
+              boxSizing: "border-box",
             }}
           >
             <Typography
               variant="body2"
               sx={{
-                fontSize: emphasizeLabel ? 17 : 11,
+                // Slightly smaller than before so label + value fit on one line within the drawer.
+                fontSize: emphasizeLabel ? 11 : 11,
                 fontWeight: emphasizeLabel ? 800 : 400,
                 color: emphasizeLabel ? "#111827" : "#6b7280",
                 flexShrink: 0,
@@ -322,11 +333,13 @@ const ComputedResults = ({ title, stats, emphasizeLabel = false }) => {
             <Typography
               variant="body2"
               sx={{
-                fontWeight: emphasizeLabel ? 700 : 700,
-                fontSize: emphasizeLabel ? 16 : 13,
+                fontWeight: 700,
+                fontSize: emphasizeLabel ? 12 : 13,
                 color: emphasizeLabel ? "#111827" : "inherit",
                 fontFamily: "monospace",
                 whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
               }}
             >
               {item.value}

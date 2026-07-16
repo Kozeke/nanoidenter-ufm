@@ -1,4 +1,4 @@
-﻿ # FastAPI application exposing REST and WebSocket endpoints for curve analytics streaming.
+﻿# FastAPI application exposing REST and WebSocket endpoints for curve analytics streaming.
 
 # Load .env variables first so all subsequent imports (e.g. cache.py) see the correct values
 from dotenv import load_dotenv
@@ -23,6 +23,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Any, Optional
 from segment_utils import segment_types_sql, normalize_segment_type
 from utils.cache import warmup_cp_cache, clear_cache, CACHE_ENABLED
+# Formats mean±std dicts for model_stats WebSocket responses
+from utils.stats import format_stat
 
 # Detect OS for parallel processing strategy
 IS_WINDOWS = platform.system() == 'Windows'
@@ -580,6 +582,8 @@ async def websocket_data_stream(websocket: WebSocket):
                 global_force_params = []
                 global_elastic_params = []
                 global_k_params = []  # NEW: stiffness (K) values from LinearWindowFit
+                global_k_contact_params = []  # NEW: compliance-corrected k_contact
+                global_E_params = []  # NEW: Young's modulus E
                 # Added before using has_fmodel and has_emodel
                 has_fmodel = bool(filters.get("f_models", {}))
                 has_emodel = bool(filters.get("e_models", {}))
@@ -650,6 +654,10 @@ async def websocket_data_stream(websocket: WebSocket):
                                             for r in result["kfit_params"]:
                                                 if r.get("k_n_per_m") is not None:
                                                     global_k_params.append(r["k_n_per_m"])
+                                                if r.get("k_contact") is not None:
+                                                    global_k_contact_params.append(r["k_contact"])
+                                                if r.get("youngs_modulus_pa") is not None:
+                                                    global_E_params.append(r["youngs_modulus_pa"])
                                     completed += len(batch)
                                     pct = (completed / len(curve_ids)) * 100
                                     print(f"  Progress: {completed}/{len(curve_ids)} curves ({pct:.1f}%)")
@@ -714,6 +722,8 @@ async def websocket_data_stream(websocket: WebSocket):
                             global_force_params=global_force_params,
                             global_elastic_params=global_elastic_params,
                             global_k_params=global_k_params,
+                            global_k_contact_params=global_k_contact_params,
+                            global_E_params=global_E_params,
                             dataset_id=dataset_id,
                             segment_type=segment_type,
                         )
@@ -749,6 +759,10 @@ async def websocket_data_stream(websocket: WebSocket):
 
                     if len(global_k_params) >= 2:
                         stats["k_stiffness"] = format_stat(global_k_params)
+                    if len(global_k_contact_params) >= 2:
+                        stats["k_contact"] = format_stat(global_k_contact_params)
+                    if len(global_E_params) >= 2:
+                        stats["youngs_modulus"] = format_stat(global_E_params)
 
                     await websocket.send_text(json.dumps({
                         "status": "model_stats",
@@ -988,6 +1002,8 @@ async def process_and_stream_batch(
     global_force_params: list = None,
     global_elastic_params: list = None,
     global_k_params: list = None,  # NEW: stiffness (K) values from LinearWindowFit
+    global_k_contact_params: list = None,  # NEW: compliance-corrected k_contact
+    global_E_params: list = None,  # NEW: Young's modulus E
     dataset_id: int = None,
     segment_type: str = "segment0",
 ) -> None:
@@ -1137,6 +1153,10 @@ async def process_and_stream_batch(
                 for r in graph_force_vs_z["curves_kfit"]:
                     if r.get("k_n_per_m") is not None and global_k_params is not None:
                         global_k_params.append(r["k_n_per_m"])
+                    if r.get("k_contact") is not None and global_k_contact_params is not None:
+                        global_k_contact_params.append(r["k_contact"])
+                    if r.get("youngs_modulus_pa") is not None and global_E_params is not None:
+                        global_E_params.append(r["youngs_modulus_pa"])
 
             # Elasticity params come from graph_elspectra["curves_elasticity_param"] (top-level, not inside "curves")
             if run_elastic_population and graph_elspectra:

@@ -4,6 +4,14 @@ import { saveAs } from 'file-saver';
 import { useMetadata } from '../components/Dashboard';
 import { useDashboardStore } from '../state/useDashboardStore';
 import { useAuthStore } from '../state/useAuthStore';
+// Tip radius and velocity are always stored in SI units (meters, meters/second) in the
+// database; the export dialog displays/edits them in mm and µm/s to match the import
+// and dataset-editing UIs.
+import { METERS_TO_MILLIMETERS, METERS_TO_MICROMETERS } from '../config/datasetMetadataFields';
+// tip_angle, velocity, sensor_type, force_scale_to_n and z_scale_to_m live on the `datasets`
+// table, not on the per-curve `force_vs_z` table that backs `metadataObject.sample_row`, so
+// they must be fetched separately via the dataset details endpoint to populate this dialog.
+import { getDataset } from '../api/datasets';
 
 export const useExportDialog = (experimentDataOrFn = null) => {
   // Get authentication token
@@ -20,7 +28,37 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     // Stores force model parameters (maxInd, minInd, poisson) used for Hertz fit calculations.
     forceModelParams: dashboardForceModelParams,
     modelStats,
+    // Identifies the currently loaded dataset so its full metadata can be fetched below.
+    datasetId,
   } = useDashboardStore();
+
+  // Stores tip_angle/velocity/sensor_type/force_scale_to_n/z_scale_to_m fetched from the
+  // dataset details endpoint (these live on the `datasets` table only, never on `force_vs_z`,
+  // so `metadataObject.sample_row` alone can never supply them).
+  const [datasetLevelMetadata, setDatasetLevelMetadata] = useState({});
+
+  useEffect(() => {
+    // experimentDataOrFn exports (e.g. from the "My Experiments" list) are not guaranteed to
+    // correspond to the store's currently loaded dataset, so this fetch is skipped there to
+    // avoid attaching an unrelated dataset's metadata to the exported experiment.
+    if (!token || !datasetId || experimentDataOrFn) {
+      setDatasetLevelMetadata({});
+      return;
+    }
+    // Tracks mount status to avoid setting state after this hook's consumer unmounts.
+    let mounted = true;
+    // Prevent crash if the dataset lookup fails (e.g. network issue or stale dataset id).
+    getDataset(token, datasetId)
+      .then((data) => {
+        if (mounted) setDatasetLevelMetadata(data?.metadata || {});
+      })
+      .catch(() => {
+        if (mounted) setDatasetLevelMetadata({});
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [token, datasetId, experimentDataOrFn]);
   
   // Get experiment data - can be a value or a function that returns it
   const getExperimentData = useCallback(() => {
@@ -42,7 +80,28 @@ export const useExportDialog = (experimentDataOrFn = null) => {
   const experimentMetadata = experimentData?.metadata;
   const isMetadataReady = experimentMetadata ? true : !!metadataObject?.sample_row;
 
+  // Converts a stored SI (meters) tip radius to the mm string shown in the HDF5/JSON/TXT
+  // "Enter Metadata" step. The HDF5 exporter always writes the tip group's "unit" attribute
+  // as "mm", so the value it receives from this form must already be in millimeters.
+  const tipRadiusMetersToDisplayMm = useCallback((storedMeters) => {
+    if (storedMeters == null || storedMeters === '') return '';
+    const numeric = parseFloat(storedMeters);
+    return Number.isFinite(numeric) ? String(numeric * METERS_TO_MILLIMETERS) : '';
+  }, []);
+
+  // Converts a stored SI (m/s) velocity to the µm/s string shown in the "Enter Metadata" step,
+  // matching the µm/s convention already used on import and in the dataset-editing modal.
+  const velocityMetersPerSecondToDisplayUm = useCallback((storedMetersPerSecond) => {
+    if (storedMetersPerSecond == null || storedMetersPerSecond === '') return '';
+    const numeric = parseFloat(storedMetersPerSecond);
+    return Number.isFinite(numeric) ? String(numeric * METERS_TO_MICROMETERS) : '';
+  }, []);
+
   // Stores initial metadata values derived from the database sample row or experiment data.
+  // tip_angle, sensor_type and force_scale_to_n only exist on the `datasets` table, so for the
+  // Dashboard's own dataset they come from datasetLevelMetadata (fetched above). Experiment
+  // exports (e.g. from the "My Experiments" list) don't carry these fields and are not fetched
+  // above (see the guard in that effect), so they simply default to empty here.
   const initialMetadata = useMemo(
     () => {
       if (experimentMetadata) {
@@ -51,8 +110,11 @@ export const useExportDialog = (experimentDataOrFn = null) => {
           date: String(experimentMetadata.date ?? ''),
           spring_constant: String(experimentMetadata.spring_constant ?? ''),
           tip_geometry: String(experimentMetadata.tip_geometry ?? 'sphere'),
-          tip_radius: String(experimentMetadata.tip_radius ?? ''),
-          velocity: String(experimentMetadata.velocity ?? ''),
+          tip_radius: tipRadiusMetersToDisplayMm(experimentMetadata.tip_radius),
+          velocity: velocityMetersPerSecondToDisplayUm(experimentMetadata.velocity),
+          tip_angle: String(experimentMetadata.tip_angle ?? ''),
+          sensor_type: String(experimentMetadata.sensor_type ?? ''),
+          force_scale_to_n: String(experimentMetadata.force_scale_to_n ?? ''),
         };
       }
       return {
@@ -60,11 +122,24 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         date: String(metadataObject.sample_row?.date ?? ''),
         spring_constant: String(metadataObject.sample_row?.spring_constant ?? ''),
         tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
-        tip_radius: String(metadataObject.sample_row?.tip_radius ?? ''),
-        velocity: String(metadataObject.sample_row?.velocity ?? ''),
+        tip_radius: tipRadiusMetersToDisplayMm(metadataObject.sample_row?.tip_radius),
+        velocity: velocityMetersPerSecondToDisplayUm(
+          metadataObject.sample_row?.velocity ?? datasetLevelMetadata.velocity
+        ),
+        tip_angle: String(metadataObject.sample_row?.tip_angle ?? datasetLevelMetadata.tip_angle ?? ''),
+        sensor_type: String(metadataObject.sample_row?.sensor_type ?? datasetLevelMetadata.sensor_type ?? ''),
+        force_scale_to_n: String(
+          metadataObject.sample_row?.force_scale_to_n ?? datasetLevelMetadata.force_scale_to_n ?? ''
+        ),
       };
     },
-    [metadataObject.sample_row, experimentMetadata]
+    [
+      metadataObject.sample_row,
+      experimentMetadata,
+      datasetLevelMetadata,
+      tipRadiusMetersToDisplayMm,
+      velocityMetersPerSecondToDisplayUm,
+    ]
   );
 
   // --- Local state moved here ---
@@ -103,13 +178,18 @@ export const useExportDialog = (experimentDataOrFn = null) => {
   // Indicates when metadata calculation is in progress.
   const [loadingMetadata, setLoadingMetadata] = useState(false);
   // Stores editable SoftMech metadata fields for CSV exports.
+  // sample_row (from `force_vs_z`) never has a velocity column, so this falls back to
+  // datasetLevelMetadata.velocity (fetched separately from the `datasets` table) before
+  // defaulting to 1e-6 m/s.
   const [editableSoftMechMetadata, setEditableSoftMechMetadata] = useState({
     file_id: String(metadataObject.sample_row?.file_id ?? ''),
     date: String(metadataObject.sample_row?.date ?? ''),
     spring_constant: parseFloat(metadataObject.sample_row?.spring_constant) || 0,
     tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
-    tip_radius: parseFloat(metadataObject.sample_row?.tip_radius) || 0,
-    velocity: parseFloat(metadataObject.sample_row?.velocity) || 1e-6,
+    // sample_row.tip_radius is stored in meters (SI); convert to mm for display/editing.
+    tip_radius: (parseFloat(metadataObject.sample_row?.tip_radius) || 0) * METERS_TO_MILLIMETERS,
+    // Stored in meters/second (SI); convert to µm/s for display/editing.
+    velocity: (parseFloat(metadataObject.sample_row?.velocity ?? datasetLevelMetadata.velocity) || 1e-6) * METERS_TO_MICROMETERS,
   });
 
   // Derived values
@@ -143,7 +223,9 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     );
   }, []);
 
-  // Update editable metadata when database metadata changes
+  // Update editable metadata when database metadata changes.
+  // sample_row never carries velocity (see note above), so datasetLevelMetadata.velocity is
+  // used as the fallback source before defaulting to 1e-6 m/s.
   useEffect(() => {
     if (metadataObject.sample_row) {
       setEditableSoftMechMetadata({
@@ -151,8 +233,10 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         date: String(metadataObject.sample_row?.date ?? ''),
         spring_constant: parseFloat(metadataObject.sample_row?.spring_constant) || 0,
         tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
-        tip_radius: parseFloat(metadataObject.sample_row?.tip_radius) || 0,
-        velocity: parseFloat(metadataObject.sample_row?.velocity) || 1e-6,
+        // sample_row.tip_radius is stored in meters (SI); convert to mm for display/editing.
+        tip_radius: (parseFloat(metadataObject.sample_row?.tip_radius) || 0) * METERS_TO_MILLIMETERS,
+        // Stored in meters/second (SI); convert to µm/s for display/editing.
+        velocity: (parseFloat(metadataObject.sample_row?.velocity ?? datasetLevelMetadata.velocity) || 1e-6) * METERS_TO_MICROMETERS,
       });
     } else {
       setEditableSoftMechMetadata({
@@ -160,11 +244,20 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         date: String(initialMetadata.date ?? ''),
         spring_constant: parseFloat(initialMetadata.spring_constant) || 0,
         tip_geometry: String(initialMetadata.tip_geometry ?? 'sphere'),
+        // initialMetadata.tip_radius is already converted to mm above; reuse it as-is.
         tip_radius: parseFloat(initialMetadata.tip_radius) || 0,
-        velocity: parseFloat(initialMetadata.velocity) || 1e-6,
+        // initialMetadata.velocity is already converted to µm/s above; reuse it as-is.
+        velocity: parseFloat(initialMetadata.velocity) || 1,
       });
     }
-  }, [metadataObject.sample_row, initialMetadata]);
+  }, [metadataObject.sample_row, initialMetadata, datasetLevelMetadata]);
+
+  // Keeps the generic (HDF5/JSON/TXT) "Enter Metadata" form in sync with initialMetadata,
+  // since useState(initialMetadata) above only applies its argument on first render and would
+  // otherwise miss the sample_row/datasetLevelMetadata values that arrive slightly later.
+  useEffect(() => {
+    setMetadata(initialMetadata);
+  }, [initialMetadata]);
 
   // Revalidates current step inputs whenever dependencies change to keep the wizard responsive.
   useEffect(() => {
@@ -279,13 +372,30 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     }
   };
 
-  // Metadata validation rules - Essential fields only
+  // Metadata validation rules - Essential fields only.
+  // file_id is intentionally excluded: it is auto-populated from the dataset's own
+  // file_id (see initialMetadata above) and every exporter (HDF5/JSON/TXT) already writes
+  // each curve's authoritative file_id straight from the database, so exposing a manually
+  // edited copy here was redundant and never actually overrode the exported value.
+  // Rules may declare a `storageScale` (display value = stored SI value × storageScale),
+  // matching the convention used in datasetMetadataFields.js/fileOpenerMetadata.js. The
+  // payload-building code below divides by storageScale to convert back to SI before sending,
+  // EXCEPT for tip_radius: the HDF5 exporter is hardcoded to treat that value as millimeters
+  // directly (see hdf5.py), so it intentionally has no storageScale here.
   const metadataValidationRules = {
-    file_id: { required: true, label: 'File ID', type: 'text' },
     date: { required: true, label: 'Date', type: 'text', regex: /^\d{4}-\d{2}-\d{2}$/, regexError: 'Date must be in YYYY-MM-DD format' },
     spring_constant: { required: true, label: 'Spring Constant (N/m)', type: 'number', min: 0 },
     tip_geometry: { required: true, label: 'Tip Geometry', type: 'select', options: ['sphere', 'cylinder', 'cone', 'pyramid'] },
-    tip_radius: { required: true, label: 'Tip Radius (nm)', type: 'number', min: 0 },
+    // HDF5/JSON/TXT exports store this value verbatim as the tip group's "value" attribute,
+    // and the exporter always sets that attribute's "unit" to "mm", so this field must be mm.
+    tip_radius: { required: true, label: 'Tip Radius (mm)', type: 'number', min: 0 },
+    // Optional fields below only exist on the `datasets` table (see datasetLevelMetadata).
+    tip_angle: { required: false, label: 'Tip Angle (deg)', type: 'number', min: 0 },
+    sensor_type: { required: false, label: 'Sensor Type', type: 'text' },
+    // Stored/exported as-is in N/mm, matching the dataset-editing modal (no SI conversion).
+    force_scale_to_n: { required: false, label: 'Force conversion coefficient (N/mm)', type: 'number' },
+    // Stored in m/s (SI); displayed/edited in µm/s, so this gets converted back on submit.
+    velocity: { required: false, label: 'Velocity (µm/s)', type: 'number', min: 0, storageScale: METERS_TO_MICROMETERS },
   };
 
   // Validates that the export path ends with the correct file extension.
@@ -362,14 +472,14 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         newErrors.push('Tip geometry must be sphere, cylinder, cone, or pyramid');
       }
       
-      // Validate tip radius
-      if (softmechData.tip_radius <= 0 || softmechData.tip_radius > 1e6) {
-        newErrors.push('Tip radius must be greater than 0 and less than 1,000,000 nm');
+      // Validate tip radius (entered in mm; equivalent to the previous 1,000,000 nm bound)
+      if (softmechData.tip_radius <= 0 || softmechData.tip_radius > 1) {
+        newErrors.push('Tip radius must be greater than 0 and less than 1 mm');
       }
 
-      // Validate velocity
-      if (softmechData.velocity <= 0 || softmechData.velocity > 1e3) {
-        newErrors.push('Velocity must be greater than 0 and less than 1000 m/s');
+      // Validate velocity (entered in µm/s; equivalent to the previous 1000 m/s bound)
+      if (softmechData.velocity <= 0 || softmechData.velocity > 1e9) {
+        newErrors.push('Velocity must be greater than 0 and less than 1,000,000,000 µm/s');
       }
     } else {
       // Original validation for other formats (HDF5, JSON, TXT, etc.)
@@ -447,16 +557,22 @@ export const useExportDialog = (experimentDataOrFn = null) => {
           setCalculatedMetadata(metadata);
           // Also set the editable metadata for step 3 with proper type conversion
           // Use calculated metadata as fallback if database values are not available
+          // Backend reports tip radius in nanometers (tip_radius_nm); convert to mm for display
+          // so this field stays consistent with the mm convention used across the export dialog.
+          // 1 mm = 1e6 nm, so dividing by NM_PER_MM converts nanometers to millimeters.
+          const NM_PER_MM = 1e6;
+          const tipRadiusNm = parseFloat(metadata.tip_radius_nm) || 0;
+          const tipRadiusMm = tipRadiusNm > NM_PER_MM ? 0.01 : tipRadiusNm / NM_PER_MM;
           const newEditableMetadata = {
             file_id: metadata.file_id || '',
             date: metadata.date || '',
             spring_constant: parseFloat(metadata.elastic_constant_nm) || 0,
             tip_geometry: metadata.tip_shape || 'sphere',
-            tip_radius: parseFloat(metadata.tip_radius_nm) > 1e6 ? 10000 : parseFloat(metadata.tip_radius_nm) || 0,
-            // Preserves loaded velocity when calculated metadata response has no velocity field.
+            tip_radius: tipRadiusMm,
+            // Preserves loaded velocity (already in µm/s) when calculated metadata response has no velocity field.
             velocity: Number.isFinite(+editableSoftMechMetadata.velocity) && +editableSoftMechMetadata.velocity > 0
               ? +editableSoftMechMetadata.velocity
-              : 1e-6,
+              : 1,
           };
           setEditableSoftMechMetadata(newEditableMetadata);
         }
@@ -618,10 +734,13 @@ export const useExportDialog = (experimentDataOrFn = null) => {
           // Only include metadata for non-CSV exports (HDF5, JSON, TXT, etc.)
           ...(selectedFormat !== 'csv') && {
             metadata: Object.fromEntries(
-              Object.entries(metadata).map(([key, value]) => [
-                key,
-                metadataValidationRules[key]?.type === 'number' ? parseFloat(value) || 0 : value,
-              ])
+              Object.entries(metadata).map(([key, value]) => {
+                const rule = metadataValidationRules[key];
+                if (rule?.type !== 'number') return [key, value];
+                const numeric = parseFloat(value) || 0;
+                // Converts display units (e.g. µm/s) back to the SI value exporters expect.
+                return [key, rule.storageScale ? numeric / rule.storageScale : numeric];
+              })
             ),
           },
         };

@@ -510,6 +510,14 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             fitted_y = fit.calculate(z_values, working_y)
 
             if fit.last_slope_per_meter is not None:
+                # Compute compliance-corrected k_contact and Young's modulus
+                # using dataset-level metadata (spring_constant = k_spring,
+                # tip_radius = punch radius a).
+                fit.compute_derived(
+                    k_spring=meta.get('spring_constant', 1.0),
+                    tip_radius=meta.get('tip_radius', 1e-5),
+                )
+
                 # Slice down to just the [t1_nm, t2_nm] window using the mask the
                 # filter exposes, instead of drawing the fitted line across the
                 # whole curve — matches the original script, which only ever
@@ -528,7 +536,9 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                 })
                 curves_kfit.append({
                     "curve_id": curve_label,
-                    "k_n_per_m": fit.last_slope_per_meter
+                    "k_n_per_m": fit.last_slope_per_meter,
+                    "k_contact": fit.last_k_contact,
+                    "youngs_modulus_pa": fit.last_youngs_modulus,
                 })
 
             # Collected regardless of whether this particular curve's own fit

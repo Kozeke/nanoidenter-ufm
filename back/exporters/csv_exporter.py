@@ -75,10 +75,11 @@ class CSVExporter(Exporter):
                 # Represents request-level metadata combining legacy `metadata` and new `softmech_metadata`.
                 metadata_payload = kwargs.get("metadata") or kwargs.get("softmech_metadata") or {}
                 # Stores fallback velocity from request payload when DB rows do not provide one.
-                default_velocity = metadata_payload.get("velocity", 1e-6)
-                # Normalizes the fallback velocity to a float to guarantee numeric CSV output.
+                # The export dialog collects velocity in µm/s (matching the import UI), while the
+                # `velocity` column and this exporter's output are always in m/s (SI), so convert here.
+                default_velocity = metadata_payload.get("velocity", 1.0)
                 try:
-                    default_velocity = float(default_velocity)
+                    default_velocity = float(default_velocity) * 1e-6
                 except (TypeError, ValueError):
                     default_velocity = 1e-6
                 for key, value in metadata_payload.items():
@@ -215,11 +216,12 @@ class CSVExporter(Exporter):
                         except (TypeError, ValueError):
                             pass
 
-                    # Override tip radius from payload if provided (⚠️ if you send nm here, convert to meters)
+                    # Override tip radius from payload if provided.
+                    # The export dialog (ExportButton.jsx / useExportDialog.js) collects tip radius
+                    # in millimeters, matching the import/dataset-editing UI convention, so convert mm -> m here.
                     if payload_meta.get("tip_radius") is not None:
                         try:
-                            # If payload is in nm, use *1e-9; if already in meters, drop the factor.
-                            tip_radius = float(payload_meta["tip_radius"]) * 1e-9
+                            tip_radius = float(payload_meta["tip_radius"]) * 1e-3
                         except (TypeError, ValueError):
                             pass
 
@@ -318,11 +320,12 @@ class CSVExporter(Exporter):
             if tip_shape not in ["sphere", "cylinder", "cone", "pyramid"]:
                 tip_shape = "sphere"
 
-            # tip radius is expected in [nm] in the payload (as you send 10000 for 10 µm)
+            # tip radius is expected in [mm] in the payload (matches the export dialog UI);
+            # convert to [nm] here since the CSV header always reports tip radius in nanometers.
             tip_radius_nm = None
             if payload_meta.get("tip_radius") is not None:
                 try:
-                    tip_radius_nm = float(payload_meta["tip_radius"])
+                    tip_radius_nm = float(payload_meta["tip_radius"]) * 1e6
                 except (TypeError, ValueError):
                     tip_radius_nm = None
 

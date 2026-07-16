@@ -14,6 +14,11 @@ class LinearWindowFitFilter(FilterBase):
     )
     DOI = ""
 
+    # Poisson's ratio for the flat-punch Young's modulus estimate.
+    # Hardcoded per specification (ν = 0.49); can be promoted to a
+    # filter parameter later if different samples need different values.
+    POISSON = 0.49
+
     def create(self):
         """Define the filter's parameters."""
         self.add_parameter(
@@ -49,6 +54,8 @@ class LinearWindowFitFilter(FilterBase):
         self.last_slope_per_meter = None
         self.last_intercept = None
         self.last_fit_point_count = 0
+        self.last_k_contact = None
+        self.last_youngs_modulus = None
         # Boolean mask (same length as x) marking which points fall inside
         # [t1_nm, t2_nm]. Exposed so callers can slice the overlay curve down
         # to just this window instead of drawing the fitted line across the
@@ -74,3 +81,43 @@ class LinearWindowFitFilter(FilterBase):
 
         fitted_line = slope * x + intercept
         return fitted_line.tolist()
+
+    def compute_derived(self, k_spring, tip_radius):
+        """
+        Compute compliance-corrected contact stiffness and Young's modulus
+        from the already-computed k_raw (self.last_slope_per_meter) plus
+        dataset-level metadata values.
+
+        Called from pipeline.py after calculate(), where the metadata dict
+        (spring_constant, tip_radius) is available.
+
+        k_contact = (k_spring × k_raw) / (k_spring − k_raw)
+        E = [(1 − ν²) × k_contact] / (2a)
+
+        :param k_spring: effective system spring constant (N/m), from dataset metadata
+        :param tip_radius: punch radius a (m), from dataset metadata
+        """
+        self.last_k_contact = None
+        self.last_youngs_modulus = None
+
+        k_raw = self.last_slope_per_meter
+        if k_raw is None:
+            return
+
+        try:
+            k_spring = float(k_spring)
+            tip_radius = float(tip_radius)
+        except (TypeError, ValueError):
+            return
+
+        # k_spring must be greater than k_raw for the correction to be
+        # physically meaningful (otherwise the denominator goes to zero or
+        # negative, meaning the sample is stiffer than the sensor can measure).
+        if k_spring <= 0 or tip_radius <= 0 or k_spring <= k_raw:
+            return
+
+        k_contact = (k_spring * k_raw) / (k_spring - k_raw)
+        self.last_k_contact = float(k_contact)
+
+        E = ((1 - self.POISSON ** 2) * k_contact) / (2 * tip_radius)
+        self.last_youngs_modulus = float(E)
