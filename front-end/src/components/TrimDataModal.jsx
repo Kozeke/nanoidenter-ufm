@@ -86,30 +86,24 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
   // When enabled, each curve is truncated at its peak-force index so only the
   // approach (loading) phase is kept and the retract phase is discarded.
   const [trimRetract, setTrimRetract] = useState(false);
-  // When enabled, the absolute value is applied to every force sample in all
-  // curves of the dataset before any other trimming takes place.
-  const [absoluteForce, setAbsoluteForce] = useState(false);
+  // When enabled, the sign is flipped (flipped = -force) for every force
+  // sample in all curves of the dataset before any other trimming takes place.
+  const [flipForceSign, setFlipForceSign] = useState(false);
   // When enabled, shift each curve's z values so the first z becomes 0:
   // z[i] -= z[0]. Requires all curves to have positive first and last z values.
   const [normalizeZ, setNormalizeZ] = useState(false);
 
   // Persisted flags fetched from the backend on every modal open.
-  // When true the corresponding operation has already been applied to this
-  // dataset and must not be applied a second time — the checkbox is disabled.
-  const [alreadyAbsolute, setAlreadyAbsolute] = useState(false);
+  // For retract-trim and z-normalize, true means the operation has already
+  // been applied to this dataset and must not be applied a second time — the
+  // checkbox is disabled. Sign-flip is exempt: it is self-inverse (flipping
+  // twice restores the original data), so it stays toggleable/re-appliable
+  // and is never disabled — alreadySignFlipped is only used to know the
+  // current data state for peak-detection and domain-validation math.
+  const [alreadySignFlipped, setAlreadySignFlipped] = useState(false);
   const [alreadyRetractTrimmed, setAlreadyRetractTrimmed] = useState(false);
   // True once z-normalization has been written to the DB for this dataset.
   const [alreadyNormalizedZ, setAlreadyNormalizedZ] = useState(false);
-
-  // True when every force value in the current dataset is already ≥ 0, so
-  // applying |F| would have no effect and the checkbox should be disabled.
-  const forceAlreadyPositive =
-    forceDomain?.yMin != null && forceDomain.yMin >= 0;
-
-  // The absolute checkbox is useful only when:
-  //   • the data is not already positive, AND
-  //   • it has not been applied in a previous trim call.
-  const absoluteDisabled = forceAlreadyPositive || alreadyAbsolute;
 
   // The retract checkbox is disabled once the retract phase has been removed.
   const retractDisabled = alreadyRetractTrimmed;
@@ -117,8 +111,13 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
   // The normalize-z checkbox is disabled once it has already been applied.
   const normalizeZDisabled = alreadyNormalizedZ;
 
-  // Clears the force-bound fields so stale original-domain values (which are
-  // signed) don't act as unintended filters after abs() flips all forces to ≥ 0.
+  // Temporary feature flag: every control except "Flip force sign" is
+  // disabled for now, so Force Min/Max, Trim retract phase, and Normalize
+  // curves are all read-only/unusable until this is turned back on.
+  const otherFeaturesDisabled = true;
+
+  // Clears the force-bound fields so stale original-domain values don't act
+  // as unintended filters once the sign flip inverts the force range.
   const clearForceBounds = () => {
     setForceMinMantissa('');
     setForceMinExponent('0');
@@ -138,8 +137,11 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
     if (!open) return;
 
     // Use the accumulated yMin/yMax from graphForcevsZ.domain WebSocket batches.
-    const minVal = forceDomain?.yMin;
-    const maxVal = forceDomain?.yMax;
+    // Skipped entirely while the force-bound inputs are disabled so the
+    // (read-only) fields don't silently carry a stale filter into a submit
+    // that's only meant to flip the sign.
+    const minVal = otherFeaturesDisabled ? null : forceDomain?.yMin;
+    const maxVal = otherFeaturesDisabled ? null : forceDomain?.yMax;
 
     // Decompose each bound into mantissa + exponent for clean display.
     if (minVal != null) {
@@ -164,7 +166,7 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
     setError('');
     setSuccessMsg('');
     // Reset local checkbox state — will be overridden by the server response below.
-    setAbsoluteForce(false);
+    setFlipForceSign(false);
     setTrimRetract(false);
     setNormalizeZ(false);
 
@@ -178,14 +180,14 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
       )
         .then((r) => r.ok ? r.json() : Promise.reject(r.status))
         .then((data) => {
-          setAlreadyAbsolute(!!data.force_absolute);
+          setAlreadySignFlipped(!!data.force_sign_flipped);
           setAlreadyRetractTrimmed(!!data.retract_trimmed);
           // Whether z-normalization has been applied in a prior session.
           setAlreadyNormalizedZ(!!data.z_normalized);
         })
         .catch(() => {
           // Non-fatal: fall back to all flags false so the user can still operate.
-          setAlreadyAbsolute(false);
+          setAlreadySignFlipped(false);
           setAlreadyRetractTrimmed(false);
           setAlreadyNormalizedZ(false);
         });
@@ -199,9 +201,9 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
     setForceMaxMantissa('');
     setForceMaxExponent('0');
     setTrimRetract(false);
-    setAbsoluteForce(false);
+    setFlipForceSign(false);
     setNormalizeZ(false);
-    setAlreadyAbsolute(false);
+    setAlreadySignFlipped(false);
     setAlreadyRetractTrimmed(false);
     setAlreadyNormalizedZ(false);
     setError('');
@@ -228,9 +230,16 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
         ? parseFloat(forceMaxMantissa) * Math.pow(10, parsedMaxExp)
         : null;
 
-    // Ensure at least one bound, retract-trim, absolute-force, or normalize-z is requested.
-    if (parsedMin === null && parsedMax === null && !trimRetract && !absoluteForce && !normalizeZ) {
-      setError('Please enter at least one of Force Min or Force Max, or enable Trim retract phase, Apply absolute force values, or Normalize curves.');
+    // Ensure at least one bound, retract-trim, sign-flip, or normalize-z is requested.
+    // While otherFeaturesDisabled is set, Force Min/Max/Trim retract/Normalize
+    // are unusable (parsedMin/parsedMax stay null, trimRetract/normalizeZ stay
+    // false), so in practice this only requires Flip force sign to be checked.
+    if (parsedMin === null && parsedMax === null && !trimRetract && !flipForceSign && !normalizeZ) {
+      setError(
+        otherFeaturesDisabled
+          ? 'Please enable Flip force sign.'
+          : 'Please enter at least one of Force Min or Force Max, or enable Trim retract phase, Flip force sign, or Normalize curves.',
+      );
       return;
     }
 
@@ -251,18 +260,18 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
     }
 
     // Bounds-vs-domain sanity check.
-    // When absolute force is active (requested now or already applied), the
-    // effective data range is [0, max(|yMin|, |yMax|)].  On raw signed data
-    // use the original domain directly.
-    const effectiveAbsolute = absoluteForce || alreadyAbsolute;
+    // Sign-flip is self-inverse, so the data will end up flipped only if this
+    // request's toggle differs from the currently-persisted state (XOR) —
+    // e.g. re-checking the box on already-flipped data flips it back to signed.
+    // When flipped, the effective data range is the original domain negated
+    // and reversed: [-yMax, -yMin]. On raw signed data use the domain directly.
+    const effectiveSignFlipped = flipForceSign !== alreadySignFlipped;
     const domainMin = forceDomain?.yMin ?? null;
     const domainMax = forceDomain?.yMax ?? null;
     const effectiveDomainMax =
-      domainMin != null && domainMax != null && effectiveAbsolute
-        ? Math.max(Math.abs(domainMin), Math.abs(domainMax))
-        : domainMax;
+      domainMin != null && effectiveSignFlipped ? -domainMin : domainMax;
     const effectiveDomainMin =
-      domainMin != null && effectiveAbsolute ? 0 : domainMin;
+      domainMax != null && effectiveSignFlipped ? -domainMax : domainMin;
 
     if (parsedMin !== null && effectiveDomainMax !== null && parsedMin > effectiveDomainMax) {
       setError(
@@ -280,11 +289,11 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
     }
 
     // Operation order enforced on the backend (and mirrored here for clarity):
-    //   1. Apply |F| to all force samples (absolute_force)
+    //   1. Negate every force sample (flip_force_sign): flipped = -force
     //   2. Remove points outside [force_min, force_max] range
     //   3. Truncate each curve at its peak-force index (trim_retract)
     // This order guarantees that retract detection always operates on the
-    // already-filtered, correctly-signed (or abs'd) data.
+    // already-filtered, correctly-signed (or flipped) data.
 
     if (!datasetId && datasetId !== 0) {
       setError('No dataset is loaded. Please open a file first.');
@@ -308,7 +317,7 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
             force_min: parsedMin,
             force_max: parsedMax,
             trim_retract: trimRetract,
-            absolute_force: absoluteForce,
+            flip_force_sign: flipForceSign,
             // Whether to shift each curve's z values so z[0] becomes 0.
             normalize_z: normalizeZ,
           }),
@@ -354,6 +363,14 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
           a field blank to skip that bound.
         </Typography>
 
+        {/* Note explaining that only the sign-flip control is currently active */}
+        {otherFeaturesDisabled && (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Force Min/Max, Trim retract phase, and Normalize curves are
+            temporarily disabled. Only Flip force sign is available right now.
+          </Alert>
+        )}
+
         <Box sx={{ display: 'flex', gap: 2, mt: 1 }}>
           {/* Lower force bound: mantissa and exponent entered separately */}
           <Box sx={{ flex: 1 }}>
@@ -374,6 +391,7 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
                 size="small"
                 inputProps={{ step: 'any' }}
                 sx={{ flex: 1 }}
+                disabled={otherFeaturesDisabled}
               />
               {/* Separator label between mantissa and exponent */}
               <Typography variant="body2" sx={{ whiteSpace: 'nowrap', color: 'text.secondary' }}>
@@ -398,6 +416,7 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
                   alignSelf: 'flex-start',
                   mt: '2px',
                 }}
+                disabled={otherFeaturesDisabled}
               />
             </Box>
           </Box>
@@ -421,6 +440,7 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
                 size="small"
                 inputProps={{ step: 'any' }}
                 sx={{ flex: 1 }}
+                disabled={otherFeaturesDisabled}
               />
               {/* Separator label between mantissa and exponent */}
               <Typography variant="body2" sx={{ whiteSpace: 'nowrap', color: 'text.secondary' }}>
@@ -438,6 +458,7 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
                 }}
                 size="small"
                 inputProps={{ step: 1 }}
+                disabled={otherFeaturesDisabled}
                 sx={{
                   width: 62,
                   '& input': { textAlign: 'center', fontSize: 12, padding: '4px 6px' },
@@ -450,11 +471,13 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
           </Box>
         </Box>
 
-        {/* Retract-phase trimming option */}
+        {/* Retract-phase trimming option — temporarily disabled, see otherFeaturesDisabled */}
         <Box sx={{ mt: 2 }}>
           <Tooltip
             title={
-              retractDisabled
+              otherFeaturesDisabled
+                ? "Temporarily disabled — only Flip force sign is available right now."
+                : retractDisabled
                 ? "The retract phase has already been removed from this dataset. This operation cannot be applied again."
                 : "For each curve, find the sample with the lowest (most-negative) force value — the deepest indentation point — and discard everything after it. This removes the retract phase, keeping only the approach."
             }
@@ -464,7 +487,7 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
             {/* Span wrapper required so Tooltip works on a disabled element */}
             <span>
               <FormControlLabel
-                disabled={retractDisabled}
+                disabled={otherFeaturesDisabled || retractDisabled}
                 control={
                   <Checkbox
                     checked={trimRetract}
@@ -474,14 +497,18 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
                       setSuccessMsg('');
                     }}
                     size="small"
-                    disabled={retractDisabled}
+                    disabled={otherFeaturesDisabled || retractDisabled}
                   />
                 }
                 label={
-                  <Typography variant="body2" color={retractDisabled ? 'text.disabled' : 'text.primary'}>
+                  <Typography variant="body2" color={(otherFeaturesDisabled || retractDisabled) ? 'text.disabled' : 'text.primary'}>
                     Trim retract phase&nbsp;
                     <Typography component="span" variant="body2" color="text.secondary">
-                      {retractDisabled ? '(already applied)' : '(keep only approach up to peak force)'}
+                      {otherFeaturesDisabled
+                        ? '(temporarily disabled)'
+                        : retractDisabled
+                        ? '(already applied)'
+                        : '(keep only approach up to peak force)'}
                     </Typography>
                   </Typography>
                 }
@@ -490,68 +517,59 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
           </Tooltip>
         </Box>
 
-        {/* Absolute-force option */}
+        {/* Sign-flip option — toggleable/re-appliable since negation is self-inverse */}
         <Box sx={{ mt: 0.5 }}>
           <Tooltip
-            title={
-              alreadyAbsolute
-                ? "Absolute value has already been applied to this dataset. This operation cannot be applied again."
-                : forceAlreadyPositive
-                ? "All force values in this dataset are already positive — applying |F| would have no effect."
-                : "Replace every force sample in all curves with its absolute value |F|. Applied before any force-range trimming, so bounds you enter above operate on the absolute values."
-            }
+            title="Negate every force sample in all curves: flipped = -force. Applied before any force-range trimming, so bounds you enter above operate on the flipped values. This can be toggled and re-applied at any time — checking it again on already-flipped data flips it back."
             placement="right"
             arrow
           >
-            {/* Span wrapper required so Tooltip works on a disabled element */}
             <span>
               <FormControlLabel
-                disabled={absoluteDisabled}
                 control={
                   <Checkbox
-                    checked={absoluteForce}
+                    checked={flipForceSign}
                     onChange={(e) => {
                       const checked = e.target.checked;
-                      setAbsoluteForce(checked);
-                      // Clear pre-populated signed bounds when enabling abs so
-                      // they don't act as an unintended tight filter on |F| values.
+                      setFlipForceSign(checked);
+                      // Clear pre-populated signed bounds when enabling the flip
+                      // so they don't act as an unintended filter on the negated values.
                       if (checked) clearForceBounds();
                       setError('');
                       setSuccessMsg('');
                     }}
                     size="small"
-                    disabled={absoluteDisabled}
                   />
                 }
                 label={
-                  <Typography variant="body2" color={absoluteDisabled ? 'text.disabled' : 'text.primary'}>
-                    Apply absolute force values&nbsp;
+                  <Typography variant="body2" color="text.primary">
+                    Flip force sign&nbsp;
                     <Typography component="span" variant="body2" color="text.secondary">
-                      {alreadyAbsolute
-                        ? '(already applied)'
-                        : forceAlreadyPositive
-                        ? '(forces already positive)'
-                        : '(replace every F with |F| across all curves)'}
+                      {alreadySignFlipped
+                        ? '(currently flipped — re-applying restores original sign)'
+                        : '(replace every F with -F across all curves)'}
                     </Typography>
                   </Typography>
                 }
               />
             </span>
           </Tooltip>
-          {/* Warn the user that enabling abs clears the pre-populated bounds,
-              because those original signed bounds are meaningless after |F|. */}
-          {absoluteForce && (
+          {/* Warn the user that enabling the flip clears the pre-populated bounds,
+              because those original signed bounds are meaningless after negation. */}
+          {flipForceSign && (
             <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.5, ml: 4 }}>
-              Force bounds were cleared — enter new bounds relative to |F| if needed.
+              Force bounds were cleared — enter new bounds relative to -F if needed.
             </Typography>
           )}
         </Box>
 
-        {/* Normalize-z option: shift each curve so the first z value becomes 0 */}
+        {/* Normalize-z option: shift each curve so the first z value becomes 0 — temporarily disabled, see otherFeaturesDisabled */}
         <Box sx={{ mt: 0.5 }}>
           <Tooltip
             title={
-              normalizeZDisabled
+              otherFeaturesDisabled
+                ? "Temporarily disabled — only Flip force sign is available right now."
+                : normalizeZDisabled
                 ? "Z-normalization has already been applied to this dataset. This operation cannot be applied again."
                 : "For each curve, subtract the first z value from every z sample so the curve starts at z = 0. " +
                   "Only available when all curves have positive first and last z values."
@@ -562,7 +580,7 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
             {/* Span wrapper required so Tooltip works on a disabled element */}
             <span>
               <FormControlLabel
-                disabled={normalizeZDisabled}
+                disabled={otherFeaturesDisabled || normalizeZDisabled}
                 control={
                   <Checkbox
                     checked={normalizeZ}
@@ -572,14 +590,16 @@ const TrimDataModal = ({ open, onClose, datasetId, onSuccess, forceDomain }) => 
                       setSuccessMsg('');
                     }}
                     size="small"
-                    disabled={normalizeZDisabled}
+                    disabled={otherFeaturesDisabled || normalizeZDisabled}
                   />
                 }
                 label={
-                  <Typography variant="body2" color={normalizeZDisabled ? 'text.disabled' : 'text.primary'}>
+                  <Typography variant="body2" color={(otherFeaturesDisabled || normalizeZDisabled) ? 'text.disabled' : 'text.primary'}>
                     Normalize curves&nbsp;
                     <Typography component="span" variant="body2" color="text.secondary">
-                      {normalizeZDisabled
+                      {otherFeaturesDisabled
+                        ? '(temporarily disabled)'
+                        : normalizeZDisabled
                         ? '(already applied)'
                         : '(shift z so first point of each curve is at z = 0)'}
                     </Typography>

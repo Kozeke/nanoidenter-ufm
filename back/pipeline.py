@@ -518,7 +518,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                     tip_radius=meta.get('tip_radius', 1e-5),
                 )
 
-                # Slice down to just the [t1_nm, t2_nm] window using the mask the
+                # Slice down to just the [t1_um, t2_um] window using the mask the
                 # filter exposes, instead of drawing the fitted line across the
                 # whole curve — matches the original script, which only ever
                 # draws the fit line within the region it was fit on.
@@ -549,20 +549,22 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     if linfit_cfg is not None and len(_curves_for_avg_line) > 0:
         import numpy as np
         try:
-            t1_nm = float(linfit_cfg.get("t1_nm", 317.0))
-            t2_nm = float(linfit_cfg.get("t2_nm", 580.0))
+            t1_um = float(linfit_cfg.get("t1_um", 317.0))
+            t2_um = float(linfit_cfg.get("t2_um", 580.0))
         except (TypeError, ValueError):
-            t1_nm, t2_nm = 317.0, 580.0
-        low_m, high_m = sorted((t1_nm * 1e-9, t2_nm * 1e-9))
+            t1_um, t2_um = 317.0, 580.0
+        # z_values are µm-native here (device-raw Z, not SI meters), same as
+        # the window bounds (also µm, user-facing UI unit), so compare directly.
+        low_um, high_um = sorted((t1_um, t2_um))
 
         # Only curves that actually span the whole [low, high] window are usable —
         # same requirement as the reference script's average_curve_fit_line().
         usable = [
             (zv, wy) for zv, wy in _curves_for_avg_line
-            if zv and wy and zv[0] <= low_m and zv[-1] >= high_m and len(zv) == len(wy)
+            if zv and wy and zv[0] <= low_um and zv[-1] >= high_um and len(zv) == len(wy)
         ]
         if usable:
-            z_line = np.linspace(low_m, high_m, 100)
+            z_line = np.linspace(low_um, high_um, 100)
             y_values = [np.interp(z_line, zv, wy) for zv, wy in usable]
             y_mean = np.mean(np.vstack(y_values), axis=0)
             avg_slope, avg_intercept = np.polyfit(z_line, y_mean, 1)

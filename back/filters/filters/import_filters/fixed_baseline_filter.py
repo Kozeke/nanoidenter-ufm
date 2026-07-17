@@ -13,17 +13,21 @@ class FixedBaselineFilter(FilterBase):
 
     def create(self):
         """Define the filter's parameters."""
+        # Entered by the user in micrometers (µm); x itself is also
+        # µm-native (device-raw Z, not converted to SI meters anywhere in
+        # the ingest pipeline), so these are used directly in calculate()
+        # with no unit conversion.
         self.add_parameter(
-            "baseline_start_nm",
+            "baseline_start_um",
             "float",
-            "Start of the baseline window (nm)",
+            "Start of the baseline window (µm)",
             0.0
         )
         self.add_parameter(
-            "baseline_dz_nm",
+            "baseline_dz_um",
             "float",
-            "Width of the baseline window (nm)",
-            270000.0
+            "Width of the baseline window (µm)",
+            270.0
         )
         self.add_parameter(
             "degree",
@@ -37,13 +41,13 @@ class FixedBaselineFilter(FilterBase):
         Fit a polynomial to a fixed window of (x, y) and subtract it from
         the whole curve.
 
-        :param x: List or NumPy array of x-axis values (meters, same convention
-                   as the other filters in this project)
-        :param y: List or NumPy array of y-axis values (force)
+        :param x: List or NumPy array of x-axis values (micrometers, µm —
+                   the DB-native, device-raw Z unit; not SI meters)
+        :param y: List or NumPy array of y-axis values (force, micronewtons, µN)
         :return: Baseline-corrected y-values as a list
         """
-        baseline_start_nm = float(self.get_value("baseline_start_nm"))
-        baseline_dz_nm = float(self.get_value("baseline_dz_nm"))
+        baseline_start_um = float(self.get_value("baseline_start_um"))
+        baseline_dz_um = float(self.get_value("baseline_dz_um"))
         degree = int(self.get_value("degree"))
 
         x = np.asarray(x, dtype=np.float64)
@@ -65,12 +69,12 @@ class FixedBaselineFilter(FilterBase):
         if len(x) == 0 or len(y) == 0:
             return y.tolist() if y.size else []
 
-        # Window bounds come in as nm (matches how the UI/other filters expose
-        # parameters); x itself is in meters, so convert here.
-        start_m = baseline_start_nm * 1e-9
-        end_m = start_m + baseline_dz_nm * 1e-9
+        # Window bounds come in as µm (user-facing UI unit) and x is also
+        # µm-native — no unit conversion needed, compare directly.
+        start_um = baseline_start_um
+        end_um = start_um + baseline_dz_um
 
-        mask = (x >= start_m) & (x <= end_m)
+        mask = (x >= start_um) & (x <= end_um)
 
         needed_points = degree + 2
         if np.count_nonzero(mask) < needed_points:
@@ -96,6 +100,9 @@ class FixedBaselineFilter(FilterBase):
         # Diagnostic only — see the note on why this shouldn't be relied on
         # for anything downstream (DuckDB UDFs return arrays, not scalars,
         # and this instance is shared across every row in a query).
+        # Units: x is µm-native and y is µN-native, so this slope (µN/µm)
+        # is numerically identical to N/m — the micro- prefixes on both
+        # axes cancel, no extra SI conversion is needed here.
         self.last_baseline_slope = float(coeffs[-2]) if actual_degree >= 1 else None
 
         return corrected.tolist()

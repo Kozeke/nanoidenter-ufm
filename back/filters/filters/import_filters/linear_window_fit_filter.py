@@ -21,30 +21,36 @@ class LinearWindowFitFilter(FilterBase):
 
     def create(self):
         """Define the filter's parameters."""
+        # Entered by the user in micrometers (µm); x itself is also
+        # µm-native (device-raw Z, not converted to SI meters anywhere in
+        # the ingest pipeline), so these are used directly in calculate()
+        # with no unit conversion.
         self.add_parameter(
-            "t1_nm",
+            "t1_um",
             "float",
-            "Start of the linear fit window (nm)",
-            317000.0
+            "Start of the linear fit window (µm)",
+            317.0
         )
         self.add_parameter(
-            "t2_nm",
+            "t2_um",
             "float",
-            "End of the linear fit window (nm)",
-            535000.0
+            "End of the linear fit window (µm)",
+            535.0
         )
 
     def calculate(self, x, y):
         """
-        Fit a line to (x, y) restricted to [t1_nm, t2_nm] and return that
+        Fit a line to (x, y) restricted to [t1_um, t2_um] and return that
         line evaluated across the entire x array.
 
-        :param x: List or NumPy array of x-axis values (meters)
-        :param y: List or NumPy array of y-axis values (baseline-corrected force)
+        :param x: List or NumPy array of x-axis values (micrometers, µm —
+                   the DB-native, device-raw Z unit; not SI meters)
+        :param y: List or NumPy array of y-axis values (baseline-corrected
+                   force, micronewtons, µN)
         :return: Fitted line values (same length as x) as a list
         """
-        t1_nm = float(self.get_value("t1_nm"))
-        t2_nm = float(self.get_value("t2_nm"))
+        t1_um = float(self.get_value("t1_um"))
+        t2_um = float(self.get_value("t2_um"))
 
         x = np.asarray(x, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
@@ -66,8 +72,10 @@ class LinearWindowFitFilter(FilterBase):
         if len(x) == 0 or len(y) == 0:
             return y.tolist() if y.size else []
 
-        low_m, high_m = sorted((t1_nm * 1e-9, t2_nm * 1e-9))
-        mask = (x >= low_m) & (x <= high_m)
+        # Window bounds come in as µm (user-facing UI unit) and x is also
+        # µm-native — no unit conversion needed, compare directly.
+        low_um, high_um = sorted((t1_um, t2_um))
+        mask = (x >= low_um) & (x <= high_um)
         self.last_fit_point_count = int(np.count_nonzero(mask))
         self.last_window_mask = mask
 
@@ -76,6 +84,10 @@ class LinearWindowFitFilter(FilterBase):
             return y.tolist()
 
         slope, intercept = np.polyfit(x[mask], y[mask], 1)
+        # Units: x is µm-native and y is µN-native, so this slope (µN/µm) is
+        # numerically identical to N/m — the micro- prefixes on both axes
+        # cancel, so it's already ready for compute_derived() to combine
+        # with k_spring (N/m) and tip_radius (m) with no further conversion.
         self.last_slope_per_meter = float(slope)
         self.last_intercept = float(intercept)
 
@@ -94,8 +106,18 @@ class LinearWindowFitFilter(FilterBase):
         k_contact = (k_spring × k_raw) / (k_spring − k_raw)
         E = [(1 − ν²) × k_contact] / (2a)
 
+        Both inputs arrive already in SI units, so neither needs conversion
+        here: k_spring is entered/stored as N/m directly (see the "Spring
+        Constant (N/m)" metadata field), and tip_radius — although shown to
+        the user in mm in the FileOpener UI — is converted to meters by the
+        frontend (and by read_tip_metadata_from_hdf5() for auto-extracted
+        HDF5 tip attributes) before it is ever stored/sent to the backend,
+        so `metadata.tip_radius`/dataset.tip_radius is meters end-to-end.
+        k_raw (µN/µm, numerically = N/m) already matches k_spring's units
+        too, per the note in calculate() above.
+
         :param k_spring: effective system spring constant (N/m), from dataset metadata
-        :param tip_radius: punch radius a (m), from dataset metadata
+        :param tip_radius: punch radius a (m — already SI, not mm), from dataset metadata
         """
         self.last_k_contact = None
         self.last_youngs_modulus = None

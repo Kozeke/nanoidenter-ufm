@@ -3,6 +3,11 @@ from typing import Dict
 import duckdb
 import numpy as np
 import json
+import logging
+
+# Module-level logger so UDF failures are visible in server logs instead of
+# being silently swallowed (see udf_wrapper below).
+logger = logging.getLogger(__name__)
 
 FILTER_REGISTRY: Dict[str, Dict] = {}
 
@@ -50,7 +55,11 @@ def create_udf(filter_name: str, conn: duckdb.DuckDBPyConnection):
             result = filter_instance.calculate(x_values, y_values)
             return result if result is not None else None
         except Exception as e:
-            # print(f"Error in UDF for {filter_name}: {e}")
+            # Log instead of silently swallowing — an uncaught error here
+            # previously surfaced only as an empty/NULL curve on the
+            # frontend with no indication of why (e.g. scipy raising when
+            # the requested window is larger than the curve itself).
+            logger.warning("Error in UDF for %s: %s", filter_name, e)
             return None
 
     # Consistent return type: DOUBLE[]

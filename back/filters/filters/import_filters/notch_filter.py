@@ -41,9 +41,11 @@ class NotchFilter(FilterBase):
         x = np.array(x, dtype=np.float64)
         y = np.array(y, dtype=np.float64)
 
-        # Compute frequency (Hz) from period (nm)
-        dz = (x[-1] - x[0]) / (len(x) - 1)  # Spacing between x-values
-        freq = dz / (period_nm * 1e-9)  # Convert period to Hz
+        # Compute frequency (Hz) from period (nm). x/dz are µm-native (not
+        # meters), so period_nm must be converted nm -> µm (*1e-3) to match —
+        # using *1e-9 (nm -> meters) here made the ratio ~1e6x too large.
+        dz = (x[-1] - x[0]) / (len(x) - 1)  # Spacing between x-values (µm)
+        freq = dz / (period_nm * 1e-3)  # Convert period to Hz
 
         # Ensure valid quality factor (Q) > 0 to prevent division issues
         Q = max(1, quality_factor)

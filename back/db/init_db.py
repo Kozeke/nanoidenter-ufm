@@ -116,9 +116,9 @@ def init_datasets_table(conn: duckdb.DuckDBPyConnection) -> None:
             tip_radius DOUBLE,
             tip_geometry VARCHAR,
 
-            -- True once absolute_force has been applied so trim_retract can
-            -- detect peaks correctly (max |F| rather than min signed F).
-            force_absolute BOOLEAN DEFAULT FALSE,
+            -- True once flip_force_sign has been applied (F -> -F) so trim_retract
+            -- can detect peaks correctly (max F rather than min signed F).
+            force_sign_flipped BOOLEAN DEFAULT FALSE,
 
             -- True once the retract phase has been trimmed; prevents the
             -- operation from being applied a second time on already-approach-only data.
@@ -135,7 +135,10 @@ def init_datasets_table(conn: duckdb.DuckDBPyConnection) -> None:
     # Backward-compatible migrations: add columns if an older DB is opened.
     # After each failed ALTER TABLE, DuckDB marks the transaction as aborted —
     # a ROLLBACK is required to clear that state before issuing further statements.
-    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN force_absolute BOOLEAN DEFAULT FALSE")
+    # Rename the legacy force_absolute column (from the old |F| behaviour) to
+    # force_sign_flipped now that the operation negates F instead of abs'ing it.
+    _run_migration(conn, "ALTER TABLE datasets RENAME COLUMN force_absolute TO force_sign_flipped")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN force_sign_flipped BOOLEAN DEFAULT FALSE")
     _run_migration(conn, "ALTER TABLE datasets ADD COLUMN retract_trimmed BOOLEAN DEFAULT FALSE")
     _run_migration(conn, "ALTER TABLE datasets ADD COLUMN z_normalized BOOLEAN DEFAULT FALSE")
     _run_migration(conn, "ALTER TABLE datasets ADD COLUMN tip_angle DOUBLE")

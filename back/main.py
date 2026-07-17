@@ -1695,28 +1695,32 @@ async def get_all_elasticity_params(data: Dict[str, Any]):
 
 
 
-# Returns the one-time operation flags for a dataset so the frontend can
-# disable checkboxes that have already been applied irreversibly.
+# Returns the current operation flags for a dataset. retract_trimmed and
+# z_normalized are one-time/irreversible, so the frontend disables their
+# checkboxes once true. force_sign_flipped is self-inverse (toggleable and
+# re-appliable), so the frontend never disables that checkbox — it only uses
+# the flag to know the current sign state for validation/UX purposes.
 @app.get("/dataset-trim-state/{dataset_id}")
 async def get_dataset_trim_state(dataset_id: int, user=Depends(get_current_user)):
     """
     Return the persistent trim-state flags for a dataset:
-      - force_absolute: True once |F| has been applied to all curves.
-      - retract_trimmed: True once the retract phase has been removed.
-      - z_normalized: True once z-normalization (z[i] -= z[0]) has been applied.
-    The frontend uses these to disable the corresponding checkboxes so the
-    operations are never accidentally repeated on already-transformed data.
+      - force_sign_flipped: True if F -> -F is currently applied to all curves.
+        Toggleable: applying the flip again restores the original sign.
+      - retract_trimmed: True once the retract phase has been removed
+        (irreversible — checkbox stays disabled once true).
+      - z_normalized: True once z-normalization (z[i] -= z[0]) has been applied
+        (irreversible — checkbox stays disabled once true).
     """
     try:
         conn = get_conn()
         row = conn.execute(
-            "SELECT force_absolute, retract_trimmed, z_normalized FROM datasets WHERE id = ?",
+            "SELECT force_sign_flipped, retract_trimmed, z_normalized FROM datasets WHERE id = ?",
             [dataset_id],
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
         return {
-            "force_absolute": bool(row[0]) if row[0] is not None else False,
+            "force_sign_flipped": bool(row[0]) if row[0] is not None else False,
             "retract_trimmed": bool(row[1]) if row[1] is not None else False,
             # Whether z-normalization has already been applied to this dataset.
             "z_normalized": bool(row[2]) if row[2] is not None else False,
@@ -1752,34 +1756,37 @@ async def trim_data_endpoint(request: Request, user=Depends(get_current_user)):
         # When True, each curve is truncated at its peak-force index (argmin of
         # force), discarding the retract phase that follows the deepest indent.
         trim_retract = bool(body.get("trim_retract", False))
-        # When True, the absolute value is applied to every force sample before
-        # any range-based trimming so that |F| replaces F across all curves.
-        absolute_force = bool(body.get("absolute_force", False))
+        # When True, every force sample is negated before any range-based
+        # trimming so that -F replaces F across all curves (sign flip).
+        flip_force_sign = bool(body.get("flip_force_sign", False))
         # When True, shift every curve's z values so the first z becomes 0:
         # z[i] -= z[0]. Applied only when all curves have positive first and last z.
         normalize_z = bool(body.get("normalize_z", False))
 
-        if force_min is None and force_max is None and not trim_retract and not absolute_force and not normalize_z:
+        if force_min is None and force_max is None and not trim_retract and not flip_force_sign and not normalize_z:
             raise HTTPException(
                 status_code=400,
-                detail="At least one of force_min, force_max, trim_retract, absolute_force, or normalize_z must be provided"
+                detail="At least one of force_min, force_max, trim_retract, flip_force_sign, or normalize_z must be provided"
             )
 
         conn = get_conn()
 
-        # Read whether forces were already made absolute in a previous call so
+        # Read whether forces are currently sign-flipped from a previous call so
         # that trim_retract uses the correct peak-detection direction even when
-        # absolute_force is not set in this request.
+        # flip_force_sign is not set in this request.
         dataset_row = conn.execute(
-            "SELECT force_absolute FROM datasets WHERE id = ?",
+            "SELECT force_sign_flipped FROM datasets WHERE id = ?",
             [dataset_id],
         ).fetchone()
         # Default False if the column is missing on a very old DB row.
-        already_absolute = bool(dataset_row[0]) if dataset_row and dataset_row[0] is not None else False
+        already_sign_flipped = bool(dataset_row[0]) if dataset_row and dataset_row[0] is not None else False
 
-        # Forces are considered absolute for this operation if either they were
-        # already abs'd in a prior call or the caller requests it now.
-        forces_are_absolute = already_absolute or absolute_force
+        # Sign-flip is self-inverse (negating twice restores the original
+        # data), so it is toggleable/re-appliable rather than a one-time flag:
+        # the resulting state is the XOR of the persisted state and this
+        # request's flip_force_sign, i.e. requesting it again on
+        # already-flipped data flips it back to the original sign.
+        forces_are_sign_flipped = already_sign_flipped != flip_force_sign
 
         # Fetch all rows for this dataset so we can filter element-by-element
         rows = conn.execute(
@@ -1831,24 +1838,18 @@ async def trim_data_endpoint(request: Request, user=Depends(get_current_user)):
             if not force_values:
                 continue
 
-            # Apply absolute value to all force samples first so that
-            # subsequent range trimming (and retract detection) operates on |F|.
-            if absolute_force:
-                force_values = [abs(f) for f in force_values]
-
-            # After abs(), all values are ≥ 0 so a negative lower bound is
-            # meaningless (it would let everything pass) and must be ignored to
-            # avoid silently discarding data when the caller passed the original
-            # signed force_min alongside absolute_force=True.
-            effective_force_min = force_min
-            if forces_are_absolute and force_min is not None and force_min < 0:
-                effective_force_min = None
+            # Negate every force sample first so that subsequent range trimming
+            # (and retract detection) operates on the flipped values (-F).
+            # Unlike |F|, negation does not confine values to a fixed sign, so
+            # force_min/force_max bounds keep their usual signed meaning.
+            if flip_force_sign:
+                force_values = [-f for f in force_values]
 
             # Build keep-mask: True for indices that satisfy both bounds
             mask = []
             for f in force_values:
                 keep = True
-                if effective_force_min is not None and f < effective_force_min:
+                if force_min is not None and f < force_min:
                     keep = False
                 if force_max is not None and f > force_max:
                     keep = False
@@ -1865,15 +1866,15 @@ async def trim_data_endpoint(request: Request, user=Depends(get_current_user)):
             # Retract-phase trimming: keep only the approach portion of each
             # curve — everything up to and including the peak-force sample.
             # On signed data the deepest indentation point is the most-negative
-            # (minimum) force value. Once forces are absolute (either from this
-            # request or a prior one), all values are ≥ 0, so the deepest point
-            # becomes the maximum instead. Using min() on abs'd data would
-            # wrongly find the near-zero start of contact and discard almost
-            # the entire approach curve.
+            # (minimum) force value. Negation is order-reversing, so once forces
+            # are sign-flipped (either from this request or a prior one), that
+            # same point becomes the maximum instead. Using min() on flipped
+            # data would wrongly find the near-zero start of contact and
+            # discard almost the entire approach curve.
             if trim_retract and new_force:
                 peak_idx = (
                     new_force.index(max(new_force))
-                    if forces_are_absolute
+                    if forces_are_sign_flipped
                     else new_force.index(min(new_force))
                 )
                 new_force = new_force[: peak_idx + 1]
@@ -1899,15 +1900,17 @@ async def trim_data_endpoint(request: Request, user=Depends(get_current_user)):
                 [new_force, new_z, dataset_id, curve_id, segment_type],
             )
 
-        # Persist flags so the frontend can disable already-applied operations
-        # and so future calls know the current data state without re-sending flags.
-        #   force_absolute  — set once |F| has been written into force_vs_z.
-        #   retract_trimmed — set once the retract phase has been discarded.
-        #   z_normalized    — set once z values have been shifted by z[0] per curve.
+        # Persist flags so the frontend knows the current data state without
+        # re-sending them, and so already-applied irreversible operations stay
+        # disabled in the UI.
+        #   force_sign_flipped — reflects the current sign state (toggleable);
+        #                        always written since it can flip back to FALSE.
+        #   retract_trimmed    — set once the retract phase has been discarded
+        #                        (irreversible, so only ever written as TRUE).
+        #   z_normalized       — set once z values have been shifted by z[0]
+        #                        per curve (irreversible, only written as TRUE).
         # All columns are updated in a single statement to stay consistent.
-        update_cols = []
-        if forces_are_absolute:
-            update_cols.append("force_absolute = TRUE")
+        update_cols = [f"force_sign_flipped = {forces_are_sign_flipped}"]
         if trim_retract:
             update_cols.append("retract_trimmed = TRUE")
         if normalize_z:

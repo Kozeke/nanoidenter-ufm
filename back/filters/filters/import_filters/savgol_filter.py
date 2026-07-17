@@ -29,13 +29,16 @@ class SavgolSmoothFilter(FilterBase):
     
     def create(self):
         """Define the filter's parameters."""
-        # Physical width of the smoothing window in nanometers; converted to a
-        # number of samples at runtime based on the actual x spacing.
+        # Physical width of the smoothing window, entered by the user in
+        # micrometers (µm); x itself is also µm-native (device-raw Z, not
+        # converted to SI meters anywhere in the ingest pipeline), so this
+        # is converted directly to a sample count at runtime based on x
+        # spacing with no unit conversion.
         self.add_parameter(
-            "window_size",
+            "window_size_um",
             "float",
-            "Window size for filtering (in nm)",
-            25000.0
+            "Window size for filtering (in µm)",
+            25.0
         )
         # Degree of the polynomial fitted inside each window; higher orders track
         # sharper features but smooth less.
@@ -50,16 +53,18 @@ class SavgolSmoothFilter(FilterBase):
         """
         Applies the Savitzky-Golay filter to smooth data while preserving steps.
 
-        :param x: List or NumPy array of x-axis values
+        :param x: List or NumPy array of x-axis values (micrometers, µm —
+                  the DB-native, device-raw Z unit; not SI meters)
         :param y: List or NumPy array of y-axis values
         :return: Smoothed y-values as a list
         """
-        # Read the user-configured window width (nm) and coerce to int samples later.
-        window_size = int(self.get_value("window_size"))
+        # Read the user-configured window width (µm); x is also µm-native
+        # (see calculate()'s docstring), so no unit conversion is needed below.
+        window_size_um = float(self.get_value("window_size_um"))
         # Read the polynomial order used for the local fit.
         polyorder = int(self.get_value("polyorder"))
         # Log the raw parameters as received from the UI/config.
-        # logger.info("[SavgolSmooth] params: window_size=%s nm, polyorder=%s", window_size, polyorder)
+        # logger.info("[SavgolSmooth] params: window_size_um=%s, polyorder=%s", window_size_um, polyorder)
         # Work in float64 NumPy arrays so SciPy gets contiguous numeric data.
         x = np.asarray(x, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
@@ -75,15 +80,16 @@ class SavgolSmoothFilter(FilterBase):
             # logger.warning("[SavgolSmooth] empty input (x=%d, y=%d); returning original", len(x), len(y))
             return y  # Return original if empty
 
-        # Average spacing between consecutive x samples (meters); guards against
-        # division by zero when there is only a single point.
+        # Average spacing between consecutive x samples (micrometers, µm —
+        # the DB-native, device-raw Z unit). Guards against division by
+        # zero when there is only a single point.
         xstep = (max(x) - min(x)) / (len(x) - 1) if len(x) > 1 else 1.0  # Avoid division by zero
-        # Log computed spacing (in nm) to sanity-check the nm->sample conversion.
-        # logger.debug("[SavgolSmooth] xstep=%.6e m (%.4f nm)", xstep, xstep * 1e9)
+        # Log computed spacing to sanity-check the µm->sample conversion.
+        # logger.debug("[SavgolSmooth] xstep=%.6e um", xstep)
 
-        # Translate the nm window into a whole number of samples: (window in m) / (m per sample).
-        # 1e-9 converts nm -> m so it matches the x-axis units; floor at 1 sample.
-        win = max(1, int(window_size * 1e-9 / xstep))
+        # Translate the µm window into a whole number of samples: (window in
+        # µm) / (µm per sample) — both already in µm, so no unit conversion.
+        win = max(1, int(window_size_um / xstep))
         # Log the raw sample count before the odd-length adjustment.
         # logger.debug("[SavgolSmooth] window in samples (raw)=%d", win)
 
@@ -92,6 +98,17 @@ class SavgolSmoothFilter(FilterBase):
             win += 1
             # Log when we bump the window to keep it odd.
             # logger.debug("[SavgolSmooth] window bumped to odd length=%d", win)
+
+        # scipy.signal.savgol_filter requires window_length <= len(x); a
+        # window_size_um much larger than the curve's actual span (or a
+        # curve with very fine/short sampling) can otherwise push `win`
+        # past len(x), which raises ValueError inside scipy. That error was
+        # previously swallowed by the UDF wrapper (filter_registry.py),
+        # silently turning the whole curve into NULL/empty on the frontend
+        # with no visible error — clamp here instead so the filter degrades
+        # gracefully to the largest odd window that actually fits the curve.
+        max_odd_window = len(x) if len(x) % 2 == 1 else len(x) - 1
+        win = max(1, min(win, max_odd_window))
 
         # polyorder must be strictly less than the window length, otherwise SciPy errors.
         adjusted_polyorder = min(polyorder, win - 1)

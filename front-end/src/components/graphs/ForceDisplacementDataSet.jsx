@@ -202,11 +202,12 @@ const ForceDisplacementDataSet = ({
   const xUnitOption = UNIT_OPTIONS.find((o) => o.value === xUnitPrefix);
   const yUnitOption = UNIT_OPTIONS.find((o) => o.value === yUnitPrefix);
 
-  // SI conversion factors driven by the selected prefix (e.g. nano → 1e9, milli → 1e3)
+  // Display factors driven by the selected prefix (e.g. nano → 1e3, milli → 1e-3),
+  // relative to the DB-native units (Z in µm, force in µN) — see UnitPreferencesContext.
   const xSiFactor = xUnitOption.factor;
   const ySiFactor = yUnitOption.factor;
 
-  // Raw SI value × scaleFactor = graph display value in the selected unit (e.g. µm, µN)
+  // Native µm/µN value × scaleFactor = graph display value in the selected unit
   const xScaleFactor = xSiFactor;
   const yScaleFactor = ySiFactor;
 
@@ -368,11 +369,15 @@ const ForceDisplacementDataSet = ({
     const markers = [];
 
     if (baselineCfg) {
-      const startNm = Number(baselineCfg.baseline_start_nm ?? 0);
-      const dzNm = Number(baselineCfg.baseline_dz_nm ?? 0);
-      if (Number.isFinite(startNm) && Number.isFinite(dzNm) && dzNm > 0) {
-        const startScaled = startNm * 1e-9 * xScaleFactor;
-        const endScaled = (startNm + dzNm) * 1e-9 * xScaleFactor;
+      const startUm = Number(baselineCfg.baseline_start_um ?? 0);
+      const dzUm = Number(baselineCfg.baseline_dz_um ?? 0);
+      if (Number.isFinite(startUm) && Number.isFinite(dzUm) && dzUm > 0) {
+        // The backend's FixedBaselineFilter now receives these params in µm
+        // and converts to meters internally to match the DB-native SI Z
+        // values. Mirror that here (µm -> m, *1e-6) before applying the
+        // same display factor as the real curve points.
+        const startScaled = startUm * 1e-6 * xScaleFactor;
+        const endScaled = (startUm + dzUm) * 1e-6 * xScaleFactor;
         markers.push({
           name: "_baseline_window_marker",
           type: "line",
@@ -396,11 +401,13 @@ const ForceDisplacementDataSet = ({
     }
 
     if (linfitCfg) {
-      const t1Nm = Number(linfitCfg.t1_nm ?? NaN);
-      const t2Nm = Number(linfitCfg.t2_nm ?? NaN);
-      if (Number.isFinite(t1Nm) && Number.isFinite(t2Nm)) {
-        const lowScaled = Math.min(t1Nm, t2Nm) * 1e-9 * xScaleFactor;
-        const highScaled = Math.max(t1Nm, t2Nm) * 1e-9 * xScaleFactor;
+      const t1Um = Number(linfitCfg.t1_um ?? NaN);
+      const t2Um = Number(linfitCfg.t2_um ?? NaN);
+      if (Number.isFinite(t1Um) && Number.isFinite(t2Um)) {
+        // Same µm -> m conversion as the baseline window above, matching
+        // LinearWindowFitFilter's now-meters-native x.
+        const lowScaled = Math.min(t1Um, t2Um) * 1e-6 * xScaleFactor;
+        const highScaled = Math.max(t1Um, t2Um) * 1e-6 * xScaleFactor;
         markers.push({
           name: "_k_window_marker",
           type: "line",
