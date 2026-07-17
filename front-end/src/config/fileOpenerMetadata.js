@@ -8,7 +8,10 @@ export const TIP_GEOMETRY_OPTIONS = ["sphere", "cone", "cylinder", "pyramid"];
 
 // Visible metadata fields in step 4 (labels include units where applicable).
 export const VISIBLE_FILE_OPENER_METADATA_FIELDS = [
-  { key: "geometry", label: "Geometry", inputType: "text" },
+  // "Geometry" is a duplicate of "Tip geometry" below (they are kept in sync as
+  // aliases in applyDisplayValueToMetadata/normalizeTipAttributes for backend
+  // compatibility), so the redundant free-text input is hidden from the UI.
+  // { key: "geometry", label: "Geometry", inputType: "text" },
   {
     key: "tip_geometry",
     label: "Tip geometry",
@@ -120,6 +123,17 @@ export const normalizeTipAttributes = (attributes = {}) => {
   return normalized;
 };
 
+// Number of significant digits kept when converting between storage and
+// display units, to avoid surfacing IEEE-754 rounding dust (e.g. converting
+// 123 um/s to 0.000123 m/s and back can otherwise yield 123.00000000000001).
+const DISPLAY_PRECISION_DIGITS = 12;
+
+/** Rounds a number to a fixed number of significant digits to hide floating-point noise. */
+const roundForDisplay = (value) => {
+  if (!Number.isFinite(value) || value === 0) return value;
+  return Number(value.toPrecision(DISPLAY_PRECISION_DIGITS));
+};
+
 /** Convert stored SI metadata to a display string for one visible field. */
 export const metadataValueForDisplay = (field, metadata = {}) => {
   const stored = metadata[field.key];
@@ -127,7 +141,9 @@ export const metadataValueForDisplay = (field, metadata = {}) => {
 
   if (field.inputType === "number" && field.storageScale) {
     const numeric = Number(stored);
-    return Number.isFinite(numeric) ? String(numeric * field.storageScale) : "";
+    return Number.isFinite(numeric)
+      ? String(roundForDisplay(numeric * field.storageScale))
+      : "";
   }
 
   return String(stored);
@@ -152,7 +168,9 @@ export const applyDisplayValueToMetadata = (field, displayValue, metadata = {}) 
     if (!Number.isFinite(numeric)) {
       return nextMetadata;
     }
-    nextMetadata[field.key] = field.storageScale ? numeric / field.storageScale : numeric;
+    nextMetadata[field.key] = field.storageScale
+      ? roundForDisplay(numeric / field.storageScale)
+      : numeric;
   } else {
     nextMetadata[field.key] = displayValue;
   }
