@@ -8,6 +8,13 @@ import {
   InputLabel,
   Box,
 } from "@mui/material";
+// Regular curves are always named "curve{id}" (e.g. "curve0"); filters like
+// LinearWindowFit/Hertz add synthetic diagnostic overlay entries to the same curve
+// list for on-screen display (e.g. "0_linfit", "avg_linfit", "0_hertz"). Those aren't
+// real curves in the database, so the backend export endpoint rejects them — this
+// guard keeps them selectable for Display (visualization) but not for Export.
+const isExportableCurveId = (id) => /^curve\d+$/.test(String(id));
+
 const CurveControlsComponent = ({
   curveFrom,
   curveTo,
@@ -52,6 +59,11 @@ const CurveControlsComponent = ({
 
   // Derives a flag indicating whether controls should be disabled.
   const isDisabled = !isSocketConnected;
+
+  // Subset of forceData that are real, exportable curves (excludes synthetic
+  // diagnostic overlay entries like "0_linfit"/"avg_linfit") — used to drive the
+  // "Export All" checkbox so it never selects an id the backend will reject.
+  const exportableForceData = forceData.filter((c) => isExportableCurveId(c.curve_id));
 
   useEffect(() => { setCurveIdInput(curveId ?? ""); }, [curveId]);
   useEffect(() => { setCurveFromInput(String(curveFrom ?? 0)); }, [curveFrom]);
@@ -325,12 +337,15 @@ setSelectedCurveIds((prev) => {
               <Box width="56px" textAlign="center">
                 <Checkbox
                   checked={
-                    forceData.length > 0 &&
-                    forceData.every((c) => selectedExportCurveIds.includes(c.curve_id))
+                    exportableForceData.length > 0 &&
+                    exportableForceData.every((c) => selectedExportCurveIds.includes(c.curve_id))
                   }
                   onChange={(event) => {
                     event.stopPropagation();
-                    const allIds = forceData.map((c) => c.curve_id);
+                    // Only real "curve{id}" entries are exportable; synthetic overlay
+                    // curves (e.g. "0_linfit") are excluded so "Export All" never sends
+                    // an id the backend will reject.
+                    const allIds = exportableForceData.map((c) => c.curve_id);
                     if (event.target.checked) {
                       onExportCurveIdsChange(allIds);
                       setSelectedCurveIds(allIds);
@@ -346,34 +361,38 @@ setSelectedCurveIds((prev) => {
             </Box>
           </MenuItem>
 
-          {forceData.map((curve) => (
-            <MenuItem key={curve.curve_id} value={curve.curve_id} style={menuItemStyle}>
-              <Box display="flex" alignItems="center" width="100%">
-                <Box width="56px" textAlign="center">
-                  <Checkbox
-                    checked={selectedCurveIds.includes(curve.curve_id)}
-                    size="small"
-                    style={checkboxStyle}
-                  />
+          {forceData.map((curve) => {
+            const exportable = isExportableCurveId(curve.curve_id);
+            return (
+              <MenuItem key={curve.curve_id} value={curve.curve_id} style={menuItemStyle}>
+                <Box display="flex" alignItems="center" width="100%">
+                  <Box width="56px" textAlign="center">
+                    <Checkbox
+                      checked={selectedCurveIds.includes(curve.curve_id)}
+                      size="small"
+                      style={checkboxStyle}
+                    />
+                  </Box>
+                  <Box flexGrow={1}>
+                    <ListItemText
+                      primary={curve.curve_id}
+                      primaryTypographyProps={{ fontSize: 13 }}
+                    />
+                  </Box>
+                  <Box width="56px" textAlign="center">
+                    <Checkbox
+                      checked={exportable && selectedExportCurveIds.includes(curve.curve_id)}
+                      onChange={handleExportChange(curve.curve_id)}
+                      disabled={!exportable}
+                      size="small"
+                      style={{ ...checkboxStyle, marginLeft: "6px" }}
+                      title={exportable ? "Export" : "Diagnostic overlay curve — not exportable"}
+                    />
+                  </Box>
                 </Box>
-                <Box flexGrow={1}>
-                  <ListItemText
-                    primary={curve.curve_id}
-                    primaryTypographyProps={{ fontSize: 13 }}
-                  />
-                </Box>
-                <Box width="56px" textAlign="center">
-                  <Checkbox
-                    checked={selectedExportCurveIds.includes(curve.curve_id)}
-                    onChange={handleExportChange(curve.curve_id)}
-                    size="small"
-                    style={{ ...checkboxStyle, marginLeft: "6px" }}
-                    title="Export"
-                  />
-                </Box>
-              </Box>
-            </MenuItem>
-          ))}
+              </MenuItem>
+            );
+          })}
         </Select>
       </FormControl>
 

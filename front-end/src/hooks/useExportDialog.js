@@ -194,10 +194,14 @@ export const useExportDialog = (experimentDataOrFn = null) => {
   });
 
   // Derived values
-  // Extracts curve IDs from store or defaults to empty array.
+  // Extracts curve IDs from store or defaults to empty array. Filters out synthetic
+  // diagnostic overlay ids (e.g. "0_linfit", "avg_linfit", "0_hertz") that filters like
+  // LinearWindowFit/Hertz add to the on-screen curve list for display purposes only —
+  // those aren't real curves in the database and the export endpoint rejects them with
+  // "Invalid curve_id format". Only "curve{id}"-shaped ids are ever exportable.
   const curveIds =
     selectedExportCurveIds && selectedExportCurveIds.length > 0
-      ? selectedExportCurveIds
+      ? selectedExportCurveIds.filter((id) => /^curve\d+$/.test(String(id)))
       : [];
   // Uses store value if no specific curves selected, otherwise undefined.
   const numCurves =
