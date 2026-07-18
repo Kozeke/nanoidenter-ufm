@@ -135,7 +135,9 @@ const SingleSelectFilter = ({
   size = "small",
   sx = fieldFontSx,
   disabled = false,
-  helperText = null
+  helperText = null,
+  // Placeholder shown when disabled and nothing is selected
+  disabledPlaceholder = "Enter Curve ID first",
 }) => (
   <Grid item xs={3}>
     <FormControl fullWidth size={size} disabled={disabled}>
@@ -180,7 +182,7 @@ const SingleSelectFilter = ({
             onChange(syntheticEvent);
           }
         }}
-        renderValue={(selected) => selected ? formatLabel(selected) : (disabled ? "Enter Curve ID first" : "Select...")}
+        renderValue={(selected) => selected ? formatLabel(selected) : (disabled ? disabledPlaceholder : "Select...")}
         sx={sx}
         disabled={disabled}
       >
@@ -421,6 +423,8 @@ const FiltersComponent = ({
           value={selectedCpFilters}
           onChange={handleCpChange}
           formatLabel={safeCapitalize}
+          disabled
+          disabledPlaceholder="Disabled"
         />
 
         {activeTab === "forceIndentation" && (

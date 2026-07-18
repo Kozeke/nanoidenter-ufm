@@ -155,7 +155,8 @@ export const useExportDialog = (experimentDataOrFn = null) => {
   const [levelNames, setLevelNames] = useState(['curve0', 'segment0']);
   // Stores the metadata path location within HDF5 file.
   const [metadataPath, setMetadataPath] = useState('curve0/tip');
-  // Stores the dataset path location within HDF5 file.
+  // Stores the dataset path location within HDF5 file (the Force dataset; the backend
+  // always writes a sibling "Z" dataset next to it under the same segment group).
   const [datasetPath, setDatasetPath] = useState('curve0/segment0/Force');
   // Stores the metadata fields for non-CSV exports.
   const [metadata, setMetadata] = useState(initialMetadata);
@@ -390,7 +391,8 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     // and the exporter always sets that attribute's "unit" to "mm", so this field must be mm.
     tip_radius: { required: true, label: 'Tip Radius (mm)', type: 'number', min: 0 },
     // Optional fields below only exist on the `datasets` table (see datasetLevelMetadata).
-    tip_angle: { required: false, label: 'Tip Angle (deg)', type: 'number', min: 0 },
+    // 0 is a valid sentinel (unknown tip angle); do not enforce min > 0.
+    tip_angle: { required: false, label: 'Tip Angle (deg)', type: 'number' },
     sensor_type: { required: false, label: 'Sensor Type', type: 'text' },
     // Stored/exported as-is in N/mm, matching the dataset-editing modal (no SI conversion).
     force_scale_to_n: { required: false, label: 'Force conversion coefficient (N/mm)', type: 'number' },
@@ -858,6 +860,31 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     clearErrorContains(token);
   };
 
+  // Surfaces the K_raw / K_contact / Young's modulus values computed by the LinearWindowFit
+  // regular filter (see linear_window_fit_filter.py) so the export dialog can display them
+  // as read-only fields. modelStats.stiffness is only populated while that filter is active
+  // and at least 2 curves produced a valid fit, so each lookup safely falls back to empty.
+  const stiffnessResults = useMemo(() => {
+    const list = modelStats?.stiffness || [];
+    const find = (key) => list.find((item) => item?.key === key);
+    return {
+      kRaw: find('k_raw'),
+      kContact: find('k_contact'),
+      youngsModulus: find('youngs_modulus'),
+    };
+  }, [modelStats]);
+
+  // Derives the sibling "Z" dataset path shown alongside the Force dataset path, since the
+  // backend always writes both "Force" and "Z" datasets under the same segment group and
+  // ignores the exact leaf name of datasetPath beyond validation.
+  const zDatasetPath = useMemo(() => {
+    const trimmed = (datasetPath || '').trim();
+    if (!trimmed) return '';
+    const segments = trimmed.split('/');
+    segments[segments.length - 1] = 'Z';
+    return segments.join('/');
+  }, [datasetPath]);
+
   // Generates a simple textual preview of HDF5 structure.
   const generateHdf5Preview = () => {
     return `Root
@@ -871,7 +898,9 @@ export const useExportDialog = (experimentDataOrFn = null) => {
   // Initializes the export dialog for a specific format.
   const handleExportStart = (format) => {
     setSelectedFormat(format);
-    setExportPath(`exports/processed_data.${format}`);
+    // Timestamped filename avoids "file already exists" errors on re-export.
+    const uniqueSuffix = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    setExportPath(`exports/processed_data_${uniqueSuffix}.${format}`);
     setOpen(true);
     setStep(0);
     setErrors([]);
@@ -895,6 +924,8 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     levelNames,
     metadataPath,
     datasetPath,
+    zDatasetPath,
+    stiffnessResults,
     metadata,
     errors,
     loading,

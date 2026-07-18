@@ -86,6 +86,8 @@ const ExportButton = ({
     levelNames,
     metadataPath,
     datasetPath,
+    zDatasetPath,
+    stiffnessResults,
     metadata,
     errors,
     loading,
@@ -208,13 +210,13 @@ const ExportButton = ({
       }} maxWidth="sm" fullWidth>
         <DialogTitle>
           {getSteps()[step]}
-          {selectedFormat === 'hdf5' && (
+          {/* {selectedFormat === 'hdf5' && (
             <Tooltip title="HDF5 supports hierarchical data, so extra setup is needed for levels, paths, and structure.">
               <Typography component="span" variant="body2" sx={{ ml: 1, color: 'info.main' }}>
                 (Why more steps?)
               </Typography>
             </Tooltip>
-          )}
+          )} */}
           {/* {selectedFormat === 'csv' && (
             <Tooltip title="CSV export supports SoftMech-style analysis with averaging and model fitting.">
               <Typography component="span" variant="body2" sx={{ ml: 1, color: 'info.main' }}>
@@ -324,11 +326,11 @@ const ExportButton = ({
                     }}
                     fullWidth
                     margin="normal"
-                    helperText="Enter a valid HDF5 file path (e.g., exports/processed_data.hdf5)"
+                    helperText="Pre-filled with a unique filename; you can edit it if needed (e.g., exports/processed_data_2026-07-18T15-28-45.hdf5)"
                     error={errors.some((error) => error.includes('Export path'))}
                   />
                   <TextField
-                    label="Dataset Path"
+                    label="Dataset Path (Force)"
                     value={datasetPath}
                     onChange={(e) => {
                       setDatasetPath(e.target.value);
@@ -340,6 +342,14 @@ const ExportButton = ({
                     margin="normal"
                     helperText="Enter the dataset path (e.g., curve0/segment0/Force)"
                     error={errors.some((error) => error.includes('Dataset path'))}
+                  />
+                  <TextField
+                    label="Dataset Path (Z)"
+                    value={zDatasetPath}
+                    fullWidth
+                    margin="normal"
+                    disabled
+                    helperText="Z is always exported alongside Force as a sibling dataset under the same segment group"
                   />
                 </Box>
               )}
@@ -402,6 +412,34 @@ const ExportButton = ({
                       />
                     );
                   })}
+
+                  <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+                    Stiffness Results (LinearWindowFit)
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    Computed by the LinearWindowFit filter when active; left blank otherwise.
+                  </Typography>
+                  <TextField
+                    label="K_raw (N/m)"
+                    value={stiffnessResults.kRaw?.value || ''}
+                    fullWidth
+                    margin="normal"
+                    disabled
+                  />
+                  <TextField
+                    label="K_contact (N/m)"
+                    value={stiffnessResults.kContact?.value || ''}
+                    fullWidth
+                    margin="normal"
+                    disabled
+                  />
+                  <TextField
+                    label="Young's Modulus E (Pa)"
+                    value={stiffnessResults.youngsModulus?.value || ''}
+                    fullWidth
+                    margin="normal"
+                    disabled
+                  />
                 </Box>
               )}
 
@@ -410,7 +448,8 @@ const ExportButton = ({
                   <Typography variant="h6" gutterBottom>Review Export Details</Typography>
                   <Typography><strong>File Path:</strong> {exportPath}</Typography>
                   <Typography><strong>Level Names:</strong> {levelNames.join(', ')}</Typography>
-                  <Typography><strong>Dataset Path:</strong> {datasetPath || 'Not specified'}</Typography>
+                  <Typography><strong>Dataset Path (Force):</strong> {datasetPath || 'Not specified'}</Typography>
+                  <Typography><strong>Dataset Path (Z):</strong> {zDatasetPath || 'Not specified'}</Typography>
                   <Typography><strong>Metadata Path:</strong> {metadataPath}</Typography>
                   <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>Preview of HDF5 Structure</Typography>
                   <Box sx={{ backgroundColor: '#f5f5f5', p: 2, borderRadius: 1, whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
@@ -438,7 +477,7 @@ const ExportButton = ({
                       label="Export Type"
                     >
                       <MenuItem value="raw">Raw Data</MenuItem>
-                      <MenuItem value="average">Average Curves</MenuItem>
+                      {/* <MenuItem value="average">Average Curves</MenuItem> */}
                       {/* <MenuItem value="scatter">Scatter Data</MenuItem> */}
                     </Select>
                   </FormControl>
@@ -556,6 +595,34 @@ const ExportButton = ({
                       <CircularProgress />
                     </Box>
                   )}
+
+                  <Typography variant="h6" gutterBottom>
+                    Stiffness Results (LinearWindowFit)
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    Computed by the LinearWindowFit filter when active; left blank otherwise.
+                  </Typography>
+                  <TextField
+                    label="K_raw (N/m)"
+                    value={stiffnessResults.kRaw?.value || ''}
+                    fullWidth
+                    margin="normal"
+                    disabled
+                  />
+                  <TextField
+                    label="K_contact (N/m)"
+                    value={stiffnessResults.kContact?.value || ''}
+                    fullWidth
+                    margin="normal"
+                    disabled
+                  />
+                  <TextField
+                    label="Young's Modulus E (Pa)"
+                    value={stiffnessResults.youngsModulus?.value || ''}
+                    fullWidth
+                    margin="normal"
+                    disabled
+                  />
                   
                   {/* Display calculated SoftMech metadata */}
                   {exportType !== 'raw' && (

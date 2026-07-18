@@ -82,6 +82,16 @@ function SaveExperimentModal({ metadataObject, dashboard, token, onClose }) {
     setResult(null);
 
     try {
+      // K_raw, K_contact, and E (Young's modulus) come from the LinearWindowFit regular
+      // filter (see linear_window_fit_filter.py / compute_derived()) and are only present
+      // in modelStats.stiffness while that filter is active with enough valid curves —
+      // find() safely returns undefined otherwise, so these are omitted rather than sent
+      // as garbage values.
+      const stiffnessStats = dashboard.modelStats?.stiffness || [];
+      const kRawStat = stiffnessStats.find((item) => item?.key === "k_raw");
+      const kContactStat = stiffnessStats.find((item) => item?.key === "k_contact");
+      const stiffnessYoungsModulusStat = stiffnessStats.find((item) => item?.key === "youngs_modulus");
+
       const apiResult = await saveExperiment(token, {
         name: name.trim() || generateDefaultName(),
         description: description.trim() || null,
@@ -94,6 +104,12 @@ function SaveExperimentModal({ metadataObject, dashboard, token, onClose }) {
         results: {
           youngs_modulus_mean: dashboard.modelStats?.force[0]?.mean,
           youngs_modulus_std: dashboard.modelStats?.force[0]?.std,
+          k_raw_mean: kRawStat?.mean,
+          k_raw_std: kRawStat?.std,
+          k_contact_mean: kContactStat?.mean,
+          k_contact_std: kContactStat?.std,
+          stiffness_youngs_modulus_mean: stiffnessYoungsModulusStat?.mean,
+          stiffness_youngs_modulus_std: stiffnessYoungsModulusStat?.std,
         },
       });
 

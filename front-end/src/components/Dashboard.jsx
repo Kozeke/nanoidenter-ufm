@@ -261,6 +261,14 @@ const Dashboard = () => {
   useEffect(() => {
     // console.log("metadataObject updated:", metadataObject);
   }, [metadataObject]);
+
+  // Redirects away from Force–Indentation / Elasticity Spectra while those tabs are disabled.
+  useEffect(() => {
+    if (activeTab === "forceIndentation" || activeTab === "elasticitySpectra") {
+      setActiveTab("forceDisplacement");
+    }
+  }, [activeTab, setActiveTab]);
+
   useEffect(() => {
     const allCurveIds = forceData.map((curve) => curve.curve_id);
     setSelectedExportCurveIds((prev) => {
@@ -957,16 +965,18 @@ const Dashboard = () => {
     overflow: "hidden",
   };
 
-  const tabButtonStyle = (isActive) => ({
+  // Builds styles for graph tabs; muted look when a tab is disabled.
+  const tabButtonStyle = (isActive, isDisabled = false) => ({
     padding: isMobile ? "8px 10px" : "10px 14px",
     fontSize: isMobile ? "13px" : "14px",
     fontWeight: 600,
     letterSpacing: "0.01em",
     border: "none",
     outline: "none",
-    cursor: "pointer",
+    cursor: isDisabled ? "not-allowed" : "pointer",
     background: isActive ? "#ffffff" : "transparent",
-    color: isActive ? "#1d1e2c" : "#4a4f6a",
+    color: isDisabled ? "#9aa0b5" : isActive ? "#1d1e2c" : "#4a4f6a",
+    opacity: isDisabled ? 0.55 : 1,
     transition: "all .15s ease",
     boxShadow: isActive ? "inset 0 0 0 1px #cfd6ff" : "none",
   });
@@ -1237,18 +1247,22 @@ const Dashboard = () => {
             <button
               role="tab"
               aria-selected={activeTab === "forceIndentation"}
-              onClick={() => setActiveTab("forceIndentation")}
-              style={tabButtonStyle(activeTab === "forceIndentation")}
-              {...pressable}
+              aria-disabled="true"
+              disabled
+              title="Temporarily disabled"
+              onClick={() => {}}
+              style={tabButtonStyle(activeTab === "forceIndentation", true)}
             >
               Force–Indentation
             </button>
             <button
               role="tab"
               aria-selected={activeTab === "elasticitySpectra"}
-              onClick={() => setActiveTab("elasticitySpectra")}
-              style={tabButtonStyle(activeTab === "elasticitySpectra")}
-              {...pressable}
+              aria-disabled="true"
+              disabled
+              title="Temporarily disabled"
+              onClick={() => {}}
+              style={tabButtonStyle(activeTab === "elasticitySpectra", true)}
             >
               Elasticity Spectra
             </button>
@@ -1256,9 +1270,10 @@ const Dashboard = () => {
 
           {/* Middle: WebSocket status */}
           <div style={statusPillWrapperStyle}>
-            <YoungsModulusBadge
+            {/* Temporarily hidden with Force–Indentation / Elasticity Spectra */}
+            {/* <YoungsModulusBadge
               value={modelStats?.force?.[0]?.value}
-            />
+            /> */}
 
             <span style={statusPillStyle(connectionStatus)}>
               <span style={statusDotStyle(connectionStatus)} />

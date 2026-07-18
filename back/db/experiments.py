@@ -37,9 +37,15 @@ def create_experiment(
             f_model,
             e_model,
             youngs_modulus_mean,
-            youngs_modulus_std
+            youngs_modulus_std,
+            k_raw_mean,
+            k_raw_std,
+            k_contact_mean,
+            k_contact_std,
+            stiffness_youngs_modulus_mean,
+            stiffness_youngs_modulus_std
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
@@ -57,6 +63,15 @@ def create_experiment(
             next(iter(filters.get("e_models", {})), None),
             results.get("youngs_modulus_mean"),
             results.get("youngs_modulus_std"),
+            # K_raw, K_contact, and E computed by the LinearWindowFit regular filter
+            # (see linear_window_fit_filter.py / compute_derived()), distinct from the
+            # Hertz-model youngs_modulus_mean/std above.
+            results.get("k_raw_mean"),
+            results.get("k_raw_std"),
+            results.get("k_contact_mean"),
+            results.get("k_contact_std"),
+            results.get("stiffness_youngs_modulus_mean"),
+            results.get("stiffness_youngs_modulus_std"),
         ),
     )
 
@@ -76,7 +91,13 @@ def list_experiments(user_id: int) -> List[dict]:
             tip_radius,
             e_model,
             youngs_modulus_mean,
-            youngs_modulus_std
+            youngs_modulus_std,
+            k_raw_mean,
+            k_raw_std,
+            k_contact_mean,
+            k_contact_std,
+            stiffness_youngs_modulus_mean,
+            stiffness_youngs_modulus_std
         FROM experiments
         WHERE user_id = ?
         ORDER BY created_at DESC
@@ -97,7 +118,14 @@ def list_experiments(user_id: int) -> List[dict]:
             "e_model": r[7],
             "youngs_modulus_mean": r[8],
             "youngs_modulus_std": r[9],
-            "status_code": "success" if (r[8] is not None or r[9] is not None) else "pending"
+            # LinearWindowFit-derived stiffness results (see linear_window_fit_filter.py)
+            "k_raw_mean": r[10],
+            "k_raw_std": r[11],
+            "k_contact_mean": r[12],
+            "k_contact_std": r[13],
+            "stiffness_youngs_modulus_mean": r[14],
+            "stiffness_youngs_modulus_std": r[15],
+            "status_code": "success" if any(v is not None for v in r[8:16]) else "pending"
         }
         for r in rows
     ]
@@ -122,7 +150,13 @@ def get_experiment(exp_id: int, user_id: int) -> Optional[dict]:
             e.force_model_params_json,
             e.youngs_modulus_mean,
             e.youngs_modulus_std,
-            d.name as dataset_name
+            d.name as dataset_name,
+            e.k_raw_mean,
+            e.k_raw_std,
+            e.k_contact_mean,
+            e.k_contact_std,
+            e.stiffness_youngs_modulus_mean,
+            e.stiffness_youngs_modulus_std
         FROM experiments e
         LEFT JOIN datasets d ON e.dataset_id = d.id
         WHERE e.id = ? AND e.user_id = ?
@@ -150,7 +184,14 @@ def get_experiment(exp_id: int, user_id: int) -> Optional[dict]:
         "force_model_params": json.loads(row[10]),
         "youngs_modulus_mean": row[11],
         "youngs_modulus_std": row[12],
-        "dataset_name": row[13]  # The name from the datasets table (saved from metadata file_id)
+        "dataset_name": row[13],  # The name from the datasets table (saved from metadata file_id)
+        # LinearWindowFit-derived stiffness results (see linear_window_fit_filter.py)
+        "k_raw_mean": row[14],
+        "k_raw_std": row[15],
+        "k_contact_mean": row[16],
+        "k_contact_std": row[17],
+        "stiffness_youngs_modulus_mean": row[18],
+        "stiffness_youngs_modulus_std": row[19],
     }
 
 

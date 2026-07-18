@@ -184,6 +184,17 @@ def init_experiment_tables(conn):
             youngs_modulus_std DOUBLE,
             elasticity_params JSON,
 
+            -- K_raw, K_contact, and E (Young's modulus) computed by the LinearWindowFit
+            -- regular filter (see linear_window_fit_filter.py / compute_derived()). Kept
+            -- separate from youngs_modulus_mean/std above, which comes from the Hertz
+            -- force-model population stats instead.
+            k_raw_mean DOUBLE,
+            k_raw_std DOUBLE,
+            k_contact_mean DOUBLE,
+            k_contact_std DOUBLE,
+            stiffness_youngs_modulus_mean DOUBLE,
+            stiffness_youngs_modulus_std DOUBLE,
+
             FOREIGN KEY (user_id) REFERENCES users(id),
             FOREIGN KEY (dataset_id) REFERENCES datasets(id)
         )
@@ -191,3 +202,10 @@ def init_experiment_tables(conn):
 
     # Backward-compatible migration: add description column to existing databases
     _run_migration(conn, "ALTER TABLE experiments ADD COLUMN description VARCHAR")
+    # Backward-compatible migrations: add LinearWindowFit stiffness result columns
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN k_raw_mean DOUBLE")
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN k_raw_std DOUBLE")
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN k_contact_mean DOUBLE")
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN k_contact_std DOUBLE")
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN stiffness_youngs_modulus_mean DOUBLE")
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN stiffness_youngs_modulus_std DOUBLE")

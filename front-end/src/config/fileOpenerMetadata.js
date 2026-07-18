@@ -184,6 +184,26 @@ export const applyDisplayValueToMetadata = (field, displayValue, metadata = {}) 
   return nextMetadata;
 };
 
+/**
+ * Merge attributes extracted from the file's own metadata (HDF5 group attrs or CSV
+ * header columns) onto the auto-populated initial metadata. file_id and date are
+ * auto-generated (from the uploaded filename / today's date) and are never shown to
+ * the user (see HIDDEN_FILE_OPENER_METADATA_KEYS), so a blank/missing value for
+ * either one in the file's own attributes must not erase the auto-generated default
+ * — otherwise "File Name is required" can surface even though a name was already
+ * generated automatically.
+ */
+export const mergeAttributesIntoMetadata = (initializedMetadata, attributes = {}) => {
+  const merged = { ...initializedMetadata, ...normalizeTipAttributes(attributes) };
+  if (!merged.file_id || String(merged.file_id).trim() === "") {
+    merged.file_id = initializedMetadata.file_id;
+  }
+  if (!merged.date || String(merged.date).trim() === "") {
+    merged.date = initializedMetadata.date;
+  }
+  return merged;
+};
+
 /** Build the full metadata object used for submit (visible + hidden keys). */
 export const buildInitialMetadata = (filePath, attributeKeys = []) => {
   const today = new Date().toISOString().split("T")[0];

@@ -118,6 +118,28 @@ export default function ExperimentPreviewModal({ id, onClose, onOpen }) {
                 Pa
               </div>
 
+              {/* Stiffness results from the LinearWindowFit regular filter, distinct from
+                  the Hertz-model Young's modulus shown above. Only rendered when at least
+                  one value was actually computed and saved. */}
+              {(data.k_raw_mean != null ||
+                data.k_contact_mean != null ||
+                data.stiffness_youngs_modulus_mean != null) && (
+                <div style={bodyTextStyle}>
+                  <strong>K_raw:</strong>{" "}
+                  {formatYoungsModulus(data.k_raw_mean, data.k_raw_std)} N/m
+                  <br />
+                  <strong>K_contact:</strong>{" "}
+                  {formatYoungsModulus(data.k_contact_mean, data.k_contact_std)} N/m
+                  <br />
+                  <strong>E (LinearWindowFit):</strong>{" "}
+                  {formatYoungsModulus(
+                    data.stiffness_youngs_modulus_mean,
+                    data.stiffness_youngs_modulus_std
+                  )}{" "}
+                  Pa
+                </div>
+              )}
+
               <div style={dividerStyle}></div>
 
               {/* ───────── Filters ───────── */}

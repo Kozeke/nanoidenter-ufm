@@ -480,16 +480,16 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                     }
                 )
 
-            if bl.last_baseline_values is not None:
-                # Drawn across the WHOLE curve, not clipped to the fit window —
-                # matches the reference script's `curve.baseline`, which is
-                # np.polyval evaluated over the entire z_nm domain (unlike the
-                # K line, which the reference script never extrapolates).
-                curves_regular.append({
-                    "curve_id": f"{curve_id}_baseline",
-                    "x": z_values,
-                    "y": bl.last_baseline_values
-                })
+            # if bl.last_baseline_values is not None:
+            #     # Drawn across the WHOLE curve, not clipped to the fit window —
+            #     # matches the reference script's `curve.baseline`, which is
+            #     # np.polyval evaluated over the entire z_nm domain (unlike the
+            #     # K line, which the reference script never extrapolates).
+            #     curves_regular.append({
+            #         "curve_id": f"{curve_id}_baseline",
+            #         "x": z_values,
+            #         "y": bl.last_baseline_values
+            #     })
 
             working_y = corrected_y
 

@@ -584,14 +584,35 @@ export const useDashboardWebSocket = () => {
         // all come from the LinearWindowFit pipeline. k_raw is always present;
         // k_contact and E only appear when the dataset's spring_constant
         // (k_spring) is large enough for the compliance correction to be valid.
+        // Each entry keeps a stable "key" plus the raw (unformatted) mean/std alongside
+        // the display-ready "value" string, so consumers like the export dialog and the
+        // Save Experiment button can persist/show the numeric values, not just the label.
         const stiffnessStats = stats.k_stiffness
           ? [
-              { label: "K_raw =", value: formatMeanStd(stats.k_stiffness.mean, stats.k_stiffness.std, "N/m") },
+              {
+                key: "k_raw",
+                label: "K_raw =",
+                value: formatMeanStd(stats.k_stiffness.mean, stats.k_stiffness.std, "N/m"),
+                mean: stats.k_stiffness.mean,
+                std: stats.k_stiffness.std,
+              },
               ...(stats.k_contact
-                ? [{ label: "K_contact =", value: formatMeanStd(stats.k_contact.mean, stats.k_contact.std, "N/m") }]
+                ? [{
+                    key: "k_contact",
+                    label: "K_contact =",
+                    value: formatMeanStd(stats.k_contact.mean, stats.k_contact.std, "N/m"),
+                    mean: stats.k_contact.mean,
+                    std: stats.k_contact.std,
+                  }]
                 : []),
               ...(stats.youngs_modulus
-                ? [{ label: "E =", value: formatMeanStd(stats.youngs_modulus.mean, stats.youngs_modulus.std, "Pa") }]
+                ? [{
+                    key: "youngs_modulus",
+                    label: "E =",
+                    value: formatMeanStd(stats.youngs_modulus.mean, stats.youngs_modulus.std, "Pa"),
+                    mean: stats.youngs_modulus.mean,
+                    std: stats.youngs_modulus.std,
+                  }]
                 : []),
             ]
           : [];

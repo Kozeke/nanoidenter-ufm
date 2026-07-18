@@ -5,7 +5,7 @@ import {
   applyDisplayValueToMetadata,
   buildInitialMetadata,
   getGroupAttributes,
-  normalizeTipAttributes,
+  mergeAttributesIntoMetadata,
 } from '../config/fileOpenerMetadata';
 
 // Defines validation rules for metadata fields to ensure data integrity.
@@ -481,10 +481,7 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
 
         const initializedMetadata = buildInitialMetadata(filePath);
 
-        const mergedMetadata = {
-          ...initializedMetadata,
-          ...normalizeTipAttributes(attributes),
-        };
+        const mergedMetadata = mergeAttributesIntoMetadata(initializedMetadata, attributes);
 
         if (Object.keys(attributes).length === 0) {
           setWarnings((prev) => [
@@ -555,10 +552,7 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
           Object.keys(attributes)
         );
 
-        const mergedMetadata = {
-          ...initializedMetadata,
-          ...normalizeTipAttributes(attributes),
-        };
+        const mergedMetadata = mergeAttributesIntoMetadata(initializedMetadata, attributes);
 
         if (Object.keys(attributes).length === 0) {
           setWarnings((prev) => [
@@ -586,10 +580,7 @@ export const useFileOpener = ({ onProcessSuccess, setIsLoading }) => {
       filePath,
       Object.keys(attributes)
     );
-    const mergedMetadata = {
-      ...initializedMetadata,
-      ...normalizeTipAttributes(attributes),
-    };
+    const mergedMetadata = mergeAttributesIntoMetadata(initializedMetadata, attributes);
 
     if (Object.keys(attributes).length === 0) {
       setWarnings((prev) => [
