@@ -158,6 +158,12 @@ async def export_endpoint(extension: str, data: Dict[str, Any], user=Depends(get
             "force_model_params": force_model_params,  # Pass force model parameters for Hertz fit calculations
             "elasticity_params": data.get("elasticity_params") or {},  # optional, but add
             "youngs_modulus_formatted": data.get("youngs_modulus_formatted"),  # Pass Young's modulus from websocket stats
+            # K_raw / K_contact / E from the LinearWindowFit regular filter (see
+            # linear_window_fit_filter.py / compute_derived()); None when that filter
+            # wasn't active, in which case the CSV exporter simply skips these lines.
+            "k_raw_formatted": data.get("k_raw_formatted"),
+            "k_contact_formatted": data.get("k_contact_formatted"),
+            "stiffness_youngs_modulus_formatted": data.get("stiffness_youngs_modulus_formatted"),
         }
         
         num_exported = exporter.export(

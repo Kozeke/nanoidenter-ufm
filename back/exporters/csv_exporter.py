@@ -89,7 +89,19 @@ class CSVExporter(Exporter):
                 youngs_modulus_formatted = kwargs.get("youngs_modulus_formatted")
                 if youngs_modulus_formatted:
                     writer.writerow(["youngs_modulus", youngs_modulus_formatted])
-                
+
+                # Add K_raw / K_contact / E computed by the LinearWindowFit regular filter,
+                # if that filter was active and produced a value (see linear_window_fit_filter.py).
+                k_raw_formatted = kwargs.get("k_raw_formatted")
+                if k_raw_formatted:
+                    writer.writerow(["k_raw", k_raw_formatted])
+                k_contact_formatted = kwargs.get("k_contact_formatted")
+                if k_contact_formatted:
+                    writer.writerow(["k_contact", k_contact_formatted])
+                stiffness_youngs_modulus_formatted = kwargs.get("stiffness_youngs_modulus_formatted")
+                if stiffness_youngs_modulus_formatted:
+                    writer.writerow(["youngs_modulus_linfit", stiffness_youngs_modulus_formatted])
+
                 num_exported = 0
                 for row in results:
                     (curve_id, file_id, date, spring_constant,
@@ -420,6 +432,18 @@ class CSVExporter(Exporter):
                 youngs_modulus_formatted = kwargs.get("youngs_modulus_formatted")
                 if youngs_modulus_formatted:
                     header += f"#Average Hertz modulus [Pa]: {youngs_modulus_formatted}\n"
+
+                # Add K_raw / K_contact / E computed by the LinearWindowFit regular filter,
+                # if that filter was active and produced a value (see linear_window_fit_filter.py).
+                k_raw_formatted = kwargs.get("k_raw_formatted")
+                if k_raw_formatted:
+                    header += f"#K_raw (LinearWindowFit): {k_raw_formatted}\n"
+                k_contact_formatted = kwargs.get("k_contact_formatted")
+                if k_contact_formatted:
+                    header += f"#K_contact (LinearWindowFit): {k_contact_formatted}\n"
+                stiffness_youngs_modulus_formatted = kwargs.get("stiffness_youngs_modulus_formatted")
+                if stiffness_youngs_modulus_formatted:
+                    header += f"#Young's modulus E (LinearWindowFit): {stiffness_youngs_modulus_formatted}\n"
 
                 if dataset_type == "Force":
                     header += "#Columns: Indentation <F> SigmaF\n" if direction == 'V' else "#Columns: <Indentation> F SigmaZ\n"

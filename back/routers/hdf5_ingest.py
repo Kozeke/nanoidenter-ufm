@@ -34,6 +34,7 @@ Environment variables (all optional)
 import logging
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -139,17 +140,26 @@ async def ingest(request: Request):
     resolved_path = str(final_path.resolve())
     ingest_metadata = {
         "file_id":         Path(filename).stem,
-        "date":            str(int(final_path.stat().st_mtime)),
+        # Human-readable fallback (YYYY-MM-DD, matching the export dialog's expected
+        # format) derived from the upload's mtime; used only when the ingested HDF5
+        # file itself doesn't carry a usable "date" tip attribute (see filter below).
+        "date":            datetime.fromtimestamp(final_path.stat().st_mtime, tz=timezone.utc).strftime("%Y-%m-%d"),
         "spring_constant": INGEST_SPRING_CONSTANT,
         "tip_geometry":    INGEST_TIP_GEOMETRY,
         "tip_radius":      INGEST_TIP_RADIUS,
     }
     # Prefer metadata embedded in the HDF5 tip group (barytech exports).
     # Z/Force arrays are stored as µm/µN — do not merge unit-scale factors from tip attrs.
+    # Blank strings (e.g. an empty "date" attr) are ignored too, so the mtime-based
+    # fallback above still applies instead of persisting an empty value into the DB.
     _tip_scale_keys = {"z_scale_to_m", "z_conversion_factor", "force_scale_to_n", "force_conversion_factor"}
     tip_metadata = read_tip_metadata_from_hdf5(resolved_path)
     ingest_metadata.update(
-        {k: v for k, v in tip_metadata.items() if v is not None and k not in _tip_scale_keys}
+        {
+            k: v
+            for k, v in tip_metadata.items()
+            if v is not None and k not in _tip_scale_keys and str(v).strip() != ""
+        }
     )
 
     try:

@@ -13,6 +13,17 @@ import { METERS_TO_MILLIMETERS, METERS_TO_MICROMETERS } from '../config/datasetM
 // they must be fetched separately via the dataset details endpoint to populate this dialog.
 import { getDataset } from '../api/datasets';
 
+// Returns today's date as YYYY-MM-DD, used to auto-fill the export "Date" field.
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+// Falls back to today's date whenever the source value (DB sample row, experiment
+// metadata, etc.) is blank or not already in YYYY-MM-DD form (e.g. a raw ingest
+// timestamp), so users on any environment never have to type a date in manually.
+const normalizeDateOrToday = (value) => {
+  const str = String(value ?? '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(str) ? str : todayIso();
+};
+
 export const useExportDialog = (experimentDataOrFn = null) => {
   // Get authentication token
   const token = useAuthStore((s) => s.token);
@@ -107,7 +118,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
       if (experimentMetadata) {
         return {
           file_id: String(experimentMetadata.file_id ?? ''),
-          date: String(experimentMetadata.date ?? ''),
+          date: normalizeDateOrToday(experimentMetadata.date),
           spring_constant: String(experimentMetadata.spring_constant ?? ''),
           tip_geometry: String(experimentMetadata.tip_geometry ?? 'sphere'),
           tip_radius: tipRadiusMetersToDisplayMm(experimentMetadata.tip_radius),
@@ -119,7 +130,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
       }
       return {
         file_id: String(metadataObject.sample_row?.file_id ?? ''),
-        date: String(metadataObject.sample_row?.date ?? ''),
+        date: normalizeDateOrToday(metadataObject.sample_row?.date),
         spring_constant: String(metadataObject.sample_row?.spring_constant ?? ''),
         tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
         tip_radius: tipRadiusMetersToDisplayMm(metadataObject.sample_row?.tip_radius),
@@ -184,7 +195,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
   // defaulting to 1e-6 m/s.
   const [editableSoftMechMetadata, setEditableSoftMechMetadata] = useState({
     file_id: String(metadataObject.sample_row?.file_id ?? ''),
-    date: String(metadataObject.sample_row?.date ?? ''),
+    date: normalizeDateOrToday(metadataObject.sample_row?.date),
     spring_constant: parseFloat(metadataObject.sample_row?.spring_constant) || 0,
     tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
     // sample_row.tip_radius is stored in meters (SI); convert to mm for display/editing.
@@ -235,7 +246,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     if (metadataObject.sample_row) {
       setEditableSoftMechMetadata({
         file_id: String(metadataObject.sample_row?.file_id ?? ''),
-        date: String(metadataObject.sample_row?.date ?? ''),
+        date: normalizeDateOrToday(metadataObject.sample_row?.date),
         spring_constant: parseFloat(metadataObject.sample_row?.spring_constant) || 0,
         tip_geometry: String(metadataObject.sample_row?.tip_geometry ?? 'sphere'),
         // sample_row.tip_radius is stored in meters (SI); convert to mm for display/editing.
@@ -736,18 +747,42 @@ export const useExportDialog = (experimentDataOrFn = null) => {
             force_model_params: forceModelParamsPayload,
             // Pass Young's modulus formatted value from websocket stats
             youngs_modulus_formatted: youngsModulusFormatted,
+            // K_raw / K_contact / E computed by the LinearWindowFit regular filter (see
+            // linear_window_fit_filter.py / compute_derived()); undefined when that
+            // filter isn't active, so the backend simply omits the corresponding line.
+            k_raw_formatted: stiffnessResults.kRaw?.value ?? null,
+            k_contact_formatted: stiffnessResults.kContact?.value ?? null,
+            stiffness_youngs_modulus_formatted: stiffnessResults.youngsModulus?.value ?? null,
           }),
           // Only include metadata for non-CSV exports (HDF5, JSON, TXT, etc.)
           ...(selectedFormat !== 'csv') && {
-            metadata: Object.fromEntries(
-              Object.entries(metadata).map(([key, value]) => {
-                const rule = metadataValidationRules[key];
-                if (rule?.type !== 'number') return [key, value];
-                const numeric = parseFloat(value) || 0;
-                // Converts display units (e.g. µm/s) back to the SI value exporters expect.
-                return [key, rule.storageScale ? numeric / rule.storageScale : numeric];
-              })
-            ),
+            metadata: {
+              ...Object.fromEntries(
+                Object.entries(metadata).map(([key, value]) => {
+                  const rule = metadataValidationRules[key];
+                  if (rule?.type !== 'number') return [key, value];
+                  const numeric = parseFloat(value) || 0;
+                  // Converts display units (e.g. µm/s) back to the SI value exporters expect.
+                  return [key, rule.storageScale ? numeric / rule.storageScale : numeric];
+                })
+              ),
+              // K_raw / K_contact / E from the LinearWindowFit regular filter, written as
+              // attributes on every curve's "tip" group by the HDF5 exporter (same mechanism
+              // as spring_constant/tip_radius above). Only included when actually computed;
+              // std falls back to 0 since h5py attrs can't store null/undefined.
+              ...(stiffnessResults.kRaw?.mean != null && {
+                k_raw_mean_n_per_m: stiffnessResults.kRaw.mean,
+                k_raw_std_n_per_m: stiffnessResults.kRaw.std ?? 0,
+              }),
+              ...(stiffnessResults.kContact?.mean != null && {
+                k_contact_mean_n_per_m: stiffnessResults.kContact.mean,
+                k_contact_std_n_per_m: stiffnessResults.kContact.std ?? 0,
+              }),
+              ...(stiffnessResults.youngsModulus?.mean != null && {
+                youngs_modulus_linfit_mean_pa: stiffnessResults.youngsModulus.mean,
+                youngs_modulus_linfit_std_pa: stiffnessResults.youngsModulus.std ?? 0,
+              }),
+            },
           },
         };
 
