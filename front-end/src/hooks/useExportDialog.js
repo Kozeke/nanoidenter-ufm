@@ -550,6 +550,8 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         method: 'POST',
         headers,
         body: JSON.stringify({
+          // Scopes curve/tip lookups to this dataset (see handleSubmit for rationale).
+          dataset_id: datasetId,
           curve_ids: curveIds.length > 0 ? curveIds : undefined,
           num_curves: curveIds.length > 0 ? undefined : numCurves,
           export_type: exportType,
@@ -599,7 +601,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     } finally {
       setLoadingMetadata(false);
     }
-  }, [selectedFormat, exportType, datasetType, direction, loose, curveIds, numCurves, regularFilters, cpFilters, forceModels, elasticityModels, forceModelParams, editableSoftMechMetadata.velocity]);
+  }, [selectedFormat, exportType, datasetType, direction, loose, curveIds, numCurves, datasetId, regularFilters, cpFilters, forceModels, elasticityModels, forceModelParams, editableSoftMechMetadata.velocity]);
 
   // Handles navigation to the next step with validation.
   const handleNext = () => {
@@ -715,6 +717,10 @@ export const useExportDialog = (experimentDataOrFn = null) => {
       // Prepare payload with level names and metadata
         const payload = {
           export_path: exportPath,
+          // Scopes the backend query to this dataset only. curve_id is only unique
+          // per dataset, so without this, exporting "curve0" could also pull in
+          // "curve0" rows that belong to a different dataset in the same database.
+          dataset_id: datasetId,
           curve_ids: finalCurveIds,
           num_curves: finalCurveIds ? undefined : numCurves,
           ...(selectedFormat === 'hdf5' && {

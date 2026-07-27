@@ -9,6 +9,8 @@ import duckdb
 
 from exporters import get_exporter  # Assuming exporters package similar to openers
 from auth.dependencies import get_current_user
+# Confirms a dataset_id belongs to the requesting user before scoping an export to it.
+from db.datasets import get_dataset_for_user
 
 router = APIRouter(prefix="", tags=["export"])
 
@@ -39,6 +41,10 @@ async def export_endpoint(extension: str, data: Dict[str, Any], user=Depends(get
     export_path = data.get("export_path")
     curve_ids = data.get("curve_ids", [])
     num_curves = data.get("num_curves")
+    # Scopes the export query to a single dataset. curve_id alone is only unique
+    # per dataset (PK is dataset_id + curve_id + segment_type), so without this a
+    # curve_id like "curve0" could match rows belonging to a different dataset.
+    dataset_id = data.get("dataset_id")
     level_names = data.get("level_names", ["curve0", "segment0"])
     metadata = data.get("metadata", {})
     
@@ -83,6 +89,12 @@ async def export_endpoint(extension: str, data: Dict[str, Any], user=Depends(get
         if dataset_type not in ["Force Model", "Elasticity Model"]:
             errors.append("dataset_type must be one of: Force Model, Elasticity Model")
 
+    # Verify the dataset belongs to the requesting user before scoping any queries to
+    # it, so one user can never export another user's curves by guessing a dataset_id.
+    if dataset_id is not None:
+        if not get_dataset_for_user(dataset_id, user["id"]):
+            raise HTTPException(status_code=404, detail={"status": "error", "message": "Dataset not found"})
+
     try:
         # Sanitize file system path
         export_path = sanitize_file_path(export_path)
@@ -114,7 +126,15 @@ async def export_endpoint(extension: str, data: Dict[str, Any], user=Depends(get
                 errors.append("num_curves must be a positive integer")
                 raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid num_curves", "errors": errors})
             with duckdb.connect(db_path) as conn:
-                curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
+                if dataset_id is not None:
+                    curve_ids_result = conn.execute(
+                        "SELECT DISTINCT curve_id FROM force_vs_z WHERE dataset_id = ? ORDER BY curve_id LIMIT ?",
+                        (dataset_id, num_curves),
+                    ).fetchall()
+                else:
+                    curve_ids_result = conn.execute(
+                        "SELECT DISTINCT curve_id FROM force_vs_z ORDER BY curve_id LIMIT ?", (num_curves,)
+                    ).fetchall()
                 converted_curve_ids = [row[0] for row in curve_ids_result]
         logger.info("exporter3")
 
@@ -145,6 +165,7 @@ async def export_endpoint(extension: str, data: Dict[str, Any], user=Depends(get
         
         # Prepare kwargs with SoftMech-style parameters
         export_kwargs = {
+            "dataset_id": dataset_id,  # Scopes curve lookups to this dataset only
             "dataset_path": data.get("dataset_path"),
             "level_names": level_names if level_names else None,
             "metadata_path": data.get("metadata_path", ""),
@@ -198,6 +219,9 @@ async def calculate_softmech_metadata(data: Dict[str, Any], user=Depends(get_cur
     try:
         curve_ids = data.get("curve_ids", [])
         num_curves = data.get("num_curves")
+        # Scopes curve/tip lookups to one dataset for the same reason as the export
+        # endpoint above: curve_id is only unique per dataset, not globally.
+        dataset_id = data.get("dataset_id")
         export_type = data.get("export_type", "raw")
         dataset_type = data.get("dataset_type", "Force")
         direction = data.get("direction", "V")
@@ -205,6 +229,11 @@ async def calculate_softmech_metadata(data: Dict[str, Any], user=Depends(get_cur
         filters = data.get("filters", {})
         
         db_path = DB_PATH
+
+        # Verify dataset ownership before scoping any queries to it.
+        if dataset_id is not None:
+            if not get_dataset_for_user(dataset_id, user["id"]):
+                return {"status": "error", "message": "Dataset not found"}
         
         # Convert curve_ids
         converted_curve_ids = None
@@ -224,7 +253,15 @@ async def calculate_softmech_metadata(data: Dict[str, Any], user=Depends(get_cur
         # Fetch curve_ids if num_curves is provided
         if not converted_curve_ids and num_curves is not None:
             with duckdb.connect(db_path) as conn:
-                curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
+                if dataset_id is not None:
+                    curve_ids_result = conn.execute(
+                        "SELECT DISTINCT curve_id FROM force_vs_z WHERE dataset_id = ? ORDER BY curve_id LIMIT ?",
+                        (dataset_id, num_curves),
+                    ).fetchall()
+                else:
+                    curve_ids_result = conn.execute(
+                        "SELECT DISTINCT curve_id FROM force_vs_z ORDER BY curve_id LIMIT ?", (num_curves,)
+                    ).fetchall()
                 converted_curve_ids = [row[0] for row in curve_ids_result]
         
         if not converted_curve_ids:
@@ -241,19 +278,21 @@ async def calculate_softmech_metadata(data: Dict[str, Any], user=Depends(get_cur
             # Check if tip_angle column exists
             columns = conn.execute("DESCRIBE force_vs_z").fetchall()
             column_names = [col[0] for col in columns]
+            tip_query_suffix = " WHERE dataset_id = ?" if dataset_id is not None else ""
+            tip_query_params = [dataset_id] if dataset_id is not None else []
             
             if "tip_angle" in column_names:
-                metadata_row = conn.execute("""
-                    SELECT tip_geometry, tip_radius, tip_angle, spring_constant 
-                    FROM force_vs_z LIMIT 1
-                """).fetchone()
+                metadata_row = conn.execute(
+                    f"SELECT tip_geometry, tip_radius, tip_angle, spring_constant FROM force_vs_z{tip_query_suffix} LIMIT 1",
+                    tip_query_params,
+                ).fetchone()
                 tip_geometry, tip_radius, tip_angle, spring_constant = metadata_row or ("sphere", 1e-6, 30.0, 0.1)
             else:
                 # tip_angle column doesn't exist, use default value
-                metadata_row = conn.execute("""
-                    SELECT tip_geometry, tip_radius, spring_constant 
-                    FROM force_vs_z LIMIT 1
-                """).fetchone()
+                metadata_row = conn.execute(
+                    f"SELECT tip_geometry, tip_radius, spring_constant FROM force_vs_z{tip_query_suffix} LIMIT 1",
+                    tip_query_params,
+                ).fetchone()
                 tip_geometry, tip_radius, spring_constant = metadata_row or ("sphere", 1e-6, 0.1)
                 tip_angle = 30.0  # Default value
         
