@@ -551,57 +551,100 @@ def export_from_duckdb_to_hdf5(
 
                 # Creates/gets the tip group at curve level so it is sibling to segment0/segment1.
                 tip_group = curve_group.require_group("tip")
-                # Stores custom metadata fields directly inside tip as attributes.
+                # Stiffness average keys written first so they appear at the top of tip metadata.
+                stiffness_attr_keys = ("k_raw", "k_contact", "youngs_modulus")
+                # Legacy mean/std numeric keys from older clients — never write these.
+                legacy_stiffness_keys = {
+                    "k_raw_mean_n_per_m",
+                    "k_raw_std_n_per_m",
+                    "k_contact_mean_n_per_m",
+                    "k_contact_std_n_per_m",
+                    "youngs_modulus_linfit_mean_pa",
+                    "youngs_modulus_linfit_std_pa",
+                    "youngs_modulus_linfit",
+                }
                 # Defines metadata keys that should not be written into HDF5 tip attributes.
-                blocked_metadata_keys = {"force_scale_to_n"}
-                for key, value in metadata.items():
-                    # Skips internal calibration keys the user doesn't want in export metadata.
-                    if key in blocked_metadata_keys:
-                        continue
-                    tip_group.attrs[key] = value
-                # Stores the tip geometry shape as a string attribute.
-                tip_group.attrs["geometry"] = str((metadata.get("tip_geometry") or tip_geometry or "sphere"))
-                # Stores the fixed parameter label expected by consumers.
-                tip_group.attrs["parameter"] = "Radius"
-                # Stores the fixed unit label expected by consumers (tip radius is always exported in mm).
-                tip_group.attrs["unit"] = "mm"
-                # Tip radius from the request payload is already in mm (matches the export dialog UI).
-                # Fall back to the DB's SI (meters) tip_radius, converted to mm, when the payload omits it.
-                payload_tip_radius_mm = metadata.get("tip_radius")
-                if payload_tip_radius_mm in (None, "", 0):
-                    payload_tip_radius_mm = (float(tip_radius) if tip_radius else 1e-5) * 1e3
-                # Stores the tip radius value (mm) used by consumers.
-                tip_group.attrs["value"] = float(payload_tip_radius_mm)
+                blocked_metadata_keys = {"force_scale_to_n", *stiffness_attr_keys, *legacy_stiffness_keys}
 
-                # This curve's own K_raw / K_contact / E (as opposed to the
-                # dataset-level mean ± std written once on the root group below).
                 # Guarded so repeated rows for the same curve (segment0 + segment1)
-                # don't redundantly recompute/overwrite the same attrs.
-                if "k_raw" not in curve_group.attrs:
+                # don't rewrite tip attrs / per-curve stiffness multiple times.
+                if "geometry" not in tip_group.attrs:
+                    # ---- Top of tip metadata: dataset-level average stiffness strings ----
+                    # Prefer dataset_stats (authoritative mean±std strings); fall back to
+                    # metadata when the client embedded the same single-string fields.
+                    for key in stiffness_attr_keys:
+                        avg_value = None
+                        if dataset_stats:
+                            avg_value = dataset_stats.get(key)
+                        if not avg_value and metadata:
+                            avg_value = metadata.get(key)
+                        if avg_value:
+                            tip_group.attrs[key] = str(avg_value)
+
+                    # ---- Middle: remaining tip / instrument metadata ----
+                    for key, value in metadata.items():
+                        # Skips internal calibration keys and stiffness keys already written above.
+                        if key in blocked_metadata_keys:
+                            continue
+                        tip_group.attrs[key] = value
+                    # Stores the tip geometry shape as a string attribute.
+                    tip_group.attrs["geometry"] = str((metadata.get("tip_geometry") or tip_geometry or "sphere"))
+                    # Stores the fixed parameter label expected by consumers.
+                    tip_group.attrs["parameter"] = "Radius"
+                    # Stores the fixed unit label expected by consumers (tip radius is always exported in mm).
+                    tip_group.attrs["unit"] = "mm"
+                    # Tip radius from the request payload is already in mm (matches the export dialog UI).
+                    # Fall back to the DB's SI (meters) tip_radius, converted to mm, when the payload omits it.
+                    payload_tip_radius_mm = metadata.get("tip_radius")
+                    if payload_tip_radius_mm in (None, "", 0):
+                        payload_tip_radius_mm = (float(tip_radius) if tip_radius else 1e-5) * 1e3
+                    # Stores the tip radius value (mm) used by consumers.
+                    tip_group.attrs["value"] = float(payload_tip_radius_mm)
+
+                    # ---- Bottom of tip metadata: this curve's own K_raw / K_contact / E ----
+                    # Prefixed with "curve_" so they don't overwrite the dataset averages
+                    # written at the top; values are strings with units (like CSV), not floats.
                     curve_kfit = kfit_lookup.get(_norm_curve_key(curve_id))
                     if curve_kfit:
-                        if curve_kfit.get("k_n_per_m") is not None:
-                            curve_group.attrs["k_raw"] = float(curve_kfit["k_n_per_m"])
-                        if curve_kfit.get("k_contact") is not None:
-                            curve_group.attrs["k_contact"] = float(curve_kfit["k_contact"])
-                        if curve_kfit.get("youngs_modulus_pa") is not None:
-                            curve_group.attrs["youngs_modulus"] = float(curve_kfit["youngs_modulus_pa"])
+                        k_raw_val = curve_kfit.get("k_n_per_m")
+                        if k_raw_val is not None:
+                            tip_group.attrs["curve_k_raw"] = f"{float(k_raw_val):.6g} N/m"
+                        k_contact_val = curve_kfit.get("k_contact")
+                        if k_contact_val is not None:
+                            tip_group.attrs["curve_k_contact"] = f"{float(k_contact_val):.6g} N/m"
+                        e_val = curve_kfit.get("youngs_modulus_pa")
+                        if e_val is not None:
+                            tip_group.attrs["curve_youngs_modulus"] = f"{float(e_val):.6g} Pa"
+                        # Also mirror onto the curve group under the plain CSV-style names.
+                        if k_raw_val is not None:
+                            curve_group.attrs["k_raw"] = f"{float(k_raw_val):.6g} N/m"
+                        if k_contact_val is not None:
+                            curve_group.attrs["k_contact"] = f"{float(k_contact_val):.6g} N/m"
+                        if e_val is not None:
+                            curve_group.attrs["youngs_modulus"] = f"{float(e_val):.6g} Pa"
 
                 exported_curve_names.add(curve_group_name)
 
             # ---- Dataset-level metadata block (root group attrs), written once ----
             # Mirrors the CSV exporter's single dataset-level metadata block: the
-            # experiment-wide fields (file_id/date/spring_constant/tip_geometry/
-            # tip_radius/velocity) plus the averaged K_raw/K_contact/E across the
-            # exported curves, so they're visible immediately on opening the file
-            # instead of only being duplicated inside each curve's tip group.
+            # experiment-wide fields plus averaged K_raw/K_contact/E strings so they
+            # are visible immediately on opening the file.
+            # Writes average stiffness strings first so they appear at the top of root attrs.
+            if dataset_stats:
+                for key in ("k_raw", "k_contact", "youngs_modulus"):
+                    value = dataset_stats.get(key)
+                    if value:
+                        f.attrs[key] = str(value)
             for key, value in (metadata or {}).items():
+                # Skips force_scale and stiffness keys already written (or superseded) above.
+                if key in {"force_scale_to_n", "k_raw", "k_contact", "youngs_modulus"}:
+                    continue
+                if key.endswith("_mean_n_per_m") or key.endswith("_std_n_per_m"):
+                    continue
+                if key.endswith("_mean_pa") or key.endswith("_std_pa"):
+                    continue
                 if value is not None:
                     f.attrs[key] = value
-            if dataset_stats:
-                for key, value in dataset_stats.items():
-                    if value:
-                        f.attrs[key] = value
 
             num_exported = len(exported_curve_names)
 

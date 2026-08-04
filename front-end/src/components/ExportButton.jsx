@@ -475,6 +475,21 @@ const ExportButton = ({
                         {metadataValidationRules[key]?.label || key}: {key === 'date' ? formatDateForReview(value) : (value || 'Not provided')}
                       </li>
                     ))}
+                    {stiffnessResults.kRaw?.value && (
+                      <li>k_raw (avg): {stiffnessResults.kRaw.value}</li>
+                    )}
+                    {stiffnessResults.kContact?.value && (
+                      <li>k_contact (avg): {stiffnessResults.kContact.value}</li>
+                    )}
+                    {stiffnessResults.youngsModulus?.value && (
+                      <li>youngs_modulus (avg): {stiffnessResults.youngsModulus.value}</li>
+                    )}
+                    {Array.isArray(stiffnessResults.byCurve) && stiffnessResults.byCurve.length > 0 && (
+                      <li>
+                        Per-curve stiffness: {stiffnessResults.byCurve.length} curve
+                        {stiffnessResults.byCurve.length === 1 ? '' : 's'}
+                      </li>
+                    )}
                   </ul>
                 </Box>
               )}

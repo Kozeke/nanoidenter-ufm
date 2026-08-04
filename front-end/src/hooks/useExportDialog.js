@@ -748,6 +748,14 @@ export const useExportDialog = (experimentDataOrFn = null) => {
             metadata_path: metadataPath,
             dataset_path: datasetPath,
           }),
+          // K_raw / K_contact / E from LinearWindowFit (mean ± std strings + per-curve
+          // rows). Shared by CSV and HDF5 so both exports get the same averaged and
+          // per-curve stiffness metadata instead of separate mean/std numeric fields.
+          youngs_modulus_formatted: youngsModulusFormatted,
+          k_raw_formatted: stiffnessResults.kRaw?.value ?? null,
+          k_contact_formatted: stiffnessResults.kContact?.value ?? null,
+          stiffness_youngs_modulus_formatted: stiffnessResults.youngsModulus?.value ?? null,
+          kfit_by_curve: stiffnessResults.byCurve,
           // Add SoftMech-style export parameters for CSV
           ...(selectedFormat === 'csv' && {
             export_type: exportType,
@@ -771,18 +779,6 @@ export const useExportDialog = (experimentDataOrFn = null) => {
             softmech_metadata: editableSoftMechMetadata,
             // Pass Hertz fit window + poisson parameters for force model calculations.
             force_model_params: forceModelParamsPayload,
-            // Pass Young's modulus formatted value from websocket stats
-            youngs_modulus_formatted: youngsModulusFormatted,
-            // K_raw / K_contact / E computed by the LinearWindowFit regular filter (see
-            // linear_window_fit_filter.py / compute_derived()); undefined when that
-            // filter isn't active, so the backend simply omits the corresponding line.
-            k_raw_formatted: stiffnessResults.kRaw?.value ?? null,
-            k_contact_formatted: stiffnessResults.kContact?.value ?? null,
-            stiffness_youngs_modulus_formatted: stiffnessResults.youngsModulus?.value ?? null,
-            // Per-curve K_raw / K_contact / E rows (one entry per curve_id), written
-            // by the CSV exporter on top of each curve's own data block in raw
-            // exports — the top-of-file values above stay the mean ± std average.
-            kfit_by_curve: stiffnessResults.byCurve,
           }),
           // Only include metadata for non-CSV exports (HDF5, JSON, TXT, etc.)
           ...(selectedFormat !== 'csv') && {
@@ -794,21 +790,16 @@ export const useExportDialog = (experimentDataOrFn = null) => {
                   .filter(([key]) => key !== 'force_scale_to_n')
                   .map(([key, value]) => [key, value])
               ),
-              // K_raw / K_contact / E from the LinearWindowFit regular filter, written as
-              // attributes on every curve's "tip" group by the HDF5 exporter (same mechanism
-              // as spring_constant/tip_radius above). Only included when actually computed;
-              // std falls back to 0 since h5py attrs can't store null/undefined.
-              ...(stiffnessResults.kRaw?.mean != null && {
-                k_raw_mean_n_per_m: stiffnessResults.kRaw.mean,
-                k_raw_std_n_per_m: stiffnessResults.kRaw.std ?? 0,
+              // Single mean±std string fields (not separate mean/std numbers) so HDF5 tip
+              // metadata matches the CSV export's top-of-file stiffness block.
+              ...(stiffnessResults.kRaw?.value && {
+                k_raw: String(stiffnessResults.kRaw.value),
               }),
-              ...(stiffnessResults.kContact?.mean != null && {
-                k_contact_mean_n_per_m: stiffnessResults.kContact.mean,
-                k_contact_std_n_per_m: stiffnessResults.kContact.std ?? 0,
+              ...(stiffnessResults.kContact?.value && {
+                k_contact: String(stiffnessResults.kContact.value),
               }),
-              ...(stiffnessResults.youngsModulus?.mean != null && {
-                youngs_modulus_linfit_mean_pa: stiffnessResults.youngsModulus.mean,
-                youngs_modulus_linfit_std_pa: stiffnessResults.youngsModulus.std ?? 0,
+              ...(stiffnessResults.youngsModulus?.value && {
+                youngs_modulus: String(stiffnessResults.youngsModulus.value),
               }),
             },
           },
