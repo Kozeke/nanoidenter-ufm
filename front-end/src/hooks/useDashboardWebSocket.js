@@ -23,6 +23,15 @@ const formatMeanStd = (mean, std, unit) => {
 export const useDashboardWebSocket = () => {
   // Stores Force–Z curve batches received from the backend.
   const [forceData, setForceData] = useState([]);
+  // Mirrors forceData synchronously so the "complete" handler (see onmessage
+  // below) can read the fully-merged curve list without depending on the
+  // `forceData` closure variable, which is stale inside onmessage since
+  // initializeWebSocket isn't re-created on every forceData change.
+  const forceDataRef = useRef([]);
+  // Real ("curve{N}") ids that have been delivered at least once for the
+  // current dataset. Lets the selection sync distinguish "the user unchecked
+  // this" from "this curve is new" — see syncCurveSelectionsOnLoadComplete.
+  const knownCurveIdsRef = useRef(new Set());
   // Stores Force–Indentation curve batches received from the backend.
   const [indentationData, setIndentationData] = useState({
     curves_cp: [],
@@ -116,6 +125,13 @@ export const useDashboardWebSocket = () => {
   const { setIsLoadingCurves, isLoadingCurves } = dashboardStore;
   // Exposes the setter for maintaining highlighted curve identifiers.
   const { setSelectedCurveIds } = dashboardStore;
+  // Exposes the setter for maintaining the export curve selection.
+  const { setSelectedExportCurveIds } = dashboardStore;
+  // Exposes the setter for the flag that says whether Display/Export
+  // selections should be defaulted to "all curves" once the in-flight load
+  // completes. The current value is always read fresh via
+  // useDashboardStore.getState() inside onmessage to avoid stale closures.
+  const { setNeedsCurveIdInit } = dashboardStore;
   // Updates connection status used for UX.
   const { setConnectionStatus, setLastSocketError, connectionStatus, lastSocketError } = dashboardStore;
   // Provides setters for selected curve ID and curve range.
@@ -136,6 +152,70 @@ export const useDashboardWebSocket = () => {
 
     return sanitizedForceModels;
   }, []);
+
+  // Reconciles the Display/Export curve selections once a curve-data load has
+  // fully finished (all "batch" messages merged). Doing this on the terminal
+  // "complete" message rather than on each incremental batch is essential:
+  // forceData arrives in chunks, so deriving "all curves" from a partial
+  // update would both miss curves that hadn't streamed in yet and clobber
+  // curves the user had deliberately unchecked.
+  //
+  // Only real "curve{N}" ids ever enter the selections. Synthetic diagnostic
+  // overlays that filters add to the same curve list ("0_linfit",
+  // "avg_linfit", "0_hertz", …) are deliberately excluded: they aren't rows in
+  // the curve picker, the export endpoint rejects them, and their on-screen
+  // visibility is derived from the real curve they annotate (see
+  // ForceDisplacementDataSet.jsx).
+  const syncCurveSelectionsOnLoadComplete = useCallback(() => {
+    const finalCurveIds = forceDataRef.current
+      .map((c) => c.curve_id)
+      .filter((id) => /^curve\d+$/.test(String(id)));
+
+    if (finalCurveIds.length === 0) {
+      // Nothing loaded (empty/failed batch) — leave the selections untouched
+      // rather than wiping them.
+      return;
+    }
+
+    const finalCurveIdsSet = new Set(finalCurveIds);
+
+    if (useDashboardStore.getState().needsCurveIdInit) {
+      // Freshly loaded dataset (flagged by Dashboard.jsx's handleProcessSuccess):
+      // default both selections to every curve.
+      setNeedsCurveIdInit(false);
+      knownCurveIdsRef.current = finalCurveIdsSet;
+      setSelectedCurveIds(finalCurveIds);
+      setSelectedExportCurveIds(finalCurveIds);
+      return;
+    }
+
+    // Otherwise: "Update Curves", or a range/segment/filter change on an
+    // already-loaded dataset. Two things must hold at once here:
+    //   • a curve the user explicitly unchecked stays unchecked, and
+    //   • a curve fetched for the first time (e.g. the range grew from 0–5 to
+    //     0–10) arrives checked rather than silently hidden.
+    // Telling the two apart requires knowing which ids have been seen before:
+    // an id missing from the selection that was already known was deliberately
+    // unchecked, whereas an id missing and previously unknown is simply new.
+    const newlyArrivedIds = new Set(
+      finalCurveIds.filter((id) => !knownCurveIdsRef.current.has(id))
+    );
+    knownCurveIdsRef.current = finalCurveIdsSet;
+
+    // Rebuilds a selection: drops ids that no longer exist, keeps existing
+    // choices, adds newly-arrived curves — all in canonical curve order.
+    const reconcile = (prev) => {
+      const prevSet = new Set(prev);
+      const next = finalCurveIds.filter(
+        (id) => prevSet.has(id) || newlyArrivedIds.has(id)
+      );
+      const unchanged =
+        next.length === prev.length && next.every((id, i) => id === prev[i]);
+      return unchanged ? prev : next;
+    };
+    setSelectedCurveIds(reconcile);
+    setSelectedExportCurveIds(reconcile);
+  }, [setSelectedCurveIds, setSelectedExportCurveIds, setNeedsCurveIdInit]);
 
   // Sends a curve metadata request through the active WebSocket channel.
   // All filter/param values are read directly from the Zustand store snapshot so
@@ -246,6 +326,7 @@ export const useDashboardWebSocket = () => {
       // Clear the ref immediately so subsequent calls don't re-clear unnecessarily.
       forceRequestRef.current = false;
       setForceData([]);
+      forceDataRef.current = [];
       setIndentationData({ curves_cp: [], curves_fparam: [] });
       setElspectraData({ curves: [], curves_elasticity_param: [] });
       setDomainRange(resetState);
@@ -328,6 +409,11 @@ export const useDashboardWebSocket = () => {
     // Stores force-model filters after websocket sanitation (e.g., Hertz tip_radius removal).
     const socketSafeForceModels = buildSocketForceModels(liveFilters.f_models);
     console.log("sendModelStatsRequest - datasetId from store:", liveDatasetId);
+    // Real curve IDs only ("curve0", "curve12", …) — skip synthetic overlays
+    // like "0_linfit" / "avg_linfit" that LinearWindowFit adds for display.
+    const chosenCurveIds = (liveState.selectedCurveIds || []).filter((id) =>
+      /^curve\d+$/.test(String(id))
+    );
     const requestData = {
       action: "compute_stats",
       compute_scope: "model_stats",
@@ -345,7 +431,9 @@ export const useDashboardWebSocket = () => {
       elastic_model_params: liveState.elasticModelParams,
       force_model_params: liveState.forceModelParams,
       set_zero_force: liveState.setZeroForce,
-      // IMPORTANT: DO NOT send curve_id
+      // Scopes K_raw / K_contact / E (and other model_stats) to the curves the
+      // user currently has chosen in the curve picker — one or many.
+      curve_ids: chosenCurveIds,
     };
   
     socketRef.current.send(JSON.stringify(requestData));
@@ -436,11 +524,11 @@ export const useDashboardWebSocket = () => {
             : graphElspectra) || { curves: [], domain: {} };
 
         setForceData((prevData) => {
-          if (graphForcevsZSingle?.curves?.length > 0) {
-            return forceGraph.curves || [];
-          }
-          const newCurves = forceGraph.curves || [];
-          return [...prevData, ...newCurves];
+          const next = graphForcevsZSingle?.curves?.length > 0
+            ? (forceGraph.curves || [])
+            : [...prevData, ...(forceGraph.curves || [])];
+          forceDataRef.current = next;
+          return next;
         });
 
         setIndentationData((prevData) => {
@@ -587,6 +675,8 @@ export const useDashboardWebSocket = () => {
         // Each entry keeps a stable "key" plus the raw (unformatted) mean/std alongside
         // the display-ready "value" string, so consumers like the export dialog and the
         // Save Experiment button can persist/show the numeric values, not just the label.
+        // Values are aggregated only over the chosen curve_ids sent with the request
+        // (one or many); stats.kfit_by_curve holds the per-id breakdown.
         const stiffnessStats = stats.k_stiffness
           ? [
               {
@@ -617,6 +707,12 @@ export const useDashboardWebSocket = () => {
             ]
           : [];
         useDashboardStore.getState().setModelStats("stiffness", stiffnessStats);
+        // Persist per-curve LinearWindowFit rows keyed by curve_id for the sidebar /
+        // export consumers that need the chosen-id breakdown, not only mean±std.
+        useDashboardStore.getState().setModelStats(
+          "stiffnessByCurve",
+          Array.isArray(stats.kfit_by_curve) ? stats.kfit_by_curve : []
+        );
 
         // Note: Don't mark stats as complete here - wait for "complete" status
       }
@@ -679,12 +775,16 @@ export const useDashboardWebSocket = () => {
         } else if (response.action === "get_metadata") {
           metadataInProgressRef.current = false;
           console.log("get_metadata completed");
+          syncCurveSelectionsOnLoadComplete();
         } else {
           // Fallback for any other (or missing) action: mark both done to avoid
-          // an infinite loading state.
+          // an infinite loading state. Curve data may have streamed in under
+          // this branch too (e.g. an older backend that omits "action"), so run
+          // the same selection sync rather than leaving the picker unchecked.
           metadataInProgressRef.current = false;
           statsInProgressRef.current = false;
           console.log("unknown action completed – clearing all loading flags");
+          syncCurveSelectionsOnLoadComplete();
         }
 
         // Only hide the spinner once ALL in-flight operations have reported done.
@@ -772,6 +872,9 @@ export const useDashboardWebSocket = () => {
     setConnectionStatus,
     setLastSocketError,
     setSelectedCurveIds,
+    setSelectedExportCurveIds,
+    setNeedsCurveIdInit,
+    syncCurveSelectionsOnLoadComplete,
     token,
   ]);
 

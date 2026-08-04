@@ -44,8 +44,12 @@ export default function MyDatasets() {
     // Clears header model statistics so the E badge returns to default empty state.
     dashboard.setModelStats("force", []);
     dashboard.setModelStats("elasticity", []);
+    dashboard.setModelStats("stiffness", []);
+    dashboard.setModelStats("stiffnessByCurve", []);
     // Resets active tab to the default dashboard tab.
     dashboard.setActiveTab("forceDisplacement");
+    // Opening a dataset starts a new analysis — do not update a prior experiment.
+    dashboard.clearOpenedExperiment();
     dashboard.setDatasetId(dataset.id);
     dashboard.setFilename(dataset.name || dataset.filename || null);
     dashboard.setSelectedCurveId(null);

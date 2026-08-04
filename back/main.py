@@ -29,6 +29,60 @@ from utils.stats import format_stat
 # Detect OS for parallel processing strategy
 IS_WINDOWS = platform.system() == 'Windows'
 
+
+# Normalize UI curve labels ("curve12") and raw ints/strings ("12") to DB numeric ids.
+def _normalize_request_curve_ids(raw_ids: Optional[List]) -> List[str]:
+    """
+    Convert frontend-selected curve identifiers into the numeric-string form
+    used by fetch_curves_batch / DuckDB (e.g. "curve5" -> "5").
+    """
+    # Holds the de-duplicated numeric curve id strings, preserving selection order.
+    normalized: List[str] = []
+    # Tracks ids already appended so duplicate picker entries are ignored.
+    seen = set()
+    if not raw_ids:
+        return normalized
+    for cid in raw_ids:
+        if cid is None:
+            continue
+        # Store the raw identifier as a stripped string for prefix checks.
+        text = str(cid).strip()
+        if not text:
+            continue
+        # Strip the UI "curve" prefix when present so DB queries get integers.
+        if text.lower().startswith("curve"):
+            text = text[5:]
+        if not text:
+            continue
+        try:
+            # Validate / canonicalize as an integer so "05" and 5 map the same.
+            numeric_id = str(int(text))
+        except (TypeError, ValueError):
+            continue
+        if numeric_id in seen:
+            continue
+        seen.add(numeric_id)
+        normalized.append(numeric_id)
+    return normalized
+
+
+# True when a LinearWindowFit result row belongs to the chosen curve-id scope.
+def _kfit_row_in_scope(row: Dict, k_scope_ids: Optional[set]) -> bool:
+    """
+    Return True if this per-curve K row should be included in stiffness aggregates.
+    When k_scope_ids is None, every row is kept (no picker filter applied).
+    """
+    if not k_scope_ids:
+        return True
+    # Store the row's curve label as returned by the pipeline (e.g. "curve5").
+    curve_label = row.get("curve_id")
+    if curve_label is None:
+        return False
+    # Reuse the same normalizer so "curve5" and "5" compare equal to the scope set.
+    normalized = _normalize_request_curve_ids([curve_label])
+    return bool(normalized) and normalized[0] in k_scope_ids
+
+
 app = FastAPI()
 
 # Enable CORS for frontend requests
@@ -528,24 +582,67 @@ async def websocket_data_stream(websocket: WebSocket):
                     "minInd": 0,
                     "poisson": 0.5
                 })  # Extract force model parameters
-                print(f"Received request: curve_from={curve_from}, curve_to={curve_to}, dataset_id={dataset_id}, segment_type={segment_type}, curve_id={curve_id}, filters={filters}")
+                # Optional explicit curve selection from the UI curve picker
+                # ("curve0", "curve3", … or bare integers). Used so K_raw / K_contact / E
+                # are aggregated only over chosen curves (1..N).
+                requested_curve_ids = _normalize_request_curve_ids(
+                    request_data.get("curve_ids")
+                )
+                # Fold in a singular curve_id (e.g. from the single-curve picker /
+                # get_metadata) so it's scoped identically to a one-element
+                # curve_ids selection below, rather than falling through to the
+                # "full" (no-stats) code path.
+                if not requested_curve_ids and curve_id:
+                    requested_curve_ids = _normalize_request_curve_ids([curve_id])
+                print(
+                    f"Received request: curve_from={curve_from}, curve_to={curve_to}, "
+                    f"dataset_id={dataset_id}, segment_type={segment_type}, "
+                    f"curve_id={curve_id}, curve_ids={requested_curve_ids}, filters={filters}"
+                )
 
                 seg_sql = segment_types_sql(segment_type)
 
-                # --- Population stats ignore curve_id ---
+                # True when LinearWindowFit is among the active regular filters.
+                has_linfit = "linearwindowfit" in (filters.get("regular") or {})
+                # Added before using has_fmodel and has_emodel (also needed to decide
+                # whether model_stats can be scoped to chosen ids only).
+                has_fmodel = bool(filters.get("f_models", {}))
+                has_emodel = bool(filters.get("e_models", {}))
+                # When set, K aggregation keeps only these numeric-string curve ids.
+                # None means "no extra filter" (use whatever the pipeline returned).
+                k_scope_ids = set(requested_curve_ids) if requested_curve_ids else None
+
+                # --- model_stats curve set ---
+                # Force/elasticity population stats historically run over the whole
+                # dataset. Stiffness-only requests can be scoped to the chosen ids
+                # so one or many selected curves are enough.
                 if compute_scope == "model_stats":
-                    curve_ids_result = conn.execute(
-                        f"""
-                        SELECT DISTINCT curve_id FROM force_vs_z
-                        WHERE dataset_id = ? AND {seg_sql}
-                        ORDER BY curve_id
-                        """,
-                        (dataset_id,)
-                    ).fetchall()
-                    curve_ids = [str(row[0]) for row in curve_ids_result]
+                    if requested_curve_ids and has_linfit and not (has_fmodel or has_emodel):
+                        # Restrict the pipeline to the curves the user currently has selected.
+                        curve_ids = requested_curve_ids
+                        print(
+                            f"model_stats (stiffness-only) scoped to {len(curve_ids)} "
+                            f"chosen curve id(s): {curve_ids}"
+                        )
+                    else:
+                        # Whole-dataset population (f/e models, or no explicit selection).
+                        curve_ids_result = conn.execute(
+                            f"""
+                            SELECT DISTINCT curve_id FROM force_vs_z
+                            WHERE dataset_id = ? AND {seg_sql}
+                            ORDER BY curve_id
+                            """,
+                            (dataset_id,)
+                        ).fetchall()
+                        curve_ids = [str(row[0]) for row in curve_ids_result]
+                        if k_scope_ids:
+                            print(
+                                f"model_stats population over {len(curve_ids)} curves; "
+                                f"K filtered to chosen ids {sorted(k_scope_ids, key=int)}"
+                            )
                     # Added before using cp_filters
                     cp_filters = filters.get("cp_filters", {})
-                    # Optimization: Pre-warm CP cache for ALL curves before parallel processing
+                    # Optimization: Pre-warm CP cache for selected/all curves before parallel processing
                     if cp_filters and CACHE_ENABLED:
                         print(f"ðŸ”¥ Pre-warming CP cache for {len(curve_ids)} curves before parallel processing...")
                         # Pass dataset_id so the metadata query is scoped to the correct dataset.
@@ -584,9 +681,9 @@ async def websocket_data_stream(websocket: WebSocket):
                 global_k_params = []  # NEW: stiffness (K) values from LinearWindowFit
                 global_k_contact_params = []  # NEW: compliance-corrected k_contact
                 global_E_params = []  # NEW: Young's modulus E
-                # Added before using has_fmodel and has_emodel
-                has_fmodel = bool(filters.get("f_models", {}))
-                has_emodel = bool(filters.get("e_models", {}))
+                # Per-curve LinearWindowFit rows ({curve_id, k_n_per_m, k_contact, youngs_modulus_pa})
+                # so the client can show/export results keyed by the chosen ids.
+                global_kfit_by_curve = []
                 
                 # ── Resource check (centralised) ─────────────────────────────────────
                 can_parallelize, max_par_workers, par_batch_size = _get_parallelism_config()
@@ -652,6 +749,13 @@ async def websocket_data_stream(websocket: WebSocket):
                                                     global_elastic_params.append(r["elasticity_param"])
                                         if "kfit_params" in result:
                                             for r in result["kfit_params"]:
+                                                # Drop curves outside the user's picker selection
+                                                # when K is filtered while f/e still use the full set.
+                                                if not _kfit_row_in_scope(r, k_scope_ids):
+                                                    continue
+                                                # Keep the full per-curve row so mean±std and
+                                                # by-id breakdown stay aligned with chosen ids.
+                                                global_kfit_by_curve.append(r)
                                                 if r.get("k_n_per_m") is not None:
                                                     global_k_params.append(r["k_n_per_m"])
                                                 if r.get("k_contact") is not None:
@@ -724,6 +828,8 @@ async def websocket_data_stream(websocket: WebSocket):
                             global_k_params=global_k_params,
                             global_k_contact_params=global_k_contact_params,
                             global_E_params=global_E_params,
+                            global_kfit_by_curve=global_kfit_by_curve,
+                            k_scope_ids=k_scope_ids,
                             dataset_id=dataset_id,
                             segment_type=segment_type,
                         )
@@ -757,18 +863,31 @@ async def websocket_data_stream(websocket: WebSocket):
                             if len(values) >= 2
                         }
 
-                    if len(global_k_params) >= 2:
+                    # Allow a single chosen curve (n >= 1): format_stat returns the
+                    # value with std=0, which is what single-curve mode needs.
+                    if len(global_k_params) >= 1:
                         stats["k_stiffness"] = format_stat(global_k_params)
-                    if len(global_k_contact_params) >= 2:
+                    if len(global_k_contact_params) >= 1:
                         stats["k_contact"] = format_stat(global_k_contact_params)
-                    if len(global_E_params) >= 2:
+                    if len(global_E_params) >= 1:
                         stats["youngs_modulus"] = format_stat(global_E_params)
+                    if global_kfit_by_curve:
+                        stats["kfit_by_curve"] = global_kfit_by_curve
 
                     await websocket.send_text(json.dumps({
                         "status": "model_stats",
                         "data": {
                             "stats": stats,
-                            "num_curves": len(curve_ids)
+                            # Report how many curves fed the K aggregate when scoped;
+                            # otherwise the full population size used for the request.
+                            "num_curves": (
+                                len(global_kfit_by_curve)
+                                if global_kfit_by_curve
+                                else len(curve_ids)
+                            ),
+                            "curve_ids": [
+                                row.get("curve_id") for row in global_kfit_by_curve
+                            ] if global_kfit_by_curve else curve_ids,
                         }
                     }))
 
@@ -1004,6 +1123,8 @@ async def process_and_stream_batch(
     global_k_params: list = None,  # NEW: stiffness (K) values from LinearWindowFit
     global_k_contact_params: list = None,  # NEW: compliance-corrected k_contact
     global_E_params: list = None,  # NEW: Young's modulus E
+    global_kfit_by_curve: list = None,  # Per-curve LinearWindowFit result rows
+    k_scope_ids: Optional[set] = None,  # Optional chosen-id filter for K aggregates
     dataset_id: int = None,
     segment_type: str = "segment0",
 ) -> None:
@@ -1138,8 +1259,17 @@ async def process_and_stream_batch(
         }
         # print("qwertrtt")
         if scope_model_stats:
+            # A batch of exactly one curve is routed through the "single-curve
+            # path" above (is_single_batch is True), which only populates the
+            # *_single graph variables — the batch ones stay None. Fall back to
+            # the *_single variables so a single chosen curve (curve_ids with
+            # one id) still yields its stats instead of an empty {} here.
+            force_indentation_source = graph_force_indentation or graph_force_indentation_single
+            force_vs_z_source = graph_force_vs_z or graph_force_vs_z_single
+            elspectra_source = graph_elspectra or graph_elspectra_single
+
             # Force params come from graph_force_indentation["curves"]["curves_fparam"]
-            curves_block = graph_force_indentation.get("curves", {}) if graph_force_indentation else {}
+            curves_block = force_indentation_source.get("curves", {}) if force_indentation_source else {}
 
             if run_force_population and "curves_fparam" in curves_block:
                 for r in curves_block["curves_fparam"]:
@@ -1149,8 +1279,15 @@ async def process_and_stream_batch(
             # K-stiffness values come from graph_force_vs_z["curves_kfit"], populated
             # whenever LinearWindowFit is active among the Regular filters — independent
             # of whether any force/elasticity model is selected.
-            if graph_force_vs_z and "curves_kfit" in graph_force_vs_z:
-                for r in graph_force_vs_z["curves_kfit"]:
+            if force_vs_z_source and "curves_kfit" in force_vs_z_source:
+                for r in force_vs_z_source["curves_kfit"]:
+                    # Drop curves outside the user's picker selection when K is
+                    # filtered while f/e population still uses the full dataset.
+                    if not _kfit_row_in_scope(r, k_scope_ids):
+                        continue
+                    # Preserve the full per-curve row (includes curve_id) for by-id results.
+                    if global_kfit_by_curve is not None:
+                        global_kfit_by_curve.append(r)
                     if r.get("k_n_per_m") is not None and global_k_params is not None:
                         global_k_params.append(r["k_n_per_m"])
                     if r.get("k_contact") is not None and global_k_contact_params is not None:
@@ -1159,8 +1296,8 @@ async def process_and_stream_batch(
                         global_E_params.append(r["youngs_modulus_pa"])
 
             # Elasticity params come from graph_elspectra["curves_elasticity_param"] (top-level, not inside "curves")
-            if run_elastic_population and graph_elspectra:
-                elasticity_params_list = graph_elspectra.get("curves_elasticity_param", [])
+            if run_elastic_population and elspectra_source:
+                elasticity_params_list = elspectra_source.get("curves_elasticity_param", [])
                 for r in elasticity_params_list:
                     if is_valid_param_vector(r.get("elasticity_param")):
                         global_elastic_params.append(r["elasticity_param"])
@@ -1182,6 +1319,43 @@ async def process_and_stream_batch(
                     "graphForceIndentationSingle": graph_force_indentation_single,
                     "graphElspectraSingle": graph_elspectra_single,
                 })
+
+            # A single curve picked via the curve picker (e.g. a get_metadata
+            # request carrying curve_id) never goes through the dedicated
+            # model_stats compute_scope, so its K/stiffness numbers were
+            # otherwise never sent. Surface them here as their own K_raw/
+            # K_contact/E "for that curve" whenever LinearWindowFit is active,
+            # without touching the batch/multi-curve full-scope response above.
+            has_linfit_here = "linearwindowfit" in filters_for_call.get("regular", {})
+            if has_linfit_here and curve_id and graph_force_vs_z_single:
+                kfit_rows = [
+                    r for r in (graph_force_vs_z_single.get("curves_kfit") or [])
+                    if _kfit_row_in_scope(r, k_scope_ids)
+                ]
+                if kfit_rows:
+                    k_vals = [r["k_n_per_m"] for r in kfit_rows if r.get("k_n_per_m") is not None]
+                    kc_vals = [r["k_contact"] for r in kfit_rows if r.get("k_contact") is not None]
+                    e_vals = [r["youngs_modulus_pa"] for r in kfit_rows if r.get("youngs_modulus_pa") is not None]
+                    single_curve_stats: Dict[str, Any] = {}
+                    if k_vals:
+                        single_curve_stats["k_stiffness"] = format_stat(k_vals)
+                    if kc_vals:
+                        single_curve_stats["k_contact"] = format_stat(kc_vals)
+                    if e_vals:
+                        single_curve_stats["youngs_modulus"] = format_stat(e_vals)
+                    if single_curve_stats:
+                        # Kept off kfit_by_curve on purpose: with exactly one curve the
+                        # aggregate above already *is* that curve's own K/E, so the
+                        # sidebar's "per chosen curve" breakdown stays hidden and only
+                        # this single set of numbers is shown, per the single-curve rule.
+                        await websocket.send_text(json.dumps({
+                            "status": "model_stats",
+                            "data": {
+                                "stats": single_curve_stats,
+                                "num_curves": len(kfit_rows),
+                                "curve_ids": [row.get("curve_id") for row in kfit_rows],
+                            }
+                        }, default=str))
 
         elif scope_f_only:
             if graph_force_indentation_single:

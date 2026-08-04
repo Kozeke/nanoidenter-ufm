@@ -98,6 +98,26 @@ export const useDashboardStore = create(
       filename: null,
       // Updates the dataset filename.
       setFilename: (name) => set({ filename: name }),
+      // ID of the experiment opened from My Experiments (null = create on save).
+      experimentId: null,
+      // Persists which opened experiment future Save actions should update.
+      setExperimentId: (id) => set({ experimentId: id }),
+      // Name of the opened experiment, pre-filled in the save modal.
+      experimentName: null,
+      // Updates the opened experiment name stored for the save modal.
+      setExperimentName: (name) => set({ experimentName: name }),
+      // Description of the opened experiment, pre-filled in the save modal.
+      experimentDescription: null,
+      // Updates the opened experiment description stored for the save modal.
+      setExperimentDescription: (description) =>
+        set({ experimentDescription: description }),
+      // Clears opened-experiment identity so the next save creates a new row.
+      clearOpenedExperiment: () =>
+        set({
+          experimentId: null,
+          experimentName: null,
+          experimentDescription: null,
+        }),
       // Records which main dashboard tab is currently active.
       activeTab: "forceDisplacement",
       // Updates the active tab selection shared across components.
@@ -122,6 +142,15 @@ export const useDashboardStore = create(
               ? updater(state.selectedExportCurveIds)
               : updater,
         })),
+      // True only right after a brand-new dataset is loaded. Tells the
+      // websocket layer to default selectedCurveIds/selectedExportCurveIds to
+      // "every curve" once the in-flight get_metadata request fully completes,
+      // instead of on every partial batch (batches stream in incrementally,
+      // so re-deriving "all curves" from each partial forceData update would
+      // both miss curves that hadn't arrived yet and clobber any curve the
+      // user had manually unchecked before clicking "Update Curves").
+      needsCurveIdInit: true,
+      setNeedsCurveIdInit: (value) => set({ needsCurveIdInit: value }),
       // Stores the graph visualization style used by the dashboard charts.
       graphType: "line",
       // Updates the shared graph visualization style.
@@ -168,7 +197,9 @@ export const useDashboardStore = create(
       modelStats: {
         force: [],
         elasticity: [],
-        stiffness: []
+        stiffness: [],
+        // Per-curve LinearWindowFit rows ({curve_id, k_n_per_m, k_contact, youngs_modulus_pa})
+        stiffnessByCurve: [],
       },
       
       setModelStats: (type, statsArray) =>
@@ -223,7 +254,8 @@ export const useDashboardStore = create(
           modelStats: {
             force: [],
             elasticity: [],
-            stiffness: []
+            stiffness: [],
+            stiffnessByCurve: [],
           },
           selectedCurveId: null,
           computeScope: "full",
@@ -237,10 +269,14 @@ export const useDashboardStore = create(
           selectedSegmentType: "segment0",
           datasetId: null,
           filename: null,
+          experimentId: null,
+          experimentName: null,
+          experimentDescription: null,
           activeTab: "forceDisplacement",
           graphType: "line",
           selectedCurveIds: [],
           selectedExportCurveIds: [],
+          needsCurveIdInit: true,
           isLoading: false,
           isLoadingCurves: false,
           isLoadingImport: false,

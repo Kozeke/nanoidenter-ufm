@@ -95,6 +95,9 @@ const Dashboard = () => {
     selectedExportCurveIds,
     // Updates the export curve selection.
     setSelectedExportCurveIds,
+    // Flags that Display/Export curve selections should default to "all
+    // curves" once the next get_metadata request fully completes.
+    setNeedsCurveIdInit,
     // Tracks parallel loading indicators for key workflows.
     loadingMulti,
     // Merges loading indicator updates.
@@ -123,6 +126,8 @@ const Dashboard = () => {
     setModelStats,
     // Resets filters and analysis params to defaults when a new experiment loads.
     resetFiltersAndParams,
+    // Clears opened-experiment identity so importing a file creates a new save.
+    clearOpenedExperiment,
   } = useDashboardStore();
   
   // Centralizes WebSocket lifecycle + curve fetching for the dashboard
@@ -269,25 +274,24 @@ const Dashboard = () => {
     }
   }, [activeTab, setActiveTab]);
 
+  // Whenever the active dataset changes, re-arm the "default Display/Export to
+  // all curves" behaviour. handleProcessSuccess already does this for freshly
+  // imported files, but a dataset can also become active without going through
+  // it — loading a saved experiment (MyExperiments.jsx) or picking an existing
+  // dataset (MyDatasets.jsx) both call setDatasetId directly. Without this, the
+  // websocket sync would treat the new dataset's curves as previously-known and
+  // leave every checkbox unchecked.
   useEffect(() => {
-    const allCurveIds = forceData.map((curve) => curve.curve_id);
-    setSelectedExportCurveIds((prev) => {
-      // Only update if the curve IDs have changed to avoid redundant updates
-      if (JSON.stringify(prev) !== JSON.stringify(allCurveIds)) {
-        // console.log("Initializing export curve IDs:", allCurveIds);
-        return allCurveIds;
-      }
-      return prev;
-    });
-    setSelectedCurveIds((prev) => {
-      // Only update if the curve IDs have changed to avoid redundant updates
-      if (JSON.stringify(prev) !== JSON.stringify(allCurveIds)) {
-        // console.log("Initializing export curve IDs:", allCurveIds);
-        return allCurveIds;
-      }
-      return prev;
-    });
-  }, [forceData]);
+    setNeedsCurveIdInit(true);
+  }, [datasetId, setNeedsCurveIdInit]);
+
+  // NOTE: there is deliberately no effect here reconciling selectedCurveIds /
+  // selectedExportCurveIds against forceData. forceData is populated by many
+  // incremental "batch" WebSocket messages, so any effect keyed on it observes
+  // partial curve lists — pruning against one would permanently drop curves
+  // that simply hadn't streamed in yet. All reconciliation happens exactly
+  // once, in useDashboardWebSocket.js, on the terminal "complete" message when
+  // the full curve list is known (see syncCurveSelectionsOnLoadComplete).
 
   // Determine if we're in single-curve mode based on selectedCurveId
   const hasSingleCurve = Boolean(selectedCurveId && String(selectedCurveId).trim() !== "");
@@ -398,17 +402,24 @@ const Dashboard = () => {
     // This prevents stale filter choices from a previous experiment leaking into
     // the first WebSocket request for the new dataset.
     resetFiltersAndParams();
+    // Importing a new file starts a fresh analysis — do not update a prior experiment.
+    clearOpenedExperiment();
     // Clear single-curve selection so the curve ID field shows empty
     setSelectedCurveId(null);
     // Clear highlighted and export curve IDs; they will be repopulated from incoming forceData
     setSelectedCurveIds([]);
     setSelectedExportCurveIds([]);
+    // Once the new dataset's get_metadata request fully completes, default
+    // both selections to "all curves" (see useDashboardWebSocket.js).
+    setNeedsCurveIdInit(true);
     // Reset local model-parameter selections that depend on the previous dataset
     setSelectedParameters([]);
     setSelectedElasticityParameters([]);
     // Clears previous model statistics so the new dataset starts with empty E metrics.
     setModelStats("force", []);
     setModelStats("elasticity", []);
+    setModelStats("stiffness", []);
+    setModelStats("stiffnessByCurve", []);
     // Force a fresh WebSocket request after import
     // The datasetId should be available since Zustand updates are synchronous
     resetAndReload();
@@ -418,6 +429,8 @@ const Dashboard = () => {
     // Clears stale model statistics immediately when a new file import starts.
     setModelStats("force", []);
     setModelStats("elasticity", []);
+    setModelStats("stiffness", []);
+    setModelStats("stiffnessByCurve", []);
     setLoadingMulti({ import: true });
     setIsLoadingImport(true);
   };
@@ -1561,4 +1574,3 @@ const Dashboard = () => {
       </Suspense>
     </MetadataContext.Provider>);
 }; export default Dashboard;
-
