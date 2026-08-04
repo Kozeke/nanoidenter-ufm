@@ -76,6 +76,17 @@ const ExportButton = ({
   // Optional experiment data when exporting from experiments page
   experimentData = null,
 }) => {
+  // Normalizes date-like strings to YYYY-MM-DD for consistent step-3/step-4 display.
+  const formatDateForReview = (value) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return 'Not provided';
+    // Keeps an already normalized date unchanged.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    // Converts ISO-like timestamps (YYYY-MM-DDTHH:mm:ss...) to date-only form.
+    if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) return raw.slice(0, 10);
+    return raw;
+  };
+
   const {
     isMetadataReady,
     isExporting,
@@ -375,7 +386,8 @@ const ExportButton = ({
                     Enter Metadata
                   </Typography>
 
-                  {Object.keys(metadataValidationRules).map((key) => {
+                  {/* Defines metadata keys hidden from the HDF5 metadata editor. */}
+                  {Object.keys(metadataValidationRules).filter((key) => key !== 'force_scale_to_n').map((key) => {
                     const rule = metadataValidationRules[key];
 
                     if (rule.type === 'select') {
@@ -403,10 +415,11 @@ const ExportButton = ({
                         key={key}
                         name={key}
                         label={rule.label}
-                        type={key === 'date' ? 'date' : rule.type === 'number' ? 'number' : 'text'}
+                        type={rule.type === 'number' ? 'number' : 'text'}
                         value={metadata[key] || ''}
                         onChange={handleMetadataChange}
-                        InputLabelProps={key === 'date' ? { shrink: true } : undefined}
+                        placeholder={key === 'date' ? 'YYYY-MM-DD' : undefined}
+                        inputProps={key === 'date' ? { pattern: '\\d{4}-\\d{2}-\\d{2}' } : undefined}
                         fullWidth
                         margin="normal"
                       />
@@ -457,8 +470,10 @@ const ExportButton = ({
                   </Box>
                   <Typography variant="h6" gutterBottom sx={{ mt: 2 }}><strong>Metadata:</strong></Typography>
                   <ul>
-                    {Object.entries(metadata).map(([key, value]) => (
-                      <li key={key}>{metadataValidationRules[key]?.label || key}: {value || 'Not provided'}</li>
+                    {Object.entries(metadata).filter(([key]) => key !== 'force_scale_to_n').map(([key, value]) => (
+                      <li key={key}>
+                        {metadataValidationRules[key]?.label || key}: {key === 'date' ? formatDateForReview(value) : (value || 'Not provided')}
+                      </li>
                     ))}
                   </ul>
                 </Box>
@@ -596,34 +611,186 @@ const ExportButton = ({
                     </Box>
                   )}
 
-                  <Typography variant="h6" gutterBottom>
-                    Stiffness Results (LinearWindowFit)
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                    Computed by the LinearWindowFit filter when active; left blank otherwise.
-                  </Typography>
-                  <TextField
-                    label="K_raw (N/m)"
-                    value={stiffnessResults.kRaw?.value || ''}
-                    fullWidth
-                    margin="normal"
-                    disabled
-                  />
-                  <TextField
-                    label="K_contact (N/m)"
-                    value={stiffnessResults.kContact?.value || ''}
-                    fullWidth
-                    margin="normal"
-                    disabled
-                  />
-                  <TextField
-                    label="Young's Modulus E (Pa)"
-                    value={stiffnessResults.youngsModulus?.value || ''}
-                    fullWidth
-                    margin="normal"
-                    disabled
-                  />
-                  
+                  {/* For raw CSV export, show the same metadata fields as average export */}
+                  {exportType === 'raw' && (
+                    <>
+                      <Typography variant="h6" gutterBottom>
+                        Essential Metadata
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                        Review and edit the metadata fields retrieved from your imported file. These values will be included in your exported CSV file.
+                      </Typography>
+                      
+                      <Alert severity="info" sx={{ mb: 2 }}>
+                        These values are pre-filled from your imported file metadata. You can modify them as needed for this export.
+                      </Alert>
+                      
+                      <TextField
+                        label="Date"
+                        type="text"
+                        value={editableSoftMechMetadata.date}
+                        onChange={(e) => {
+                          // Captures the updated date string for metadata validation.
+                          const value = e.target.value;
+                          setEditableSoftMechMetadata((prev) => ({
+                            ...prev,
+                            date: value,
+                          }));
+                          if (value.trim()) {
+                            clearErrorContains('date is required');
+                          }
+                          if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+                            clearErrorContains('date must be');
+                          }
+                        }}
+                        fullWidth
+                        margin="normal"
+                        required
+                        placeholder="YYYY-MM-DD"
+                        inputProps={{ pattern: '\\d{4}-\\d{2}-\\d{2}' }}
+                        disabled={loading}
+                      />
+                      
+                      <TextField
+                        label="Spring Constant [N/m]"
+                        type="number"
+                        value={editableSoftMechMetadata.spring_constant}
+                        onChange={(e) => {
+                          // Normalizes the spring constant input for validation feedback.
+                          const value = parseFloat(e.target.value) || 0;
+                          setEditableSoftMechMetadata((prev) => ({
+                            ...prev,
+                            spring_constant: value,
+                          }));
+                          if (value > 0) {
+                            clearErrorContains('spring constant');
+                          }
+                        }}
+                        fullWidth
+                        margin="normal"
+                        required
+                        inputProps={{ min: 0, step: 0.000001 }}
+                        disabled={loading}
+                      />
+                      
+                      <FormControl fullWidth margin="normal">
+                        <InputLabel>Tip Geometry</InputLabel>
+                              <Select
+                          value={editableSoftMechMetadata.tip_geometry}
+                          onChange={(e) => {
+                            setEditableSoftMechMetadata((prev) => ({
+                              ...prev,
+                              tip_geometry: e.target.value,
+                            }));
+                            if (e.target.value) {
+                              clearErrorContains('tip geometry');
+                            }
+                          }}
+                          label="Tip Geometry"
+                                disabled={loading}
+                              >
+                          <MenuItem value="sphere">Sphere</MenuItem>
+                          <MenuItem value="cylinder">Cylinder</MenuItem>
+                          <MenuItem value="cone">Cone</MenuItem>
+                          <MenuItem value="pyramid">Pyramid</MenuItem>
+                              </Select>
+                            </FormControl>
+
+                      <TextField
+                        label="Tip Angle [deg]"
+                        type="number"
+                        value={editableSoftMechMetadata.tip_angle ?? ''}
+                        onChange={(e) => {
+                          // Stores tip angle in degrees so CSV export metadata includes it unchanged.
+                          const value = e.target.value;
+                          setEditableSoftMechMetadata((prev) => ({
+                            ...prev,
+                            tip_angle: value,
+                          }));
+                        }}
+                        fullWidth
+                        margin="normal"
+                        inputProps={{ step: 0.1 }}
+                        disabled={loading}
+                      />
+                      
+                            <TextField
+                        label="Tip Radius [mm]"
+                        type="number"
+                        value={editableSoftMechMetadata.tip_radius}
+                        onChange={(e) => {
+                          // Captures the numeric tip radius so validation errors can clear reactively.
+                          const parsed = parseFloat(e.target.value);
+                          const normalized = Number.isFinite(parsed) ? parsed : 0;
+                          setEditableSoftMechMetadata((prev) => ({
+                            ...prev,
+                            tip_radius: normalized,
+                          }));
+                          if (normalized >= 0) {
+                            clearErrorContains('tip radius');
+                          }
+                        }}
+                              fullWidth
+                              margin="normal"
+                        required
+                        inputProps={{ min: 0, step: 0.1 }}
+                              disabled={loading}
+                            />
+
+                      <TextField
+                        label="Velocity [µm/s]"
+                        type="number"
+                        value={editableSoftMechMetadata.velocity ?? ''}
+                        onChange={(e) => {
+                          // Captures the velocity value so it can be sent in the CSV export payload.
+                          const parsed = parseFloat(e.target.value);
+                          // Normalizes invalid input to 0 so validation can surface a clear message.
+                          const normalized = Number.isFinite(parsed) ? parsed : 0;
+                          setEditableSoftMechMetadata((prev) => ({
+                            ...prev,
+                            velocity: normalized,
+                          }));
+                          if (normalized > 0) {
+                            clearErrorContains('velocity');
+                          }
+                        }}
+                        fullWidth
+                        margin="normal"
+                        required
+                        inputProps={{ min: 0, step: 0.1 }}
+                        disabled={loading}
+                      />
+
+                      <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+                        Stiffness Results (LinearWindowFit)
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                        Computed by the LinearWindowFit filter when active; left blank otherwise.
+                      </Typography>
+                      <TextField
+                        label="K_raw (N/m)"
+                        value={stiffnessResults.kRaw?.value || ''}
+                        fullWidth
+                        margin="normal"
+                        disabled
+                      />
+                      <TextField
+                        label="K_contact (N/m)"
+                        value={stiffnessResults.kContact?.value || ''}
+                        fullWidth
+                        margin="normal"
+                        disabled
+                      />
+                      <TextField
+                        label="Young's Modulus E (Pa)"
+                        value={stiffnessResults.youngsModulus?.value || ''}
+                        fullWidth
+                        margin="normal"
+                        disabled
+                      />
+                    </>
+                  )}
+
                   {/* Display calculated SoftMech metadata */}
                   {exportType !== 'raw' && (
                     <>
@@ -663,161 +830,33 @@ const ExportButton = ({
                           No metadata available. Please check your export settings.
                         </Typography>
                       )}
-                    </>
-                  )}
-                  
-                  {/* For raw CSV export, show the same metadata fields as average export */}
-                  {exportType === 'raw' && (
-                    <>
-                      <Typography variant="h6" gutterBottom>
-                        Essential Metadata
-                      </Typography>
-                      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                        Review and edit the metadata fields retrieved from your imported file. These values will be included in your exported CSV file.
-                      </Typography>
-                      
-                      <Alert severity="info" sx={{ mb: 2 }}>
-                        These values are pre-filled from your imported file metadata. You can modify them as needed for this export.
-                      </Alert>
-                      
-                      {/* <TextField
-                        label="File ID"
-                        value={editableSoftMechMetadata.file_id}
-                        onChange={(e) => {
-                          setEditableSoftMechMetadata((prev) => ({
-                            ...prev,
-                            file_id: e.target.value,
-                          }));
-                          if (e.target.value.trim()) {
-                            clearErrorContains('file id');
-                          }
-                        }}
-                        fullWidth
-                        margin="normal"
-                        required
-                        helperText="Unique identifier for this measurement file"
-                        disabled={loading}
-                      />
-                      
-                      <TextField
-                        label="Date"
-                        type="date"
-                        value={editableSoftMechMetadata.date}
-                        onChange={(e) => {
-                          // Captures the updated date string for metadata validation.
-                          const value = e.target.value;
-                          setEditableSoftMechMetadata((prev) => ({
-                            ...prev,
-                            date: value,
-                          }));
-                          if (value.trim()) {
-                            clearErrorContains('date is required');
-                          }
-                          if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-                            clearErrorContains('date must be');
-                          }
-                        }}
-                        fullWidth
-                        margin="normal"
-                        required
-                        InputLabelProps={{ shrink: true }}
-                        helperText="Date of the measurement (YYYY-MM-DD)"
-                        disabled={loading}
-                      /> */}
-                      
-                      <TextField
-                        label="Spring Constant [N/m]"
-                        type="number"
-                        value={editableSoftMechMetadata.spring_constant}
-                        onChange={(e) => {
-                          // Normalizes the spring constant input for validation feedback.
-                          const value = parseFloat(e.target.value) || 0;
-                          setEditableSoftMechMetadata((prev) => ({
-                            ...prev,
-                            spring_constant: value,
-                          }));
-                          if (value > 0) {
-                            clearErrorContains('spring constant');
-                          }
-                        }}
-                        fullWidth
-                        margin="normal"
-                        required
-                        inputProps={{ min: 0, step: 0.000001 }}
-                        helperText="Cantilever spring constant"
-                        disabled={loading}
-                      />
-                      
-                      <FormControl fullWidth margin="normal">
-                        <InputLabel>Tip Geometry</InputLabel>
-                              <Select
-                          value={editableSoftMechMetadata.tip_geometry}
-                          onChange={(e) => {
-                            setEditableSoftMechMetadata((prev) => ({
-                              ...prev,
-                              tip_geometry: e.target.value,
-                            }));
-                            if (e.target.value) {
-                              clearErrorContains('tip geometry');
-                            }
-                          }}
-                          label="Tip Geometry"
-                                disabled={loading}
-                              >
-                          <MenuItem value="sphere">Sphere</MenuItem>
-                          <MenuItem value="cylinder">Cylinder</MenuItem>
-                          <MenuItem value="cone">Cone</MenuItem>
-                          <MenuItem value="pyramid">Pyramid</MenuItem>
-                              </Select>
-                            </FormControl>
-                      
-                            <TextField
-                        label="Tip Radius [mm]"
-                        type="number"
-                        value={editableSoftMechMetadata.tip_radius}
-                        onChange={(e) => {
-                          // Captures the numeric tip radius so validation errors can clear reactively.
-                          const parsed = parseFloat(e.target.value);
-                          const normalized = Number.isFinite(parsed) ? parsed : 0;
-                          setEditableSoftMechMetadata((prev) => ({
-                            ...prev,
-                            tip_radius: normalized,
-                          }));
-                          if (normalized >= 0) {
-                            clearErrorContains('tip radius');
-                          }
-                        }}
-                              fullWidth
-                              margin="normal"
-                        required
-                        inputProps={{ min: 0, step: 0.1 }}
-                        helperText="Tip radius in millimeters"
-                              disabled={loading}
-                            />
 
+                      <Typography variant="h6" gutterBottom>
+                        Stiffness Results (LinearWindowFit)
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                        Computed by the LinearWindowFit filter when active; left blank otherwise.
+                      </Typography>
                       <TextField
-                        label="Velocity [µm/s]"
-                        type="number"
-                        value={editableSoftMechMetadata.velocity ?? ''}
-                        onChange={(e) => {
-                          // Captures the velocity value so it can be sent in the CSV export payload.
-                          const parsed = parseFloat(e.target.value);
-                          // Normalizes invalid input to 0 so validation can surface a clear message.
-                          const normalized = Number.isFinite(parsed) ? parsed : 0;
-                          setEditableSoftMechMetadata((prev) => ({
-                            ...prev,
-                            velocity: normalized,
-                          }));
-                          if (normalized > 0) {
-                            clearErrorContains('velocity');
-                          }
-                        }}
+                        label="K_raw (N/m)"
+                        value={stiffnessResults.kRaw?.value || ''}
                         fullWidth
                         margin="normal"
-                        required
-                        inputProps={{ min: 0, step: 0.1 }}
-                        helperText="Approach/retract velocity in micrometers per second"
-                        disabled={loading}
+                        disabled
+                      />
+                      <TextField
+                        label="K_contact (N/m)"
+                        value={stiffnessResults.kContact?.value || ''}
+                        fullWidth
+                        margin="normal"
+                        disabled
+                      />
+                      <TextField
+                        label="Young's Modulus E (Pa)"
+                        value={stiffnessResults.youngsModulus?.value || ''}
+                        fullWidth
+                        margin="normal"
+                        disabled
                       />
                     </>
                   )}
@@ -836,27 +875,9 @@ const ExportButton = ({
                     These values are pre-filled from your imported file metadata. You can modify them as needed for this export.
                   </Alert>
                   
-                  {/* <TextField
-                    label="File ID"
-                    value={editableSoftMechMetadata.file_id}
-                    onChange={(e) => {
-                      setEditableSoftMechMetadata((prev) => ({
-                        ...prev,
-                        file_id: e.target.value,
-                      }));
-                      if (e.target.value.trim()) {
-                        clearErrorContains('file id');
-                      }
-                    }}
-                    fullWidth
-                    margin="normal"
-                    required
-                    helperText="Unique identifier for this measurement file"
-                  />
-                  
                   <TextField
                     label="Date"
-                    type="date"
+                    type="text"
                     value={editableSoftMechMetadata.date}
                     onChange={(e) => {
                       // Stores the current date entry so validator errors clear in sync.
@@ -875,9 +896,9 @@ const ExportButton = ({
                     fullWidth
                     margin="normal"
                     required
-                    InputLabelProps={{ shrink: true }}
-                    helperText="Date of the measurement (YYYY-MM-DD)"
-                  /> */}
+                    placeholder="YYYY-MM-DD"
+                    inputProps={{ pattern: '\\d{4}-\\d{2}-\\d{2}' }}
+                  />
                   
                   <TextField
                     label="Spring Constant [N/m]"
@@ -898,7 +919,6 @@ const ExportButton = ({
                     margin="normal"
                     required
                     inputProps={{ min: 0, step: 0.000001 }}
-                    helperText="Cantilever spring constant"
                   />
                   
                   <FormControl fullWidth margin="normal">
@@ -922,6 +942,23 @@ const ExportButton = ({
                       <MenuItem value="pyramid">Pyramid</MenuItem>
                     </Select>
                   </FormControl>
+
+                  <TextField
+                    label="Tip Angle [deg]"
+                    type="number"
+                    value={editableSoftMechMetadata.tip_angle ?? ''}
+                    onChange={(e) => {
+                      // Stores tip angle in degrees so CSV export metadata includes it unchanged.
+                      const value = e.target.value;
+                      setEditableSoftMechMetadata((prev) => ({
+                        ...prev,
+                        tip_angle: value,
+                      }));
+                    }}
+                    fullWidth
+                    margin="normal"
+                    inputProps={{ step: 0.1 }}
+                  />
                   
                   <TextField
                     label="Tip Radius [mm]"
@@ -943,7 +980,6 @@ const ExportButton = ({
                     margin="normal"
                     required
                     inputProps={{ min: 0, step: 0.1 }}
-                    helperText="Tip radius in millimeters"
                   />
 
                   <TextField
@@ -967,7 +1003,6 @@ const ExportButton = ({
                     margin="normal"
                     required
                     inputProps={{ min: 0, step: 0.1 }}
-                    helperText="Approach/retract velocity in micrometers per second"
                   />
                 </Box>
               )}
@@ -997,9 +1032,10 @@ const ExportButton = ({
                       <Box sx={{ backgroundColor: '#f0f8ff', p: 2, borderRadius: 1, mb: 2 }}>
                         <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                           <strong>File ID:</strong> {editableSoftMechMetadata.file_id || 'Not provided'}<br/>
-                          <strong>Date:</strong> {editableSoftMechMetadata.date || 'Not provided'}<br/>
+                          <strong>Date:</strong> {formatDateForReview(editableSoftMechMetadata.date)}<br/>
                           <strong>Spring Constant [N/m]:</strong> {editableSoftMechMetadata.spring_constant}<br/>
                           <strong>Tip Geometry:</strong> {editableSoftMechMetadata.tip_geometry}<br/>
+                          <strong>Tip Angle [deg]:</strong> {editableSoftMechMetadata.tip_angle || 'Not provided'}<br/>
                           <strong>Tip Radius [mm]:</strong> {editableSoftMechMetadata.tip_radius}<br/>
                           <strong>Velocity [µm/s]:</strong> {editableSoftMechMetadata.velocity}<br/>
                         </Typography>
@@ -1118,7 +1154,9 @@ const ExportButton = ({
                   <Typography><strong>Metadata:</strong></Typography>
                   <ul>
                     {Object.entries(metadata).map(([key, value]) => (
-                      <li key={key}>{metadataValidationRules[key]?.label || key}: {value || 'Not provided'}</li>
+                      <li key={key}>
+                        {metadataValidationRules[key]?.label || key}: {key === 'date' ? formatDateForReview(value) : (value || 'Not provided')}
+                      </li>
                     ))}
                   </ul>
                 </Box>

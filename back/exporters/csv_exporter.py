@@ -73,8 +73,23 @@ class CSVExporter(Exporter):
                     conditions.append("dataset_id = ?")
                     params.append(dataset_id)
                 if curve_ids:
-                    conditions.append("curve_id IN ({})".format(",".join("?" for _ in curve_ids)))
-                    params.extend(curve_ids)
+                    # Frontend passes curve_ids with "curve" prefix (e.g. "curve0", "curve1"),
+                    # but the database stores just numeric IDs (0, 1, 2, ...). Strip the
+                    # prefix to match the database format, or convert to int if already
+                    # numeric. This ensures the WHERE IN clause actually matches.
+                    db_curve_ids = []
+                    for cid in curve_ids:
+                        cid_str = str(cid)
+                        if cid_str.startswith("curve"):
+                            db_curve_ids.append(int(cid_str[5:]))  # Remove "curve" prefix
+                        else:
+                            try:
+                                db_curve_ids.append(int(cid_str))
+                            except ValueError:
+                                # Fallback: keep as-is if not convertible (shouldn't happen)
+                                db_curve_ids.append(cid_str)
+                    conditions.append("curve_id IN ({})".format(",".join("?" for _ in db_curve_ids)))
+                    params.extend(db_curve_ids)
                 if conditions:
                     query += " WHERE " + " AND ".join(conditions)
                 # Orders rows so segment0 (approach) is grouped ahead of segment1 (retract)
@@ -138,7 +153,12 @@ class CSVExporter(Exporter):
                         if db_value is not None:
                             metadata_payload[field] = db_value
 
+                # Defines metadata keys that should not be written into CSV exports.
+                blocked_metadata_keys = {"force_scale_to_n"}
                 for key, value in metadata_payload.items():
+                    # Skips internal calibration keys the user doesn't want in export metadata.
+                    if key in blocked_metadata_keys:
+                        continue
                     writer.writerow([key, value])
                 
                 # Add Young's modulus formatted value from websocket stats if available
@@ -158,6 +178,22 @@ class CSVExporter(Exporter):
                 if stiffness_youngs_modulus_formatted:
                     writer.writerow(["youngs_modulus_linfit", stiffness_youngs_modulus_formatted])
 
+                # Per-curve K_raw / K_contact / E (see LinearWindowFit filter /
+                # process_and_stream_batch's kfit_by_curve), keyed by curve_id so each
+                # curve's own block below can be given its own values, distinct from
+                # the dataset-level average written above. Keys are normalized (the
+                # "curve" prefix stripped) since the DB's curve_id and the websocket
+                # stats' curve_id ("curve3" vs 3/"3") aren't guaranteed to match as-is.
+                def _norm_curve_key(cid):
+                    s = str(cid)
+                    return s[len("curve"):] if s.startswith("curve") else s
+
+                kfit_by_curve_lookup = {
+                    _norm_curve_key(row.get("curve_id")): row
+                    for row in (kwargs.get("kfit_by_curve") or [])
+                    if row.get("curve_id") is not None
+                }
+
                 num_exported = 0
                 for curve_id in curve_order:
                     entry = curves_by_id[curve_id]
@@ -168,6 +204,20 @@ class CSVExporter(Exporter):
                     # in the metadata block above, not repeated for every curve.
                     writer.writerow(["curve_id", curve_id])
 
+                    # This curve's own K_raw / K_contact / E (as opposed to the
+                    # dataset-level mean ± std written once at the top of the file).
+                    curve_kfit = kfit_by_curve_lookup.get(_norm_curve_key(curve_id))
+                    if curve_kfit:
+                        k_raw_val = curve_kfit.get("k_n_per_m")
+                        if k_raw_val is not None:
+                            writer.writerow(["k_raw", f"{float(k_raw_val):.6g} N/m"])
+                        k_contact_val = curve_kfit.get("k_contact")
+                        if k_contact_val is not None:
+                            writer.writerow(["k_contact", f"{float(k_contact_val):.6g} N/m"])
+                        e_val = curve_kfit.get("youngs_modulus_pa")
+                        if e_val is not None:
+                            writer.writerow(["youngs_modulus", f"{float(e_val):.6g} Pa"])
+
                     # Orders segment0 (approach) ahead of segment1 (retract), with any
                     # unrecognized segment types appended afterwards, so retract data is
                     # always written to the right of approach data for the same curve.
@@ -177,9 +227,16 @@ class CSVExporter(Exporter):
                     # Labels match the units actually stored in force_vs_z: Z is
                     # micrometers (µm) and Force is micronewtons (µN) — no SI
                     # conversion is applied on export (see hdf5.py ingest notes).
+                    # Maps canonical segment ids to user-facing phase labels for CSV headers.
+                    segment_label_map = {
+                        "segment0": "indent",
+                        "segment1": "retract",
+                    }
                     header = ["index"]
                     for segment_name in segment_order:
-                        header += [f"Z {segment_name} (µm)", f"Force {segment_name} (µN)"]
+                        # Chooses a readable label while preserving unknown segment names as-is.
+                        display_segment_name = segment_label_map.get(segment_name, segment_name)
+                        header += [f"Z {display_segment_name} (µm)", f"Force {display_segment_name} (µN)"]
                     writer.writerow(header)
 
                     segment_arrays = {}

@@ -7,6 +7,7 @@ import logging
 import os
 from typing import Dict, List, Any, Optional, Tuple
 import duckdb
+from segment_utils import normalize_segment_type
 
 def get_hdf5_structure(file_path: str) -> Dict[str, Any]:
     """Return the HDF5 file structure as a nested dictionary for frontend display."""
@@ -412,7 +413,15 @@ def export_from_duckdb_to_hdf5(
     dataset_path: str = "curve0/segment0/Force",
     level_names: List[str] = ["curve0", "segment0"],
     metadata_path: str = "tip",
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = {},
+    # Per-curve LinearWindowFit results ({curve_id, k_n_per_m, k_contact,
+    # youngs_modulus_pa}); written as attrs on each curve's own group (distinct
+    # from the dataset-level average in dataset_stats below).
+    kfit_by_curve: Optional[List[Dict[str, Any]]] = None,
+    # Dataset-level (mean ± std) formatted stats — e.g. k_raw_formatted,
+    # k_contact_formatted, stiffness_youngs_modulus_formatted,
+    # youngs_modulus_formatted — written once as attrs on the file's root group.
+    dataset_stats: Optional[Dict[str, Any]] = None,
 ) -> int:
     """
     Export transformed curves from DuckDB to an HDF5 file with specified dataset and metadata paths.
@@ -425,6 +434,8 @@ def export_from_duckdb_to_hdf5(
         level_names: List of group level names (e.g., ["curve0", "segment0"]).
         metadata_path: HDF5 path for storing metadata (e.g., "curve0/segment0/tip").
         metadata: Dictionary of metadata to store as attributes.
+        kfit_by_curve: Per-curve K_raw/K_contact/E rows, keyed onto each curve's group.
+        dataset_stats: Dataset-level averaged K_raw/K_contact/E, keyed onto the root group.
     
     Returns:
         Number of curves exported.
@@ -461,8 +472,23 @@ def export_from_duckdb_to_hdf5(
             )
             params = None
             if curve_ids:
-                query += " WHERE curve_id IN ({})".format(",".join("?" for _ in curve_ids))
-                params = curve_ids
+                # Callers (the frontend, exporter.py) pass curve_ids in the "curveN"
+                # label format (e.g. "curve0", "curve1"), but the DB's curve_id column
+                # stores plain numeric IDs (0, 1, ...) — comparing them as strings
+                # against an integer column silently drops non-matching curves.
+                # Normalize to int here so the WHERE IN clause actually matches.
+                db_curve_ids = []
+                for cid in curve_ids:
+                    cid_str = str(cid)
+                    if cid_str.startswith("curve"):
+                        db_curve_ids.append(int(cid_str[len("curve"):]))
+                    else:
+                        try:
+                            db_curve_ids.append(int(cid_str))
+                        except ValueError:
+                            db_curve_ids.append(cid_str)  # fallback, shouldn't happen
+                query += " WHERE curve_id IN ({})".format(",".join("?" for _ in db_curve_ids))
+                params = db_curve_ids
             
             results = conn.execute(query, params or []).fetchall()
             if not results:
@@ -474,10 +500,23 @@ def export_from_duckdb_to_hdf5(
             error_msg = f"File already exists: {output_path}. Please choose a different filename or remove the existing file manually."
             logger.error(error_msg)
             raise ValueError(error_msg)
-        
+
+        # Per-curve K_raw / K_contact / E, keyed by normalized curve_id ("curve3" and
+        # "3"/3 all resolve to the same key) so it matches regardless of which format
+        # the caller's kfit_by_curve rows or this query's raw curve_id use.
+        def _norm_curve_key(cid):
+            s = str(cid)
+            return s[len("curve"):] if s.startswith("curve") else s
+
+        kfit_lookup = {
+            _norm_curve_key(row.get("curve_id")): row
+            for row in (kfit_by_curve or [])
+            if row.get("curve_id") is not None
+        }
+
         # Open HDF5 file
         with h5py.File(output_path, "w") as f:
-            num_exported = 0
+            exported_curve_names = set()
             for row in results:
                 (curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
                  tip_geometry, tip_radius, segment_type, deflection, z_sensor,
@@ -485,29 +524,40 @@ def export_from_duckdb_to_hdf5(
 
                 # Creates deterministic curve group names so each curve keeps its own branch.
                 curve_group_name = f"curve{curve_id}" if curve_id is not None else f"curve_{id(row)}"
-                # Keeps the canonical segment group expected by downstream readers.
-                segment_group_name = level_names[1] if len(level_names) > 1 and level_names[1] else "segment0"
+                # Uses this row's own segment_type (approach -> segment0, retract ->
+                # segment1, etc.), not the single static level_names[1] value — the
+                # previous code wrote every row for a curve into the same fixed group,
+                # so a curve's segment1 (retract) silently overwrote its segment0
+                # (approach) data (or vice versa) whenever both existed.
+                canonical_segment = normalize_segment_type(segment_type) or (
+                    level_names[1] if len(level_names) > 1 and level_names[1] else "segment0"
+                )
                 # Creates/gets the per-curve group where all child objects are attached.
                 curve_group = f.require_group(curve_group_name)
-                # Creates/gets the per-segment group under the curve.
-                segment_group = curve_group.require_group(segment_group_name)
+                # Creates/gets this row's own segment group under the curve.
+                segment_group = curve_group.require_group(canonical_segment)
 
-                # Prevent crash if the same curve appears multiple times by replacing existing datasets.
+                # Prevent crash if the same curve+segment appears multiple times by replacing existing datasets.
                 if "Force" in segment_group:
                     del segment_group["Force"]
-                # Stores only force values for this curve in the expected dataset name.
+                # Stores only force values for this curve+segment in the expected dataset name.
                 segment_group.create_dataset("Force", data=np.array(deflection or [], dtype=np.float64))
 
-                # Prevent crash if the same curve appears multiple times by replacing existing datasets.
+                # Prevent crash if the same curve+segment appears multiple times by replacing existing datasets.
                 if "Z" in segment_group:
                     del segment_group["Z"]
-                # Stores only Z values for this curve in the expected dataset name.
+                # Stores only Z values for this curve+segment in the expected dataset name.
                 segment_group.create_dataset("Z", data=np.array(z_sensor or [], dtype=np.float64))
 
-                # Creates/gets the tip group at curve level so it is sibling to segment0.
+                # Creates/gets the tip group at curve level so it is sibling to segment0/segment1.
                 tip_group = curve_group.require_group("tip")
                 # Stores custom metadata fields directly inside tip as attributes.
+                # Defines metadata keys that should not be written into HDF5 tip attributes.
+                blocked_metadata_keys = {"force_scale_to_n"}
                 for key, value in metadata.items():
+                    # Skips internal calibration keys the user doesn't want in export metadata.
+                    if key in blocked_metadata_keys:
+                        continue
                     tip_group.attrs[key] = value
                 # Stores the tip geometry shape as a string attribute.
                 tip_group.attrs["geometry"] = str((metadata.get("tip_geometry") or tip_geometry or "sphere"))
@@ -523,7 +573,37 @@ def export_from_duckdb_to_hdf5(
                 # Stores the tip radius value (mm) used by consumers.
                 tip_group.attrs["value"] = float(payload_tip_radius_mm)
 
-                num_exported += 1
+                # This curve's own K_raw / K_contact / E (as opposed to the
+                # dataset-level mean ± std written once on the root group below).
+                # Guarded so repeated rows for the same curve (segment0 + segment1)
+                # don't redundantly recompute/overwrite the same attrs.
+                if "k_raw" not in curve_group.attrs:
+                    curve_kfit = kfit_lookup.get(_norm_curve_key(curve_id))
+                    if curve_kfit:
+                        if curve_kfit.get("k_n_per_m") is not None:
+                            curve_group.attrs["k_raw"] = float(curve_kfit["k_n_per_m"])
+                        if curve_kfit.get("k_contact") is not None:
+                            curve_group.attrs["k_contact"] = float(curve_kfit["k_contact"])
+                        if curve_kfit.get("youngs_modulus_pa") is not None:
+                            curve_group.attrs["youngs_modulus"] = float(curve_kfit["youngs_modulus_pa"])
+
+                exported_curve_names.add(curve_group_name)
+
+            # ---- Dataset-level metadata block (root group attrs), written once ----
+            # Mirrors the CSV exporter's single dataset-level metadata block: the
+            # experiment-wide fields (file_id/date/spring_constant/tip_geometry/
+            # tip_radius/velocity) plus the averaged K_raw/K_contact/E across the
+            # exported curves, so they're visible immediately on opening the file
+            # instead of only being duplicated inside each curve's tip group.
+            for key, value in (metadata or {}).items():
+                if value is not None:
+                    f.attrs[key] = value
+            if dataset_stats:
+                for key, value in dataset_stats.items():
+                    if value:
+                        f.attrs[key] = value
+
+            num_exported = len(exported_curve_names)
 
         logger.info(f"Exported {num_exported} curves from DuckDB to HDF5 file at {output_path}")
         return num_exported

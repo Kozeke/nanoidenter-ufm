@@ -202,6 +202,12 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     tip_radius: (parseFloat(metadataObject.sample_row?.tip_radius) || 0) * METERS_TO_MILLIMETERS,
     // Stored in meters/second (SI); convert to µm/s for display/editing.
     velocity: (parseFloat(metadataObject.sample_row?.velocity ?? datasetLevelMetadata.velocity) || 1e-6) * METERS_TO_MICROMETERS,
+    // Stores tip angle in degrees so CSV and HDF5 exports can share the same literal metadata value.
+    tip_angle: String(metadataObject.sample_row?.tip_angle ?? datasetLevelMetadata.tip_angle ?? ''),
+    // Stores force conversion coefficient verbatim so both CSV and HDF5 receive the same field/value.
+    force_scale_to_n: String(
+      metadataObject.sample_row?.force_scale_to_n ?? datasetLevelMetadata.force_scale_to_n ?? ''
+    ),
   });
 
   // Derived values
@@ -253,6 +259,12 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         tip_radius: (parseFloat(metadataObject.sample_row?.tip_radius) || 0) * METERS_TO_MILLIMETERS,
         // Stored in meters/second (SI); convert to µm/s for display/editing.
         velocity: (parseFloat(metadataObject.sample_row?.velocity ?? datasetLevelMetadata.velocity) || 1e-6) * METERS_TO_MICROMETERS,
+        // Keeps the tip-angle field available in CSV metadata payloads.
+        tip_angle: String(metadataObject.sample_row?.tip_angle ?? datasetLevelMetadata.tip_angle ?? ''),
+        // Keeps force conversion coefficient aligned across CSV and HDF5 metadata payloads.
+        force_scale_to_n: String(
+          metadataObject.sample_row?.force_scale_to_n ?? datasetLevelMetadata.force_scale_to_n ?? ''
+        ),
       });
     } else {
       setEditableSoftMechMetadata({
@@ -264,6 +276,10 @@ export const useExportDialog = (experimentDataOrFn = null) => {
         tip_radius: parseFloat(initialMetadata.tip_radius) || 0,
         // initialMetadata.velocity is already converted to µm/s above; reuse it as-is.
         velocity: parseFloat(initialMetadata.velocity) || 1,
+        // initialMetadata.tip_angle is already normalized above; reuse it as-is.
+        tip_angle: String(initialMetadata.tip_angle ?? ''),
+        // initialMetadata.force_scale_to_n is already normalized above; reuse it as-is.
+        force_scale_to_n: String(initialMetadata.force_scale_to_n ?? ''),
       });
     }
   }, [metadataObject.sample_row, initialMetadata, datasetLevelMetadata]);
@@ -409,8 +425,8 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     // 0 is a valid sentinel (unknown tip angle); do not enforce min > 0.
     tip_angle: { required: false, label: 'Tip Angle (deg)', type: 'number' },
     sensor_type: { required: false, label: 'Sensor Type', type: 'text' },
-    // Stored/exported as-is in N/mm, matching the dataset-editing modal (no SI conversion).
-    force_scale_to_n: { required: false, label: 'Force conversion coefficient (N/mm)', type: 'number' },
+    // Stored/exported as-is in mN/V, matching the dataset-editing modal (no SI conversion).
+    force_scale_to_n: { required: false, label: 'Force conversion coefficient (mN/V)', type: 'number' },
     // Stored in m/s (SI); displayed/edited in µm/s, so this gets converted back on submit.
     velocity: { required: false, label: 'Velocity (µm/s)', type: 'number', min: 0, storageScale: METERS_TO_MICROMETERS },
   };
@@ -592,6 +608,10 @@ export const useExportDialog = (experimentDataOrFn = null) => {
             velocity: Number.isFinite(+editableSoftMechMetadata.velocity) && +editableSoftMechMetadata.velocity > 0
               ? +editableSoftMechMetadata.velocity
               : 1,
+            // Preserves user-provided tip angle when calculated metadata response does not include it.
+            tip_angle: String(editableSoftMechMetadata.tip_angle ?? ''),
+            // Preserves user-provided force conversion coefficient for CSV parity with HDF5 metadata.
+            force_scale_to_n: String(editableSoftMechMetadata.force_scale_to_n ?? ''),
           };
           setEditableSoftMechMetadata(newEditableMetadata);
         }
@@ -759,18 +779,20 @@ export const useExportDialog = (experimentDataOrFn = null) => {
             k_raw_formatted: stiffnessResults.kRaw?.value ?? null,
             k_contact_formatted: stiffnessResults.kContact?.value ?? null,
             stiffness_youngs_modulus_formatted: stiffnessResults.youngsModulus?.value ?? null,
+            // Per-curve K_raw / K_contact / E rows (one entry per curve_id), written
+            // by the CSV exporter on top of each curve's own data block in raw
+            // exports — the top-of-file values above stay the mean ± std average.
+            kfit_by_curve: stiffnessResults.byCurve,
           }),
           // Only include metadata for non-CSV exports (HDF5, JSON, TXT, etc.)
           ...(selectedFormat !== 'csv') && {
             metadata: {
               ...Object.fromEntries(
-                Object.entries(metadata).map(([key, value]) => {
-                  const rule = metadataValidationRules[key];
-                  if (rule?.type !== 'number') return [key, value];
-                  const numeric = parseFloat(value) || 0;
-                  // Converts display units (e.g. µm/s) back to the SI value exporters expect.
-                  return [key, rule.storageScale ? numeric / rule.storageScale : numeric];
-                })
+                // Keeps non-CSV metadata literal (no unit conversion) so HDF5 values match CSV exports.
+                // Excludes force_scale_to_n from non-CSV exports per export requirements.
+                Object.entries(metadata)
+                  .filter(([key]) => key !== 'force_scale_to_n')
+                  .map(([key, value]) => [key, value])
               ),
               // K_raw / K_contact / E from the LinearWindowFit regular filter, written as
               // attributes on every curve's "tip" group by the HDF5 exporter (same mechanism
@@ -907,8 +929,8 @@ export const useExportDialog = (experimentDataOrFn = null) => {
 
   // Surfaces the K_raw / K_contact / Young's modulus values computed by the LinearWindowFit
   // regular filter (see linear_window_fit_filter.py) so the export dialog can display them
-  // as read-only fields. modelStats.stiffness is only populated while that filter is active
-  // and at least 2 curves produced a valid fit, so each lookup safely falls back to empty.
+  // as read-only fields. modelStats.stiffness is populated while that filter is active and
+  // at least one chosen curve produced a valid fit (mean±std over the selected curve ids).
   const stiffnessResults = useMemo(() => {
     const list = modelStats?.stiffness || [];
     const find = (key) => list.find((item) => item?.key === key);
@@ -916,6 +938,7 @@ export const useExportDialog = (experimentDataOrFn = null) => {
       kRaw: find('k_raw'),
       kContact: find('k_contact'),
       youngsModulus: find('youngs_modulus'),
+      byCurve: modelStats?.stiffnessByCurve || [],
     };
   }, [modelStats]);
 
@@ -1029,4 +1052,3 @@ export const useExportDialog = (experimentDataOrFn = null) => {
     fetchCalculatedMetadata,
   };
 };
-

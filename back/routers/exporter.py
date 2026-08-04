@@ -185,6 +185,10 @@ async def export_endpoint(extension: str, data: Dict[str, Any], user=Depends(get
             "k_raw_formatted": data.get("k_raw_formatted"),
             "k_contact_formatted": data.get("k_contact_formatted"),
             "stiffness_youngs_modulus_formatted": data.get("stiffness_youngs_modulus_formatted"),
+            # Per-curve K_raw / K_contact / E rows (one dict per curve_id) used by the
+            # CSV exporter's raw export to write each curve's own values on top of its
+            # data block, alongside the dataset-level average written above.
+            "kfit_by_curve": data.get("kfit_by_curve") or [],
         }
         
         num_exported = exporter.export(

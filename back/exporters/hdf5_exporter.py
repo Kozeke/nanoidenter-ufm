@@ -41,6 +41,18 @@ class HDF5Exporter(Exporter):
             dataset_path=kwargs.get("dataset_path"),
             level_names=kwargs.get("level_names"),
             metadata_path=kwargs.get("metadata_path"),
-            metadata=kwargs.get("metadata")
+            metadata=kwargs.get("metadata"),
+            # Per-curve K_raw/K_contact/E (see LinearWindowFit filter), written as
+            # attrs on each curve's own group.
+            kfit_by_curve=kwargs.get("kfit_by_curve"),
+            # Dataset-level (mean ± std) K_raw/K_contact/E, written once as attrs
+            # on the file's root group — same values used by the CSV exporter's
+            # top-of-file block.
+            dataset_stats={
+                "k_raw": kwargs.get("k_raw_formatted"),
+                "k_contact": kwargs.get("k_contact_formatted"),
+                "youngs_modulus_linfit": kwargs.get("stiffness_youngs_modulus_formatted"),
+                "youngs_modulus": kwargs.get("youngs_modulus_formatted"),
+            },
         )
         return num_exported
