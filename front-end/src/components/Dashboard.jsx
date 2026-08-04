@@ -297,14 +297,29 @@ const Dashboard = () => {
   const hasSingleCurve = Boolean(selectedCurveId && String(selectedCurveId).trim() !== "");
   const isSingleCurveMode = hasSingleCurve;
 
-  // Handler to set curve ID and optionally sync visual selection
+  // Handler to set curve ID and keep Display/Export selection in sync.
+  // The Curve ID input accepts bare numbers ("2") while the picker uses
+  // "curve2" labels; without normalizing here, compute_stats keeps sending
+  // the previous selectedCurveIds (e.g. ["curve1"]) while get_metadata
+  // correctly sends the new curve_id.
   const handleSetCurveId = (curveId) => {
     setSelectedCurveId(curveId);
 
-    // If this curve exists in the loaded data, auto-select it visually
-    if (curveId && forceData.some(c => c.curve_id === curveId)) {
-      setSelectedCurveIds([curveId]);
+    // Normalizes "2" / "curve2" into the picker label form used by selectedCurveIds.
+    const trimmed = String(curveId ?? "").trim();
+    if (!trimmed) return;
+    // Builds the canonical "curve{N}" label expected by the multi-select and compute_stats.
+    let curveLabel = null;
+    if (/^curve\d+$/i.test(trimmed)) {
+      curveLabel = `curve${trimmed.slice(5)}`;
+    } else if (/^\d+$/.test(trimmed)) {
+      curveLabel = `curve${trimmed}`;
     }
+    if (!curveLabel) return;
+
+    // Always sync Display selection to the Curve ID field so compute_stats
+    // reads the same curve the user just typed (zustand updates are sync).
+    setSelectedCurveIds([curveLabel]);
   };
 
   useEffect(() => {

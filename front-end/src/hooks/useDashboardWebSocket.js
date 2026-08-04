@@ -411,9 +411,26 @@ export const useDashboardWebSocket = () => {
     console.log("sendModelStatsRequest - datasetId from store:", liveDatasetId);
     // Real curve IDs only ("curve0", "curve12", …) — skip synthetic overlays
     // like "0_linfit" / "avg_linfit" that LinearWindowFit adds for display.
-    const chosenCurveIds = (liveState.selectedCurveIds || []).filter((id) =>
-      /^curve\d+$/.test(String(id))
-    );
+    // When the Curve ID field is set (single-curve mode), prefer that value over
+    // selectedCurveIds so compute_stats cannot keep a stale multi-select list
+    // (e.g. ["curve1"]) while get_metadata already sent the updated curve_id.
+    const liveSelectedCurveId = String(liveState.selectedCurveId ?? "").trim();
+    // Normalizes bare "2" / "curve2" into the "curve{N}" form compute_stats expects.
+    const singleCurveLabel = (() => {
+      if (!liveSelectedCurveId) return null;
+      if (/^curve\d+$/i.test(liveSelectedCurveId)) {
+        return `curve${liveSelectedCurveId.slice(5)}`;
+      }
+      if (/^\d+$/.test(liveSelectedCurveId)) {
+        return `curve${liveSelectedCurveId}`;
+      }
+      return null;
+    })();
+    const chosenCurveIds = singleCurveLabel
+      ? [singleCurveLabel]
+      : (liveState.selectedCurveIds || []).filter((id) =>
+          /^curve\d+$/.test(String(id))
+        );
     const requestData = {
       action: "compute_stats",
       compute_scope: "model_stats",
@@ -432,7 +449,7 @@ export const useDashboardWebSocket = () => {
       force_model_params: liveState.forceModelParams,
       set_zero_force: liveState.setZeroForce,
       // Scopes K_raw / K_contact / E (and other model_stats) to the curves the
-      // user currently has chosen in the curve picker — one or many.
+      // user currently has chosen — Curve ID field when set, else multi-select.
       curve_ids: chosenCurveIds,
     };
   
