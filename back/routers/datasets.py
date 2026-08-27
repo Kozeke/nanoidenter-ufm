@@ -26,7 +26,7 @@ class UpdateDatasetMetadataRequest(BaseModel):
     tip_angle: Optional[float] = None
     # Stores optional approach velocity in m/s (UI displays µm/s).
     velocity: Optional[float] = None
-    # Stores optional force calibration factor (N/mm in barytech exports).
+    # Stores optional force calibration factor (mN/V in barytech exports).
     force_scale_to_n: Optional[float] = None
     # Stores optional Z unit scale factor applied at ingestion.
     z_scale_to_m: Optional[float] = None

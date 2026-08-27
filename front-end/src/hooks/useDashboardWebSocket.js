@@ -19,6 +19,23 @@ const formatMeanStd = (mean, std, unit) => {
   return `${mean.toFixed(decimals)} ± ${std.toFixed(decimals)} ${unit}`;
 };
 
+// Merges streamed curve batches by curve_id so a later batch replaces an earlier
+// one instead of appending a second row with the same id (which made Select
+// Curves show curve0 twice and uncheck both copies together).
+const mergeByCurveId = (prevList, incomingList) => {
+  if (!Array.isArray(incomingList) || incomingList.length === 0) {
+    return Array.isArray(prevList) ? prevList : [];
+  }
+  const byId = new Map();
+  for (const item of prevList || []) {
+    if (item?.curve_id != null) byId.set(String(item.curve_id), item);
+  }
+  for (const item of incomingList) {
+    if (item?.curve_id != null) byId.set(String(item.curve_id), item);
+  }
+  return Array.from(byId.values());
+};
+
 // Exposes dashboard curve data and WebSocket helpers to the presentation layer.
 export const useDashboardWebSocket = () => {
   // Stores Force–Z curve batches received from the backend.
@@ -167,9 +184,16 @@ export const useDashboardWebSocket = () => {
   // visibility is derived from the real curve they annotate (see
   // ForceDisplacementDataSet.jsx).
   const syncCurveSelectionsOnLoadComplete = useCallback(() => {
-    const finalCurveIds = forceDataRef.current
-      .map((c) => c.curve_id)
-      .filter((id) => /^curve\d+$/.test(String(id)));
+    // Unique in arrival order so leftover duplicate rows from a previous load
+    // cannot leak into selectedCurveIds (MUI then treats both copies as one value).
+    const seenCurveIds = new Set();
+    const finalCurveIds = [];
+    for (const curve of forceDataRef.current) {
+      const id = curve?.curve_id;
+      if (!/^curve\d+$/.test(String(id)) || seenCurveIds.has(id)) continue;
+      seenCurveIds.add(id);
+      finalCurveIds.push(id);
+    }
 
     if (finalCurveIds.length === 0) {
       // Nothing loaded (empty/failed batch) — leave the selections untouched
@@ -273,39 +297,7 @@ export const useDashboardWebSocket = () => {
     // Stores force-model filters after websocket sanitation (e.g., Hertz tip_radius removal).
     const socketSafeForceModels = buildSocketForceModels(liveForceModels);
 
-    // Compares previous and current filter snapshots for change detection.
-    const areFiltersEqual = (prev, current) => {
-      if (!prev || !current) {
-        return false;
-      }
-      return JSON.stringify(prev) === JSON.stringify(current);
-    };
-
-    // Determines if any filter group has changed since the last request.
-    const filtersChanged = !areFiltersEqual(
-      {
-        regular: prevFiltersRef.current.regular,
-        cp: prevFiltersRef.current.cp,
-        f_models: prevFiltersRef.current.f_models,
-        e_models: prevFiltersRef.current.e_models,
-      },
-      {
-        regular: liveRegularFilters,
-        cp: liveCpFilters,
-        f_models: socketSafeForceModels,
-        e_models: liveElasticityModels,
-      }
-    );
-
-    // Determines whether the requested curve range changed.
-    const numCurvesChanged =
-      prevCurveRangeRef.current.from !== liveCurveFrom ||
-      prevCurveRangeRef.current.to !== liveCurveTo;
-
-    // Determines whether the selected segment changed.
-    const segmentTypeChanged = prevSegmentTypeRef.current !== liveSegmentType;
-
-    if (segmentTypeChanged) {
+    if (prevSegmentTypeRef.current !== liveSegmentType) {
       console.log(
         `Segment changed: ${prevSegmentTypeRef.current} -> ${liveSegmentType}`
       );
@@ -319,20 +311,18 @@ export const useDashboardWebSocket = () => {
       yMax: null,
     };
 
-    // forceRequestRef.current is always up-to-date even inside a stale closure,
-    // unlike forceRequest state which may be stale when called from socket.onopen.
-    const shouldReset = filtersChanged || numCurvesChanged || segmentTypeChanged || forceRequest || forceRequestRef.current;
-    if (shouldReset) {
-      // Clear the ref immediately so subsequent calls don't re-clear unnecessarily.
-      forceRequestRef.current = false;
-      setForceData([]);
-      forceDataRef.current = [];
-      setIndentationData({ curves_cp: [], curves_fparam: [] });
-      setElspectraData({ curves: [], curves_elasticity_param: [] });
-      setDomainRange(resetState);
-      setIndentationDomain(resetState);
-      setElspectraDomain(resetState);
-    }
+    // Always replace the previous load. get_metadata streams a complete curve
+    // set in batches; appending those onto leftover data from the last
+    // "Update Curves" click duplicated curve0/curve1 in Select Curves, and
+    // because duplicates share an id, unchecking one unchecks both.
+    forceRequestRef.current = false;
+    setForceData([]);
+    forceDataRef.current = [];
+    setIndentationData({ curves_cp: [], curves_fparam: [] });
+    setElspectraData({ curves: [], curves_elasticity_param: [] });
+    setDomainRange(resetState);
+    setIndentationDomain(resetState);
+    setElspectraDomain(resetState);
 
     // Builds the payload describing which curves and metadata to retrieve.
     console.log("sendCurveRequest - datasetId from store:", liveDatasetId);
@@ -370,7 +360,6 @@ export const useDashboardWebSocket = () => {
 
     socketRef.current.send(JSON.stringify(requestData));
   }, [
-    forceRequest,
     setLoadingMulti,
     setIsLoadingCurves,
     buildSocketForceModels,
@@ -543,7 +532,7 @@ export const useDashboardWebSocket = () => {
         setForceData((prevData) => {
           const next = graphForcevsZSingle?.curves?.length > 0
             ? (forceGraph.curves || [])
-            : [...prevData, ...(forceGraph.curves || [])];
+            : mergeByCurveId(prevData, forceGraph.curves || []);
           forceDataRef.current = next;
           return next;
         });
@@ -562,11 +551,11 @@ export const useDashboardWebSocket = () => {
             return { curves_cp: [], curves_fparam: [] };
           }
           return {
-            curves_cp: [...(prevData.curves_cp || []), ...(newCurves.curves_cp || [])],
-            curves_fparam: [
-              ...(prevData.curves_fparam || []),
-              ...(newCurves.curves_fparam || []),
-            ],
+            curves_cp: mergeByCurveId(prevData.curves_cp, newCurves.curves_cp),
+            curves_fparam: mergeByCurveId(
+              prevData.curves_fparam,
+              newCurves.curves_fparam
+            ),
           };
         });
 
@@ -594,11 +583,11 @@ export const useDashboardWebSocket = () => {
             return { curves: [], curves_elasticity_param: [] };
           }
           return {
-            curves: [...(prevData.curves || []), ...newCurves],
-            curves_elasticity_param: [
-              ...(prevData.curves_elasticity_param || []),
-              ...newElasticityParams,
-            ],
+            curves: mergeByCurveId(prevData.curves, newCurves),
+            curves_elasticity_param: mergeByCurveId(
+              prevData.curves_elasticity_param,
+              newElasticityParams
+            ),
           };
         });
 

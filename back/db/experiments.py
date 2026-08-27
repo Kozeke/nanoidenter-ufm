@@ -18,9 +18,11 @@ def create_experiment(
     # Optional free-text description provided by the user at save time
     description: Optional[str] = None,
 ):
+    # Shared DuckDB connection used for the insert and id return
     conn = get_conn()
 
-    conn.execute(
+    # Inserts a new experiment row and returns its primary key via RETURNING
+    row = conn.execute(
         """
         INSERT INTO experiments (
             user_id,
@@ -46,6 +48,7 @@ def create_experiment(
             stiffness_youngs_modulus_std
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        RETURNING id
         """,
         (
             user_id,
@@ -73,7 +76,94 @@ def create_experiment(
             results.get("stiffness_youngs_modulus_mean"),
             results.get("stiffness_youngs_modulus_std"),
         ),
+    ).fetchone()
+
+    # Newly created experiment primary key for the client to track updates
+    return row[0] if row else None
+
+
+def update_experiment(
+    exp_id: int,
+    user_id: int,
+    name: str,
+    curve_id: str,
+    spring_constant: float,
+    tip_radius: float,
+    tip_geometry: str,
+    filters: dict,
+    elasticity_params: dict,
+    force_model_params: dict,
+    results: dict,
+    dataset_id: Optional[int] = None,
+    # Optional free-text description provided by the user at save time
+    description: Optional[str] = None,
+) -> bool:
+    """
+    Update an existing experiment owned by the user.
+    Returns True if a row was updated, False if not found.
+    """
+    # Shared DuckDB connection used for the ownership check and update
+    conn = get_conn()
+
+    # Verifies the experiment exists and belongs to this user before writing
+    existing = get_experiment(exp_id, user_id)
+    if not existing:
+        return False
+
+    # Overwrites analysis state and results on the opened experiment row
+    conn.execute(
+        """
+        UPDATE experiments SET
+            name = ?,
+            description = ?,
+            dataset_id = ?,
+            spring_constant = ?,
+            curve_id = ?,
+            tip_radius = ?,
+            tip_geometry = ?,
+            filters_json = ?,
+            elasticity_params_json = ?,
+            force_model_params_json = ?,
+            f_model = ?,
+            e_model = ?,
+            youngs_modulus_mean = ?,
+            youngs_modulus_std = ?,
+            k_raw_mean = ?,
+            k_raw_std = ?,
+            k_contact_mean = ?,
+            k_contact_std = ?,
+            stiffness_youngs_modulus_mean = ?,
+            stiffness_youngs_modulus_std = ?
+        WHERE id = ? AND user_id = ?
+        """,
+        (
+            name,
+            description,
+            dataset_id,
+            spring_constant,
+            curve_id,
+            tip_radius,
+            tip_geometry,
+            json.dumps(filters),
+            json.dumps(elasticity_params),
+            json.dumps(force_model_params),
+            next(iter(filters.get("f_models", {})), None),
+            next(iter(filters.get("e_models", {})), None),
+            results.get("youngs_modulus_mean"),
+            results.get("youngs_modulus_std"),
+            # K_raw, K_contact, and E from LinearWindowFit (see linear_window_fit_filter.py)
+            results.get("k_raw_mean"),
+            results.get("k_raw_std"),
+            results.get("k_contact_mean"),
+            results.get("k_contact_std"),
+            results.get("stiffness_youngs_modulus_mean"),
+            results.get("stiffness_youngs_modulus_std"),
+            exp_id,
+            user_id,
+        ),
     )
+
+    return True
 
 
 def list_experiments(user_id: int) -> List[dict]:

@@ -10,9 +10,11 @@ import {
 } from "@mui/material";
 // Regular curves are always named "curve{id}" (e.g. "curve0"); filters like
 // LinearWindowFit/Hertz add synthetic diagnostic overlay entries to the same curve
-// list for on-screen display (e.g. "0_linfit", "avg_linfit", "0_hertz"). Those aren't
-// real curves in the database, so the backend export endpoint rejects them — this
-// guard keeps them selectable for Display (visualization) but not for Export.
+// list (e.g. "0_linfit", "avg_linfit", "0_hertz"). Those aren't real curves in the
+// database, so the backend export endpoint rejects them, and their on-screen
+// visibility now simply follows the real curve they annotate (see
+// ForceDisplacementDataSet.jsx) — so they're excluded from this picker entirely
+// rather than shown as their own (non-functional) Display/Export checkboxes.
 const isExportableCurveId = (id) => /^curve\d+$/.test(String(id));
 
 const CurveControlsComponent = ({
@@ -63,7 +65,16 @@ const CurveControlsComponent = ({
   // Subset of forceData that are real, exportable curves (excludes synthetic
   // diagnostic overlay entries like "0_linfit"/"avg_linfit") — used to drive the
   // "Export All" checkbox so it never selects an id the backend will reject.
-  const exportableForceData = forceData.filter((c) => isExportableCurveId(c.curve_id));
+  // Deduped by curve_id so a leftover duplicate row cannot render as two
+  // "curve0" options that uncheck together.
+  const seenExportableIds = new Set();
+  const exportableForceData = forceData.filter((c) => {
+    if (!isExportableCurveId(c.curve_id) || seenExportableIds.has(c.curve_id)) {
+      return false;
+    }
+    seenExportableIds.add(c.curve_id);
+    return true;
+  });
 
   useEffect(() => { setCurveIdInput(curveId ?? ""); }, [curveId]);
   useEffect(() => { setCurveFromInput(String(curveFrom ?? 0)); }, [curveFrom]);
@@ -246,8 +257,10 @@ const CurveControlsComponent = ({
 
   const handleSelectChange = useCallback((event) => {
     const value = event.target.value;
-    setSelectedCurveIds(value);
-    console.log("Selected curves for display:", value);
+    // MUI Select can echo a duplicated value array if leftover rows share an id.
+    const uniqueValue = Array.isArray(value) ? [...new Set(value)] : value;
+    setSelectedCurveIds(uniqueValue);
+    console.log("Selected curves for display:", uniqueValue);
   }, [setSelectedCurveIds]);
   const handleExportChange = useCallback(
   (curveId) => (event) => {
@@ -290,10 +303,10 @@ setSelectedCurveIds((prev) => {
         <Select
           labelId="curve-select-label"
           multiple
-          value={selectedCurveIds}
+          value={[...new Set(selectedCurveIds)]}
           onChange={handleSelectChange}
           renderValue={(selected) =>
-            selected.length === 0 ? "All Curves" : selected.join(", ")
+            selected.length === 0 ? "All Curves" : [...new Set(selected)].join(", ")
           }
           style={selectStyle}
         >
@@ -310,12 +323,12 @@ setSelectedCurveIds((prev) => {
               <Box width="56px" textAlign="center">
                 <Checkbox
                   checked={
-                    forceData.length > 0 &&
-                    forceData.every((c) => selectedCurveIds.includes(c.curve_id))
+                    exportableForceData.length > 0 &&
+                    exportableForceData.every((c) => selectedCurveIds.includes(c.curve_id))
                   }
                   onChange={(event) => {
                     event.stopPropagation();
-                    const allIds = forceData.map((c) => c.curve_id);
+                    const allIds = exportableForceData.map((c) => c.curve_id);
                     if (event.target.checked) {
                       setSelectedCurveIds(allIds);
                       onExportCurveIdsChange(allIds);
@@ -361,7 +374,7 @@ setSelectedCurveIds((prev) => {
             </Box>
           </MenuItem>
 
-          {forceData.map((curve) => {
+          {exportableForceData.map((curve) => {
             const exportable = isExportableCurveId(curve.curve_id);
             return (
               <MenuItem key={curve.curve_id} value={curve.curve_id} style={menuItemStyle}>
@@ -473,4 +486,3 @@ setSelectedCurveIds((prev) => {
 };
 
 export default React.memo(CurveControlsComponent);
-

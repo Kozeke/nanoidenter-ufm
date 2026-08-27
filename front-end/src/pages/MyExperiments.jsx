@@ -75,6 +75,10 @@ export default function MyExperiments() {
     dashboard.setForceModelParams(data.force_model_params ?? {});
     dashboard.setSelectedCurveId(data.curve_id ?? null);
     dashboard.setSelectedCurveIds([]);
+    // Remember which experiment was opened so Save updates it instead of creating
+    dashboard.setExperimentId(data.id ?? exp.id);
+    dashboard.setExperimentName(data.name ?? exp.name ?? null);
+    dashboard.setExperimentDescription(data.description ?? exp.description ?? null);
     // Update dataset_id and filename from the experiment's saved data
     // This ensures each experiment shows its own dataset name, not the current one
     if (data.dataset_id) {

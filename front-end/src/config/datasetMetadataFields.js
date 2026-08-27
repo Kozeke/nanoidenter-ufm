@@ -17,7 +17,7 @@ export const DATASET_METADATA_FIELDS = [
   },
   {
     key: "force_scale_to_n",
-    label: "Force conversion coefficient (N/mm)",
+    label: "Force conversion coefficient (mN/V)",
     inputType: "number",
   },
   {

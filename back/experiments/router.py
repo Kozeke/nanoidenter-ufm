@@ -5,6 +5,7 @@ from typing import Dict, Optional
 from auth.dependencies import get_current_user
 from db.experiments import (
     create_experiment,
+    update_experiment,
     list_experiments,
     get_experiment,
     delete_experiment,
@@ -26,28 +27,38 @@ class SaveExperimentRequest(BaseModel):
     dataset_id: Optional[int] = None
 
 
+def _curve_metadata_from_request(data: SaveExperimentRequest) -> dict:
+    # Pulls tip/spring fields from the metadata sample row sent by the dashboard
+    sample = data.metadata.get("sample_row", {})
+    return {
+        "spring_constant": sample.get("spring_constant"),
+        "tip_radius": sample.get("tip_radius"),
+        "tip_geometry": sample.get("tip_geometry"),
+    }
+
+
+def _status_from_results(results: Dict) -> tuple:
+    # Treats any non-empty result value as a finished analysis run
+    has_results = bool(results) and any(
+        value is not None and value != ""
+        for value in results.values()
+    )
+    status_code = "success" if has_results else "pending"
+    return has_results, status_code
+
+
 @router.post("")
 def save_experiment(
     data: SaveExperimentRequest,
     user=Depends(get_current_user),
 ):
-    sample = data.metadata.get("sample_row", {})
-    curve_metadata = {
-        "spring_constant": sample.get("spring_constant"),
-        "tip_radius": sample.get("tip_radius"),
-        "tip_geometry": sample.get("tip_geometry"),
-    }
-    
-    # Check if experiment has results (finished)
-    has_results = bool(data.results) and any(
-        value is not None and value != "" 
-        for value in data.results.values()
-    )
-    
-    # Determine status code based on whether results exist
-    status_code = "success" if has_results else "pending"
-    
-    create_experiment(
+    # Tip geometry and spring constant extracted from dashboard metadata
+    curve_metadata = _curve_metadata_from_request(data)
+    # Whether results exist and the status label to return to the client
+    has_results, status_code = _status_from_results(data.results)
+
+    # Newly inserted experiment primary key so the client can update later
+    experiment_id = create_experiment(
         user_id=user["id"],
         name=data.name,
         description=data.description,
@@ -64,9 +75,53 @@ def save_experiment(
 
     message = "Experiment saved successfully" if has_results else "Experiment saved (pending results)"
     return {
-        "status": "ok", 
+        "status": "ok",
         "status_code": status_code,
-        "message": message
+        "message": message,
+        "id": experiment_id,
+    }
+
+
+@router.put("/{experiment_id}")
+def update_experiment_endpoint(
+    experiment_id: int,
+    data: SaveExperimentRequest,
+    user=Depends(get_current_user),
+):
+    # Tip geometry and spring constant extracted from dashboard metadata
+    curve_metadata = _curve_metadata_from_request(data)
+    # Whether results exist and the status label to return to the client
+    has_results, status_code = _status_from_results(data.results)
+
+    # Overwrites the opened experiment when the id belongs to this user
+    updated = update_experiment(
+        exp_id=experiment_id,
+        user_id=user["id"],
+        name=data.name,
+        description=data.description,
+        spring_constant=curve_metadata["spring_constant"],
+        curve_id=data.curve_id,
+        tip_radius=curve_metadata["tip_radius"],
+        tip_geometry=curve_metadata["tip_geometry"],
+        filters=data.filters,
+        elasticity_params=data.elasticity_params,
+        force_model_params=data.force_model_params,
+        results=data.results,
+        dataset_id=data.dataset_id,
+    )
+    if not updated:
+        raise HTTPException(404, "Experiment not found")
+
+    message = (
+        "Experiment updated successfully"
+        if has_results
+        else "Experiment updated (pending results)"
+    )
+    return {
+        "status": "ok",
+        "status_code": status_code,
+        "message": message,
+        "id": experiment_id,
     }
 
 

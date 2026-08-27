@@ -32,6 +32,25 @@ export async function saveExperiment(token, payload) {
   return res.json();
 }
 
+// Updates an existing experiment opened from the My Experiments table.
+export async function updateExperiment(token, id, payload) {
+  const res = await fetchWithAuth(`${API}/experiments/${id}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!res.ok) {
+    // Prefer backend detail message when available for clearer UI errors
+    const error = await res.json().catch(() => ({ detail: "Failed to update experiment" }));
+    throw new Error(error.detail || "Failed to update experiment");
+  }
+  return res.json();
+}
+
 export async function deleteExperiment(token, id) {
   const res = await fetchWithAuth(`${API}/experiments/${id}`, {
     method: "DELETE",

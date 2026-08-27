@@ -2,10 +2,12 @@
 // Replaces the previous direct-save + window.alert flow.
 // The modal is rendered via a React Portal into document.body so that parent
 // transforms (e.g. pressable translateY) cannot break position:fixed centering.
+// When an experiment was opened from My Experiments, Save updates that row
+// instead of creating a new experiment.
 
 import { useState } from "react";
 import { createPortal } from "react-dom";
-import { saveExperiment } from "../api/experiments";
+import { saveExperiment, updateExperiment } from "../api/experiments";
 import { useDashboardStore } from "../state/useDashboardStore";
 import { useAuthStore } from "../state/useAuthStore";
 import { useMetadata } from "./Dashboard";
@@ -19,6 +21,9 @@ export default function SaveExperimentButton() {
   const { metadataObject } = useMetadata();
   const dashboard = useDashboardStore();
   const token = useAuthStore((s) => s.token);
+
+  // True when Save should update an experiment opened from My Experiments
+  const isUpdating = Boolean(dashboard.experimentId);
 
   const handleButtonClick = () => {
     // Guard: metadata must be loaded before saving
@@ -35,7 +40,7 @@ export default function SaveExperimentButton() {
         onClick={handleButtonClick}
         style={buttonStyle}
       >
-        Save Experiment
+        {isUpdating ? "Update Experiment" : "Save Experiment"}
       </button>
 
       {/* Portal ensures the overlay escapes any transformed ancestor */}
@@ -56,11 +61,18 @@ export default function SaveExperimentButton() {
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
 function SaveExperimentModal({ metadataObject, dashboard, token, onClose }) {
-  // Experiment title entered by the user (pre-filled with a generated default)
-  const [name, setName] = useState(generateDefaultName());
+  // True when an opened experiment id is present and Save should PUT instead of POST
+  const isUpdating = Boolean(dashboard.experimentId);
 
-  // Optional free-text description entered by the user
-  const [description, setDescription] = useState("");
+  // Experiment title entered by the user (pre-filled from opened experiment or default)
+  const [name, setName] = useState(
+    dashboard.experimentName || generateDefaultName()
+  );
+
+  // Optional free-text description entered by the user (pre-filled when updating)
+  const [description, setDescription] = useState(
+    dashboard.experimentDescription || ""
+  );
 
   // Tracks whether the API call is in-flight
   const [loading, setLoading] = useState(false);
@@ -92,9 +104,12 @@ function SaveExperimentModal({ metadataObject, dashboard, token, onClose }) {
       const kContactStat = stiffnessStats.find((item) => item?.key === "k_contact");
       const stiffnessYoungsModulusStat = stiffnessStats.find((item) => item?.key === "youngs_modulus");
 
-      const apiResult = await saveExperiment(token, {
-        name: name.trim() || generateDefaultName(),
-        description: description.trim() || null,
+      // Payload shared by create and update experiment endpoints
+      const resolvedName = name.trim() || generateDefaultName();
+      const resolvedDescription = description.trim() || null;
+      const payload = {
+        name: resolvedName,
+        description: resolvedDescription,
         metadata: metadataObject,
         filters: dashboard.filters,
         elasticity_params: dashboard.elasticityParams,
@@ -111,12 +126,28 @@ function SaveExperimentModal({ metadataObject, dashboard, token, onClose }) {
           stiffness_youngs_modulus_mean: stiffnessYoungsModulusStat?.mean,
           stiffness_youngs_modulus_std: stiffnessYoungsModulusStat?.std,
         },
-      });
+      };
+
+      // Updates the opened experiment when present; otherwise creates a new row
+      const apiResult = isUpdating
+        ? await updateExperiment(token, dashboard.experimentId, payload)
+        : await saveExperiment(token, payload);
+
+      // Keep store identity in sync so further saves continue to update this experiment
+      const savedId = apiResult.id ?? dashboard.experimentId;
+      if (savedId != null) {
+        dashboard.setExperimentId(savedId);
+      }
+      dashboard.setExperimentName(resolvedName);
+      dashboard.setExperimentDescription(resolvedDescription);
 
       // Store the status + message from the backend to show inside the modal
       const statusCode = apiResult.status_code || apiResult.status || "ok";
       const statusMessage =
-        apiResult.message || "Experiment saved successfully";
+        apiResult.message ||
+        (isUpdating
+          ? "Experiment updated successfully"
+          : "Experiment saved successfully");
       setResult({ statusCode, statusMessage });
     } catch (err) {
       setErrorMsg(err.message || "Failed to save experiment");
@@ -136,7 +167,9 @@ function SaveExperimentModal({ metadataObject, dashboard, token, onClose }) {
       <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
         {/* ── Header ── */}
         <div style={headerStyle}>
-          <h2 style={modalTitleStyle}>Save Experiment</h2>
+          <h2 style={modalTitleStyle}>
+            {isUpdating ? "Update Experiment" : "Save Experiment"}
+          </h2>
           <button
             style={closeBtnStyle}
             onClick={onClose}
@@ -232,7 +265,13 @@ function SaveExperimentModal({ metadataObject, dashboard, token, onClose }) {
               onClick={handleSave}
               disabled={loading}
             >
-              {loading ? "Saving…" : "Save"}
+              {loading
+                ? isUpdating
+                  ? "Updating…"
+                  : "Saving…"
+                : isUpdating
+                  ? "Update"
+                  : "Save"}
             </button>
           )}
         </div>

@@ -302,13 +302,24 @@ const ForceDisplacementDataSet = ({
       const isAvgLinfit = curve.curve_id === "avg_linfit";
       const isOverlay = isBaselineOverlay || isLinfitOverlay || isAvgLinfit;
 
-      // Overlay/annotation curve IDs (e.g. "5_linfit", "avg_linfit") never
-      // match a real curve_id in selectedCurveIds ("curve5"), so without this
-      // they'd disappear the instant any curve was selected. Always show them.
+      // Per-curve overlay IDs look like "5_linfit" / "5_baseline" and never
+      // match a real curve_id in selectedCurveIds ("curve5") directly, so tie
+      // their visibility to the real curve they annotate instead — unchecking
+      // curve5's Display checkbox now hides "5_linfit" too.
+      const overlayMatch = isBaselineOverlay || isLinfitOverlay
+        ? curve.curve_id.match(/^(\d+)_(?:linfit|baseline)$/)
+        : null;
+      const overlayBaseCurveId = overlayMatch ? `curve${overlayMatch[1]}` : null;
+
       const isShown =
-        (selectedCurveIds.length === 0 ||
-          selectedCurveIds.includes(curve.curve_id) ||
-          isOverlay) &&
+        (overlayBaseCurveId
+          ? selectedCurveIds.length === 0 || selectedCurveIds.includes(overlayBaseCurveId)
+          : isAvgLinfit
+            // Aggregate overlay across all curves: show whenever at least one
+            // real curve is currently displayed.
+            ? selectedCurveIds.length === 0 ||
+              selectedCurveIds.some((id) => /^curve\d+$/.test(String(id)))
+            : selectedCurveIds.length === 0 || selectedCurveIds.includes(curve.curve_id)) &&
         Array.isArray(x) &&
         Array.isArray(y) &&
         x.length === y.length;

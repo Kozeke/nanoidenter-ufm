@@ -2060,11 +2060,86 @@ const FilterStatusSidebar = ({
         <Stack direction="column" spacing={1}>
           {/* Stiffness (K) Results — pinned to the top; only shown when LinearWindowFit is an active Regular filter */}
           {Object.prototype.hasOwnProperty.call(regularFilters || {}, "linearwindowfit") && (
-            <ComputedResults
-              title="Stiffness Results"
-              stats={modelStats.stiffness}
-              emphasizeLabel
-            />
+            <>
+              <ComputedResults
+                title="Stiffness Results"
+                stats={modelStats.stiffness}
+                emphasizeLabel
+              />
+              {/* Individual curve breakdown (Young's modulus / K) — commented out;
+                  aggregate mean ± std above is shown instead.
+              {Array.isArray(modelStats.stiffnessByCurve) &&
+                modelStats.stiffnessByCurve.length === 1 && (
+                  <Box
+                    sx={{
+                      mt: 0.5,
+                      px: 0.5,
+                      maxHeight: 160,
+                      overflowY: "auto",
+                      minWidth: 0,
+                    }}
+                  >
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: "#6b7280",
+                        display: "block",
+                        mb: 0.5,
+                      }}
+                    >
+                      Per chosen curve ({modelStats.stiffnessByCurve.length})
+                    </Typography>
+                    {modelStats.stiffnessByCurve.map((row) => {
+                      // Stores the display label for this LinearWindowFit row (e.g. "curve3").
+                      const curveLabel = row?.curve_id ?? "—";
+                      // Formats k_raw for the per-curve list; blank when the fit failed.
+                      const kRaw =
+                        row?.k_n_per_m != null && Number.isFinite(Number(row.k_n_per_m))
+                          ? `${Number(row.k_n_per_m).toPrecision(4)} N/m`
+                          : "—";
+                      // Formats compliance-corrected k_contact when compute_derived succeeded.
+                      const kContact =
+                        row?.k_contact != null && Number.isFinite(Number(row.k_contact))
+                          ? `${Number(row.k_contact).toPrecision(4)} N/m`
+                          : null;
+                      // Formats Young's modulus E when tip/spring metadata allowed the estimate.
+                      const youngs =
+                        row?.youngs_modulus_pa != null &&
+                        Number.isFinite(Number(row.youngs_modulus_pa))
+                          ? `${Number(row.youngs_modulus_pa).toPrecision(4)} Pa`
+                          : null;
+                      return (
+                        <Box
+                          key={String(curveLabel)}
+                          sx={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 0.15,
+                            mb: 0.6,
+                            pb: 0.4,
+                            borderBottom: "1px dashed #e5e7eb",
+                          }}
+                        >
+                          <Typography
+                            variant="caption"
+                            sx={{ fontSize: 11, fontWeight: 700, color: "#111827" }}
+                          >
+                            {curveLabel}
+                          </Typography>
+                          <Typography variant="caption" sx={{ fontSize: 10, color: "#374151" }}>
+                            K_raw {kRaw}
+                            {kContact != null ? ` · K_c ${kContact}` : ""}
+                            {youngs != null ? ` · E ${youngs}` : ""}
+                          </Typography>
+                        </Box>
+                      );
+                    })}
+                  </Box>
+                )}
+              */}
+            </>
           )}
 
           {/* View Force Parameters - Only show on forceIndentation tab AND in single-curve mode */}
