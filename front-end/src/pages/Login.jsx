@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { login as loginApi, getMe } from "../api/auth";
+import { login as loginApi, getMe, getLastAccessedDataset } from "../api/auth";
 import { useAuthStore } from "../state/useAuthStore";
+import { useDashboardStore } from "../state/useDashboardStore";
 import { useNavigate, Link } from "react-router-dom";
 
 export default function Login() {
@@ -11,6 +12,8 @@ export default function Login() {
 
   const login = useAuthStore((s) => s.login);
   const setUser = useAuthStore((s) => s.setUser);
+  const setDatasetId = useDashboardStore((s) => s.setDatasetId);
+  const setFilename = useDashboardStore((s) => s.setFilename);
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
@@ -27,6 +30,15 @@ export default function Login() {
       // Fetch user data to check profile completion status
       const userData = await getMe(res.access_token);
       setUser(userData);
+      
+      // Fetch last accessed dataset after getting user data
+      const datasetInfo = await getLastAccessedDataset(res.access_token);
+      if (datasetInfo) {
+        setDatasetId(datasetInfo.dataset_id);
+        if (datasetInfo.filename) {
+          setFilename(datasetInfo.filename);
+        }
+      }
       
       // Navigate based on profile completion status
       navigate(userData.profile_completed ? "/dashboard" : "/profile");

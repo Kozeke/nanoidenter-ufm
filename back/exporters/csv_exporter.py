@@ -8,6 +8,9 @@ from scipy.interpolate import interp1d
 from scipy.signal import savgol_filter
 from .base import Exporter
 from filters.calculate_elasticity import calc_elspectra
+# Canonicalizes DB segment_type values ("approach"/"retract"/etc.) to segment0/segment1
+# so raw exports can group and order columns consistently regardless of import source.
+from segment_utils import normalize_segment_type
 
 logger = logging.getLogger(__name__)
 
@@ -48,69 +51,229 @@ class CSVExporter(Exporter):
         # Prevent exporter crash if underlying DuckDB access or file IO fails during raw dump.
         # Prevent exporter crash if curve aggregation or downstream file handling encounters invalid data.
         try:
+            # curve_id is only unique per dataset (PK is dataset_id + curve_id + segment_type),
+            # so without this filter "curve0" from one dataset can pull in "curve0" rows that
+            # belong to a completely different dataset. Scoping by dataset_id keeps the export
+            # limited to the dataset the user is currently working with.
+            dataset_id = kwargs.get("dataset_id")
             with duckdb.connect(db_path) as conn:
+                # Captures table schema to keep exports compatible with legacy databases.
+                schema_columns = {row[0] for row in conn.execute("DESCRIBE force_vs_z").fetchall()}
+                # Selects velocity only when present, otherwise provides a typed NULL placeholder.
+                velocity_projection = "velocity" if "velocity" in schema_columns else "CAST(NULL AS DOUBLE)"
                 query = """
-                    SELECT curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
+                    SELECT curve_id, file_id, date, spring_constant,
                            tip_geometry, tip_radius, segment_type, force_values AS deflection,
-                           z_values AS z_sensor, sampling_rate, velocity, no_points
+                           z_values AS z_sensor, {velocity_projection} AS velocity
                     FROM force_vs_z
-                """
-                params = None
+                """.format(velocity_projection=velocity_projection)
+                conditions = []
+                params: List[Any] = []
+                if dataset_id is not None:
+                    conditions.append("dataset_id = ?")
+                    params.append(dataset_id)
                 if curve_ids:
-                    query += " WHERE curve_id IN ({})".format(",".join("?" for _ in curve_ids))
-                    params = curve_ids
-                
-                results = conn.execute(query, params or []).fetchall()
+                    # Frontend passes curve_ids with "curve" prefix (e.g. "curve0", "curve1"),
+                    # but the database stores just numeric IDs (0, 1, 2, ...). Strip the
+                    # prefix to match the database format, or convert to int if already
+                    # numeric. This ensures the WHERE IN clause actually matches.
+                    db_curve_ids = []
+                    for cid in curve_ids:
+                        cid_str = str(cid)
+                        if cid_str.startswith("curve"):
+                            db_curve_ids.append(int(cid_str[5:]))  # Remove "curve" prefix
+                        else:
+                            try:
+                                db_curve_ids.append(int(cid_str))
+                            except ValueError:
+                                # Fallback: keep as-is if not convertible (shouldn't happen)
+                                db_curve_ids.append(cid_str)
+                    conditions.append("curve_id IN ({})".format(",".join("?" for _ in db_curve_ids)))
+                    params.extend(db_curve_ids)
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+                # Orders rows so segment0 (approach) is grouped ahead of segment1 (retract)
+                # per curve, matching the side-by-side column layout written below.
+                query += " ORDER BY curve_id, segment_type"
+
+                results = conn.execute(query, params).fetchall()
                 if not results:
                     logger.error("No curves found in database")
                     raise ValueError("No curves found in database")
 
+            # Groups rows by curve_id so a curve's segment0 (approach) and segment1
+            # (retract) data can be written side by side in one block instead of as
+            # two separate stacked blocks.
+            curves_by_id: Dict[Any, Dict[str, Any]] = {}
+            curve_order: List[Any] = []
+            for row in results:
+                (curve_id, file_id, date, spring_constant,
+                 tip_geometry, tip_radius, segment_type, deflection, z_sensor,
+                 velocity) = row
+                canonical_segment = normalize_segment_type(segment_type)
+
+                if curve_id not in curves_by_id:
+                    curves_by_id[curve_id] = {"segments": {}}
+                    curve_order.append(curve_id)
+                entry = curves_by_id[curve_id]
+
+                # segment0 metadata (or whichever segment is seen first) is used for the
+                # curve-level metadata rows; all segments of one curve share this metadata.
+                if canonical_segment == "segment0" or "file_id" not in entry:
+                    entry["file_id"] = file_id
+                    entry["date"] = date
+                    entry["spring_constant"] = spring_constant
+                    entry["tip_geometry"] = tip_geometry
+                    entry["tip_radius"] = tip_radius
+                    entry["velocity"] = velocity
+
+                entry["segments"][canonical_segment] = {
+                    "z_sensor": np.asarray(z_sensor) if z_sensor is not None else np.empty(0),
+                    "deflection": np.asarray(deflection) if deflection is not None else np.empty(0),
+                }
+
             with open(output_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                
+
+                # ---- Single dataset-level metadata block ----
+                # Written ONCE for the whole export (not per curve). Previously each
+                # curve re-wrote file_id/date/spring_constant/tip_geometry/tip_radius/
+                # velocity, which produced confusing duplicates (e.g. two different
+                # "date" rows) whenever curves had slightly different DB metadata.
                 # Represents request-level metadata combining legacy `metadata` and new `softmech_metadata`.
-                metadata_payload = kwargs.get("metadata") or kwargs.get("softmech_metadata") or {}
+                metadata_payload = dict(kwargs.get("metadata") or kwargs.get("softmech_metadata") or {})
+                # Uses the first curve's DB row to fill in any metadata field the
+                # request payload didn't already provide (e.g. plain API callers that
+                # only send a partial `metadata` dict), so the file still gets one
+                # complete metadata block instead of none.
+                first_entry = curves_by_id[curve_order[0]] if curve_order else {}
+                for field in ("file_id", "date", "spring_constant", "tip_geometry", "tip_radius", "velocity"):
+                    if metadata_payload.get(field) in (None, ""):
+                        db_value = first_entry.get(field)
+                        if db_value is not None:
+                            metadata_payload[field] = db_value
+
+                # Defines metadata keys that should not be written into CSV exports.
+                blocked_metadata_keys = {"force_scale_to_n"}
                 for key, value in metadata_payload.items():
+                    # Skips internal calibration keys the user doesn't want in export metadata.
+                    if key in blocked_metadata_keys:
+                        continue
                     writer.writerow([key, value])
                 
                 # Add Young's modulus formatted value from websocket stats if available
                 youngs_modulus_formatted = kwargs.get("youngs_modulus_formatted")
                 if youngs_modulus_formatted:
                     writer.writerow(["youngs_modulus", youngs_modulus_formatted])
-                
+
+                # Add K_raw / K_contact / E computed by the LinearWindowFit regular filter,
+                # if that filter was active and produced a value (see linear_window_fit_filter.py).
+                k_raw_formatted = kwargs.get("k_raw_formatted")
+                if k_raw_formatted:
+                    writer.writerow(["k_raw", k_raw_formatted])
+                k_contact_formatted = kwargs.get("k_contact_formatted")
+                if k_contact_formatted:
+                    writer.writerow(["k_contact", k_contact_formatted])
+                stiffness_youngs_modulus_formatted = kwargs.get("stiffness_youngs_modulus_formatted")
+                if stiffness_youngs_modulus_formatted:
+                    writer.writerow(["youngs_modulus_linfit", stiffness_youngs_modulus_formatted])
+
+                # Per-curve K_raw / K_contact / E (see LinearWindowFit filter /
+                # process_and_stream_batch's kfit_by_curve), keyed by curve_id so each
+                # curve's own block below can be given its own values, distinct from
+                # the dataset-level average written above. Keys are normalized (the
+                # "curve" prefix stripped) since the DB's curve_id and the websocket
+                # stats' curve_id ("curve3" vs 3/"3") aren't guaranteed to match as-is.
+                def _norm_curve_key(cid):
+                    s = str(cid)
+                    return s[len("curve"):] if s.startswith("curve") else s
+
+                kfit_by_curve_lookup = {
+                    _norm_curve_key(row.get("curve_id")): row
+                    for row in (kwargs.get("kfit_by_curve") or [])
+                    if row.get("curve_id") is not None
+                }
+
                 num_exported = 0
-                for row in results:
-                    (curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
-                     tip_geometry, tip_radius, segment_type, deflection, z_sensor,
-                     sampling_rate, velocity, no_points) = row
-                    
-                    # Row-specific metadata
+                for curve_id in curve_order:
+                    entry = curves_by_id[curve_id]
+
+                    # Only a lightweight curve marker is written per block. All other
+                    # metadata (file_id, date, spring_constant, tip_geometry,
+                    # tip_radius, velocity) is dataset-level and already written once
+                    # in the metadata block above, not repeated for every curve.
                     writer.writerow(["curve_id", curve_id])
-                    writer.writerow(["file_id", file_id])
-                    writer.writerow(["date", date])
-                    writer.writerow(["instrument", instrument])
-                    writer.writerow(["sample", sample])
-                    writer.writerow(["spring_constant", spring_constant])
-                    writer.writerow(["inv_ols", inv_ols])
-                    writer.writerow(["tip_geometry", tip_geometry])
-                    writer.writerow(["tip_radius", tip_radius])
-                    writer.writerow(["segment_type", segment_type])
-                    writer.writerow(["sampling_rate", sampling_rate])
-                    writer.writerow(["velocity", velocity])
-                    writer.writerow(["no_points", no_points])
-                    
-                    # Headers
-                    writer.writerow(["index", "Z (m)", "Force (N)"])
-                    
-                    # Data
-                    deflection_arr = np.asarray(deflection) if deflection is not None else np.empty(0)
-                    z_sensor_arr = np.asarray(z_sensor) if z_sensor is not None else np.empty(0)
-                    min_length = min(len(deflection_arr), len(z_sensor_arr))
-                    if min_length:
-                        idx = np.arange(min_length)[:, None]
-                        block = np.concatenate([idx, z_sensor_arr[:min_length, None], deflection_arr[:min_length, None]], axis=1)
-                        # write in one go
-                        np.savetxt(f, block, delimiter=",", fmt="%.17g")
+
+                    # This curve's own K_raw / K_contact / E (as opposed to the
+                    # dataset-level mean ± std written once at the top of the file).
+                    curve_kfit = kfit_by_curve_lookup.get(_norm_curve_key(curve_id))
+                    if curve_kfit:
+                        k_raw_val = curve_kfit.get("k_n_per_m")
+                        if k_raw_val is not None:
+                            writer.writerow(["k_raw", f"{float(k_raw_val):.6g} N/m"])
+                        k_contact_val = curve_kfit.get("k_contact")
+                        if k_contact_val is not None:
+                            writer.writerow(["k_contact", f"{float(k_contact_val):.6g} N/m"])
+                        e_val = curve_kfit.get("youngs_modulus_pa")
+                        if e_val is not None:
+                            writer.writerow(["youngs_modulus", f"{float(e_val):.6g} Pa"])
+
+                    # Orders segment0 (approach) ahead of segment1 (retract), with any
+                    # unrecognized segment types appended afterwards, so retract data is
+                    # always written to the right of approach data for the same curve.
+                    segment_order = [s for s in ("segment0", "segment1") if s in entry["segments"]]
+                    segment_order += sorted(s for s in entry["segments"] if s not in ("segment0", "segment1"))
+
+                    # Labels match the units actually stored in force_vs_z: Z is
+                    # micrometers (µm) and Force is micronewtons (µN) — no SI
+                    # conversion is applied on export (see hdf5.py ingest notes).
+                    # Maps canonical segment ids to user-facing phase labels for CSV headers.
+                    segment_label_map = {
+                        "segment0": "indent",
+                        "segment1": "retract",
+                    }
+                    header = ["index"]
+                    for segment_name in segment_order:
+                        # Chooses a readable label while preserving unknown segment names as-is.
+                        display_segment_name = segment_label_map.get(segment_name, segment_name)
+                        header += [f"Z {display_segment_name} (µm)", f"Force {display_segment_name} (µN)"]
+                    writer.writerow(header)
+
+                    segment_arrays = {}
+                    segment_lengths = {}
+                    for segment_name in segment_order:
+                        z_arr = entry["segments"][segment_name]["z_sensor"]
+                        f_arr = entry["segments"][segment_name]["deflection"]
+                        seg_len = min(len(z_arr), len(f_arr))
+                        segment_arrays[segment_name] = (z_arr, f_arr)
+                        segment_lengths[segment_name] = seg_len
+
+                    max_len = max(segment_lengths.values(), default=0)
+                    if max_len:
+                        if len(segment_order) == 1:
+                            # Fast vectorized path for the common single-segment case
+                            # (e.g. legacy CSV imports with only an approach segment).
+                            segment_name = segment_order[0]
+                            z_arr, f_arr = segment_arrays[segment_name]
+                            seg_len = segment_lengths[segment_name]
+                            idx = np.arange(seg_len)[:, None]
+                            block = np.concatenate([idx, z_arr[:seg_len, None], f_arr[:seg_len, None]], axis=1)
+                            np.savetxt(f, block, delimiter=",", fmt="%.17g")
+                        else:
+                            # Multiple segments (segment0 + segment1): write them side by
+                            # side, padding the shorter segment's trailing rows with blanks.
+                            for i in range(max_len):
+                                data_row = [i]
+                                for segment_name in segment_order:
+                                    z_arr, f_arr = segment_arrays[segment_name]
+                                    seg_len = segment_lengths[segment_name]
+                                    if i < seg_len:
+                                        data_row.append(f"{z_arr[i]:.17g}")
+                                        data_row.append(f"{f_arr[i]:.17g}")
+                                    else:
+                                        data_row.append("")
+                                        data_row.append("")
+                                writer.writerow(data_row)
                     num_exported += 1
 
             logger.info(f"Exported {num_exported} raw curves to CSV file at {output_path}")
@@ -155,6 +318,11 @@ class CSVExporter(Exporter):
                 "e_models": e_models
             }
 
+            # curve_id is only unique per dataset, so scoping fetch_curves_batch and the
+            # tip-metadata lookup by dataset_id keeps averaging from mixing in curves
+            # (or tip parameters) that happen to share the same curve_id in another dataset.
+            dataset_id = kwargs.get("dataset_id")
+
             # ---- single DB session + single register ----
             with duckdb.connect(db_path) as conn:
                 conn.execute("PRAGMA threads=4")
@@ -163,7 +331,7 @@ class CSVExporter(Exporter):
 
                 from pipeline import fetch_curves_batch
                 graph_force_vs_z, graph_force_indentation, graph_elspectra = fetch_curves_batch(
-                    conn, curve_id_strings, filters_config, single=True
+                    conn, curve_id_strings, filters_config, single=True, dataset_id=dataset_id
                 )
 
                 # Cache schema once
@@ -171,9 +339,12 @@ class CSVExporter(Exporter):
                 has_tip_angle = "tip_angle" in cols
 
                 # Tip metadata helper
+                tip_meta_query_suffix = " WHERE dataset_id = ?" if dataset_id is not None else ""
+                tip_meta_params = [dataset_id] if dataset_id is not None else []
                 if has_tip_angle:
                     tip_meta = conn.execute(
-                        "SELECT tip_geometry, tip_radius, tip_angle, spring_constant FROM force_vs_z LIMIT 1"
+                        f"SELECT tip_geometry, tip_radius, tip_angle, spring_constant FROM force_vs_z{tip_meta_query_suffix} LIMIT 1",
+                        tip_meta_params,
                     ).fetchone()
                     if tip_meta:
                         tip_geometry, tip_radius, tip_angle, spring_constant = tip_meta
@@ -181,7 +352,8 @@ class CSVExporter(Exporter):
                         tip_geometry, tip_radius, tip_angle, spring_constant = ("sphere", 1e-6, 30.0, 0.1)
                 else:
                     tip_meta = conn.execute(
-                        "SELECT tip_geometry, tip_radius, spring_constant FROM force_vs_z LIMIT 1"
+                        f"SELECT tip_geometry, tip_radius, spring_constant FROM force_vs_z{tip_meta_query_suffix} LIMIT 1",
+                        tip_meta_params,
                     ).fetchone()
                     if tip_meta:
                         tip_geometry, tip_radius, spring_constant = tip_meta
@@ -204,11 +376,12 @@ class CSVExporter(Exporter):
                         except (TypeError, ValueError):
                             pass
 
-                    # Override tip radius from payload if provided (⚠️ if you send nm here, convert to meters)
+                    # Override tip radius from payload if provided.
+                    # The export dialog (ExportButton.jsx / useExportDialog.js) collects tip radius
+                    # in millimeters, matching the import/dataset-editing UI convention, so convert mm -> m here.
                     if payload_meta.get("tip_radius") is not None:
                         try:
-                            # If payload is in nm, use *1e-9; if already in meters, drop the factor.
-                            tip_radius = float(payload_meta["tip_radius"]) * 1e-9
+                            tip_radius = float(payload_meta["tip_radius"]) * 1e-3
                         except (TypeError, ValueError):
                             pass
 
@@ -307,11 +480,12 @@ class CSVExporter(Exporter):
             if tip_shape not in ["sphere", "cylinder", "cone", "pyramid"]:
                 tip_shape = "sphere"
 
-            # tip radius is expected in [nm] in the payload (as you send 10000 for 10 µm)
+            # tip radius is expected in [mm] in the payload (matches the export dialog UI);
+            # convert to [nm] here since the CSV header always reports tip radius in nanometers.
             tip_radius_nm = None
             if payload_meta.get("tip_radius") is not None:
                 try:
-                    tip_radius_nm = float(payload_meta["tip_radius"])
+                    tip_radius_nm = float(payload_meta["tip_radius"]) * 1e6
                 except (TypeError, ValueError):
                     tip_radius_nm = None
 
@@ -407,6 +581,18 @@ class CSVExporter(Exporter):
                 if youngs_modulus_formatted:
                     header += f"#Average Hertz modulus [Pa]: {youngs_modulus_formatted}\n"
 
+                # Add K_raw / K_contact / E computed by the LinearWindowFit regular filter,
+                # if that filter was active and produced a value (see linear_window_fit_filter.py).
+                k_raw_formatted = kwargs.get("k_raw_formatted")
+                if k_raw_formatted:
+                    header += f"#K_raw (LinearWindowFit): {k_raw_formatted}\n"
+                k_contact_formatted = kwargs.get("k_contact_formatted")
+                if k_contact_formatted:
+                    header += f"#K_contact (LinearWindowFit): {k_contact_formatted}\n"
+                stiffness_youngs_modulus_formatted = kwargs.get("stiffness_youngs_modulus_formatted")
+                if stiffness_youngs_modulus_formatted:
+                    header += f"#Young's modulus E (LinearWindowFit): {stiffness_youngs_modulus_formatted}\n"
+
                 if dataset_type == "Force":
                     header += "#Columns: Indentation <F> SigmaF\n" if direction == 'V' else "#Columns: <Indentation> F SigmaZ\n"
                 else:
@@ -456,6 +642,10 @@ class CSVExporter(Exporter):
                 "e_models": e_models
             }
 
+            # curve_id is only unique per dataset, so scope the fetch to the dataset
+            # the request came from (see _export_raw_data for the same rationale).
+            dataset_id = kwargs.get("dataset_id")
+
             with duckdb.connect(db_path) as conn:
                 conn.execute("PRAGMA threads=4")
                 from filters.register_all import register_filters
@@ -463,7 +653,7 @@ class CSVExporter(Exporter):
 
                 from pipeline import fetch_curves_batch
                 graph_force_vs_z, graph_force_indentation, graph_elspectra = fetch_curves_batch(
-                    conn, curve_id_strings, filters_config, single=True
+                    conn, curve_id_strings, filters_config, single=True, dataset_id=dataset_id
                 )
 
             # Extract model parameters

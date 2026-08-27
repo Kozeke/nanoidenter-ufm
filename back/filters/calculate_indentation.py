@@ -35,10 +35,35 @@ def calc_indentation(z_values: List[float], force_values: List[float], cp: List[
     F = np.asarray(force_values, dtype=float)
     z_cp, f_cp = float(cp[0][0]), float(cp[0][1])
 
-    # sanity
-    is_increasing = np.all(np.diff(Z) >= 0)
+    # Controls whether detailed indentation unit/range debug logs are printed.
+    debug_units_logging_enabled = True
+
+    # Determine the overall sweep direction robustly.
+    # np.all(np.diff(Z) >= 0) is too strict: a single noisy step (e.g. z[i+1] = z[i] - 1e-15)
+    # flips the branch and negates every zi even though the array is overwhelmingly ascending.
+    # Strategy: use the net endpoint displacement as the primary signal, confirmed by a
+    # majority vote on the diffs so genuinely descending data still triggers the right branch.
+    _dz   = np.diff(Z)
+    _net  = Z[-1] - Z[0]                          # positive = ascending overall
+    _frac = np.sum(_dz >= 0) / max(len(_dz), 1)   # fraction of non-decreasing steps
+    is_increasing = (_net >= 0) and (_frac >= 0.5)
     i_contact = int(np.argmin(np.abs(Z - z_cp)))
     tail = len(Z) - i_contact
+    if debug_units_logging_enabled:
+        print(
+            "DEBUG INDENTATION INPUT UNITS: "
+            f"spring_constant={spring_constant:.6e} N/m, "
+            f"set_zero_force={set_zero_force}, points={len(Z)}"
+        )
+        print(
+            f"  z_values range: [{Z.min():.6e}, {Z.max():.6e}] m, "
+            f"is_increasing={is_increasing}"
+        )
+        print(f"  force_values range: [{F.min():.6e}, {F.max():.6e}] N")
+        print(
+            f"  contact point: z_cp={z_cp:.6e} m, f_cp={f_cp:.6e} N, "
+            f"i_contact={i_contact}, tail={tail}"
+        )
 
     # print(
     #     f"[indent dbg] N={len(Z)} inc={is_increasing} "
@@ -69,9 +94,31 @@ def calc_indentation(z_values: List[float], force_values: List[float], cp: List[
     if not np.isfinite(k) or k == 0.0:
         k = 1.0
 
-    # Calculate indentation (Zi) and force (Fi)
-    zi = xf - yf / k
+    # Calculate indentation (Zi) and force (Fi).
+    # For ascending z (negative z convention): indentation = (z - z_cp) - yf/k
+    # For descending z (positive z convention): after contact z < z_cp so xf is
+    # negative; flip its sign so indentation is always positive.
+    if is_increasing:
+        zi = xf - yf / k
+        if debug_units_logging_enabled:
+            print("calc_indentation branch: ascending-z formula zi = (z-z_cp) - yf/k")
+    else:
+        zi = -xf - yf / k
+        if debug_units_logging_enabled:
+            print("calc_indentation branch: descending-z formula zi = -(z-z_cp) - yf/k")
     fi = yf
+    if debug_units_logging_enabled:
+        print("DEBUG INDENTATION OUTPUT UNITS:")
+        print(f"  validated spring constant (k): {k:.6e} N/m")
+        if zi.size > 0:
+            print(f"  zi range: [{np.min(zi):.6e}, {np.max(zi):.6e}] m")
+        else:
+            print("  zi range: EMPTY ARRAY")
+        if fi.size > 0:
+            print(f"  fi range: [{np.min(fi):.6e}, {np.max(fi):.6e}] N")
+        else:
+            print("  fi range: EMPTY ARRAY")
+        print(f"  points: {len(zi)}")
     # print("zi", len(zi))
     # print("fi", len(fi))
     # Return as a list of [Zi, Fi] arrays

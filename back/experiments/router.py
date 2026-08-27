@@ -15,12 +15,15 @@ router = APIRouter(prefix="/experiments", tags=["experiments"])
 
 class SaveExperimentRequest(BaseModel):
     name: str
+    # Optional free-text description entered by the user in the save modal
+    description: Optional[str] = None
     metadata: Dict
     filters: Dict
     elasticity_params: Dict
     force_model_params: Dict
     results: Dict
     curve_id: Optional[str] = None
+    dataset_id: Optional[int] = None
 
 
 @router.post("")
@@ -47,6 +50,7 @@ def save_experiment(
     create_experiment(
         user_id=user["id"],
         name=data.name,
+        description=data.description,
         spring_constant=curve_metadata["spring_constant"],
         curve_id=data.curve_id,
         tip_radius=curve_metadata["tip_radius"],
@@ -55,6 +59,7 @@ def save_experiment(
         elasticity_params=data.elasticity_params,
         force_model_params=data.force_model_params,
         results=data.results,
+        dataset_id=data.dataset_id,
     )
 
     message = "Experiment saved successfully" if has_results else "Experiment saved (pending results)"

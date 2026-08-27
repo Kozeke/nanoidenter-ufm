@@ -1,5 +1,6 @@
 // Renders the main dashboard experience coordinating datasets, filters, and controls.
 import React, { useState, useEffect, useRef, useCallback, createContext, useContext, Suspense, lazy } from "react";
+import { UnitPreferencesProvider } from "../context/UnitPreferencesContext";
 import debounce from 'lodash/debounce';
 import { Box, CircularProgress } from '@mui/material';
 import FiltersComponent from "./FiltersComponent";
@@ -14,6 +15,8 @@ const FileOpener = lazy(() => import("./FileOpener"));
 const ExportButton = lazy(() => import("./ExportButton"));
 const UserMenu = lazy(() => import("./UserMenu"));
 const SaveExperimentButton = lazy(() => import("./SaveExperimentButton"));
+// Lazy-load the trim data modal to keep the initial bundle lean
+const TrimDataModal = lazy(() => import("./TrimDataModal"));
 
 
 // Keep this in sync with FilterStatusSidebar / FiltersComponent drawer width
@@ -56,10 +59,26 @@ const Dashboard = () => {
     forceModelParams,
     // Merges force model parameter updates.
     setForceModelParams,
-    // Controls how many curves to request from the backend.
-    numCurves,
-    // Updates the curve count while respecting valid bounds.
-    setNumCurves,
+    // Start index of the curve range to request from the backend.
+    curveFrom,
+    // End index of the curve range to request from the backend.
+    curveTo,
+    // Updates the start of the curve range.
+    setCurveFrom,
+    // Updates the end of the curve range.
+    setCurveTo,
+    // Selected HDF5 segment for curve queries.
+    selectedSegmentType,
+    // Updates the active segment filter.
+    setSelectedSegmentType,
+    // Stores the current dataset ID from the most recently loaded file.
+    datasetId,
+    // Updates the dataset ID when a new file is loaded.
+    setDatasetId,
+    // Stores the current dataset filename.
+    filename,
+    // Updates the dataset filename.
+    setFilename,
     // Tracks which dashboard tab is currently active.
     activeTab,
     // Updates the active tab selection.
@@ -76,6 +95,9 @@ const Dashboard = () => {
     selectedExportCurveIds,
     // Updates the export curve selection.
     setSelectedExportCurveIds,
+    // Flags that Display/Export curve selections should default to "all
+    // curves" once the next get_metadata request fully completes.
+    setNeedsCurveIdInit,
     // Tracks parallel loading indicators for key workflows.
     loadingMulti,
     // Merges loading indicator updates.
@@ -98,6 +120,14 @@ const Dashboard = () => {
     setIsLoadingExport,
     // WebSocket connection status for UX.
     connectionStatus,
+    // Stores shared model statistics shown in the header badge.
+    modelStats,
+    // Updates model statistics when a new dataset lifecycle starts.
+    setModelStats,
+    // Resets filters and analysis params to defaults when a new experiment loads.
+    resetFiltersAndParams,
+    // Clears opened-experiment identity so importing a file creates a new save.
+    clearOpenedExperiment,
   } = useDashboardStore();
   
   // Centralizes WebSocket lifecycle + curve fetching for the dashboard
@@ -131,7 +161,6 @@ const Dashboard = () => {
       : connectionStatus === 'error'
       ? 'Error'
       : 'Disconnected';
-  const [filename, setFilename] = useState("");
   // Exposes regular filter configurations tracked in the shared store.
   const regularFilters = filters.regular;
   // Exposes contact point filter configurations tracked in the shared store.
@@ -178,6 +207,8 @@ const Dashboard = () => {
     setFilters({ e_models: nextValue });
   };
   const isMetadataReady = metadataObject.columns.length > 0 || Object.keys(metadataObject.sample_row).length > 0;
+  // Controls visibility of the Trim Data modal dialog.
+  const [trimDataOpen, setTrimDataOpen] = useState(false);
   const [showParameters, setShowParameters] = useState(false);
   const [allFparams, setAllFparams] = useState([]);
   const [lastFparamsKey, setLastFparamsKey] = useState(null);
@@ -235,38 +266,60 @@ const Dashboard = () => {
   useEffect(() => {
     // console.log("metadataObject updated:", metadataObject);
   }, [metadataObject]);
+
+  // Redirects away from Force–Indentation / Elasticity Spectra while those tabs are disabled.
   useEffect(() => {
-    const allCurveIds = forceData.map((curve) => curve.curve_id);
-    setSelectedExportCurveIds((prev) => {
-      // Only update if the curve IDs have changed to avoid redundant updates
-      if (JSON.stringify(prev) !== JSON.stringify(allCurveIds)) {
-        // console.log("Initializing export curve IDs:", allCurveIds);
-        return allCurveIds;
-      }
-      return prev;
-    });
-    setSelectedCurveIds((prev) => {
-      // Only update if the curve IDs have changed to avoid redundant updates
-      if (JSON.stringify(prev) !== JSON.stringify(allCurveIds)) {
-        // console.log("Initializing export curve IDs:", allCurveIds);
-        return allCurveIds;
-      }
-      return prev;
-    });
-  }, [forceData]);
+    if (activeTab === "forceIndentation" || activeTab === "elasticitySpectra") {
+      setActiveTab("forceDisplacement");
+    }
+  }, [activeTab, setActiveTab]);
+
+  // Whenever the active dataset changes, re-arm the "default Display/Export to
+  // all curves" behaviour. handleProcessSuccess already does this for freshly
+  // imported files, but a dataset can also become active without going through
+  // it — loading a saved experiment (MyExperiments.jsx) or picking an existing
+  // dataset (MyDatasets.jsx) both call setDatasetId directly. Without this, the
+  // websocket sync would treat the new dataset's curves as previously-known and
+  // leave every checkbox unchecked.
+  useEffect(() => {
+    setNeedsCurveIdInit(true);
+  }, [datasetId, setNeedsCurveIdInit]);
+
+  // NOTE: there is deliberately no effect here reconciling selectedCurveIds /
+  // selectedExportCurveIds against forceData. forceData is populated by many
+  // incremental "batch" WebSocket messages, so any effect keyed on it observes
+  // partial curve lists — pruning against one would permanently drop curves
+  // that simply hadn't streamed in yet. All reconciliation happens exactly
+  // once, in useDashboardWebSocket.js, on the terminal "complete" message when
+  // the full curve list is known (see syncCurveSelectionsOnLoadComplete).
 
   // Determine if we're in single-curve mode based on selectedCurveId
   const hasSingleCurve = Boolean(selectedCurveId && String(selectedCurveId).trim() !== "");
   const isSingleCurveMode = hasSingleCurve;
 
-  // Handler to set curve ID and optionally sync visual selection
+  // Handler to set curve ID and keep Display/Export selection in sync.
+  // The Curve ID input accepts bare numbers ("2") while the picker uses
+  // "curve2" labels; without normalizing here, compute_stats keeps sending
+  // the previous selectedCurveIds (e.g. ["curve1"]) while get_metadata
+  // correctly sends the new curve_id.
   const handleSetCurveId = (curveId) => {
     setSelectedCurveId(curveId);
 
-    // If this curve exists in the loaded data, auto-select it visually
-    if (curveId && forceData.some(c => c.curve_id === curveId)) {
-      setSelectedCurveIds([curveId]);
+    // Normalizes "2" / "curve2" into the picker label form used by selectedCurveIds.
+    const trimmed = String(curveId ?? "").trim();
+    if (!trimmed) return;
+    // Builds the canonical "curve{N}" label expected by the multi-select and compute_stats.
+    let curveLabel = null;
+    if (/^curve\d+$/i.test(trimmed)) {
+      curveLabel = `curve${trimmed.slice(5)}`;
+    } else if (/^\d+$/.test(trimmed)) {
+      curveLabel = `curve${trimmed}`;
     }
+    if (!curveLabel) return;
+
+    // Always sync Display selection to the Curve ID field so compute_stats
+    // reads the same curve the user just typed (zustand updates are sync).
+    setSelectedCurveIds([curveLabel]);
   };
 
   useEffect(() => {
@@ -339,18 +392,60 @@ const Dashboard = () => {
         },
       };
     });
-  };   const handleProcessSuccess = (result) => {
+  };
+  
+  const handleProcessSuccess = (result) => {
     // console.log('File processed successfully:', result);
-    // Set numCurves: if loaded data has fewer than 10 curves, use that value; otherwise use 10
+    // Reset curve range: keep default 0–10 but cap to actual curve count
     if (result.curves) {
-      setNumCurves(Math.min(result.curves, 10));
+      setCurveFrom(0);
+      setCurveTo(Math.min(result.curves, 10));
     }
-    setFilename(result.filename || ""); // Set filename from result
+    // Store dataset_id and filename in the dashboard store - Zustand updates are synchronous
+    if (result.dataset_id !== undefined) {
+      setDatasetId(result.dataset_id);
+      console.log("Dataset ID set to:", result.dataset_id);
+    }
+    // Filename will be fetched via useEffect when dataset_id changes
+    // But also set it directly from result if available for immediate display
+    if (result.filename) {
+      setFilename(result.filename);
+      console.log("Filename set to:", result.filename);
+    }
+    // Reset all filters AND analysis parameters (forceModelParams, elasticModelParams,
+    // elasticityParams, setZeroForce) so the new dataset starts from a clean slate.
+    // This prevents stale filter choices from a previous experiment leaking into
+    // the first WebSocket request for the new dataset.
+    resetFiltersAndParams();
+    // Importing a new file starts a fresh analysis — do not update a prior experiment.
+    clearOpenedExperiment();
+    // Clear single-curve selection so the curve ID field shows empty
+    setSelectedCurveId(null);
+    // Clear highlighted and export curve IDs; they will be repopulated from incoming forceData
+    setSelectedCurveIds([]);
+    setSelectedExportCurveIds([]);
+    // Once the new dataset's get_metadata request fully completes, default
+    // both selections to "all curves" (see useDashboardWebSocket.js).
+    setNeedsCurveIdInit(true);
+    // Reset local model-parameter selections that depend on the previous dataset
+    setSelectedParameters([]);
+    setSelectedElasticityParameters([]);
+    // Clears previous model statistics so the new dataset starts with empty E metrics.
+    setModelStats("force", []);
+    setModelStats("elasticity", []);
+    setModelStats("stiffness", []);
+    setModelStats("stiffnessByCurve", []);
     // Force a fresh WebSocket request after import
+    // The datasetId should be available since Zustand updates are synchronous
     resetAndReload();
   };
 
   const handleImportStart = () => {
+    // Clears stale model statistics immediately when a new file import starts.
+    setModelStats("force", []);
+    setModelStats("elasticity", []);
+    setModelStats("stiffness", []);
+    setModelStats("stiffnessByCurve", []);
     setLoadingMulti({ import: true });
     setIsLoadingImport(true);
   };
@@ -384,10 +479,38 @@ const Dashboard = () => {
     setIsLoadingExport(nextValue);
   };
 
-  const handleNumCurvesChange = (value) => {
-    // console.log("new");
-    setNumCurves(value);
-  }; const [windowWidth, setWindowWidth] = useState(window.innerWidth);  // Update window width on resize
+  const handleCurveFromChange = (value) => setCurveFrom(value);
+  // Updates the dashboard's curve-to value from curve controls interactions.
+  const handleCurveToChange = (value) => setCurveTo(value);
+
+  // Switches between indent (segment0) and retract (segment1) curve data.
+  const handleSegmentTypeChange = useCallback(
+    (segmentType) => {
+      setSelectedSegmentType(segmentType);
+      sendCurveRequest();
+    },
+    [setSelectedSegmentType, sendCurveRequest]
+  );
+
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  // Applies the same behavior as the Update Curves action button.
+  const handleApplyCurveUpdatesShortcut = useCallback(() => {
+    // Sends a curve refresh request whenever shortcut updates are applied.
+    sendCurveRequest();
+    // Detects whether model stats should be refreshed alongside curves.
+    const hasForceModels = Object.keys(forceModels || {}).length > 0;
+    // Detects whether elasticity stats should be refreshed alongside curves.
+    const hasElasticModels = Object.keys(elasticityModels || {}).length > 0;
+    // Stiffness (K) comes from the LinearWindowFit regular filter, not an f/e model,
+    // so its stats must also trigger a model_stats refresh. Same detection the
+    // sidebar uses to render the "Stiffness Results" card.
+    const hasStiffnessFilter = Object.prototype.hasOwnProperty.call(regularFilters || {}, "linearwindowfit");
+    // Sends model stats when a model family OR the stiffness filter is currently selected.
+    if ((hasForceModels || hasElasticModels || hasStiffnessFilter) && sendModelStatsRequest) {
+      sendModelStatsRequest();
+    }
+  }, [sendCurveRequest, sendModelStatsRequest, forceModels, elasticityModels, regularFilters]);
+
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handleResize);
@@ -410,10 +533,14 @@ const Dashboard = () => {
     ? { [selectedForceModel]: forceModels?.[selectedForceModel] || {} }
     : {};
   const fparamsCacheKey = stableStringify({
+    datasetId,
     regularFilters,
     cpFilters,
     activeFmodel,
-    numCurves
+    forceModelParams,
+    setZeroForce,
+    curveFrom,
+    curveTo
   });
 
   // Function to fetch all fparams with progress tracking
@@ -448,13 +575,19 @@ const Dashboard = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          dataset_id: datasetId || null,
           filters: {
             regular: regularFilters,
             cp_filters: cpFilters,
             f_models: forceModels,
             e_models: elasticityModels,
           },
-          num_curves: numCurves,
+          // Sends force-model fitting bounds and poisson used by /get-all-fparams-stream calculations.
+          force_model_params: forceModelParams,
+          // Sends the zero-force behavior so indentation branch matches UI settings.
+          set_zero_force: setZeroForce,
+          curve_from: curveFrom,
+          curve_to: curveTo,
         }),
         signal: fparamsAbortRef.current.signal
       });
@@ -531,7 +664,8 @@ const Dashboard = () => {
   }, [
     showParameters, activeTab, selectedForceModel,
     fparamsCacheKey, lastFparamsKey, allFparams.length,
-    regularFilters, cpFilters, forceModels, elasticityModels, numCurves,
+    regularFilters, cpFilters, forceModels, elasticityModels, curveFrom, curveTo, datasetId,
+    forceModelParams, setZeroForce,
     stableStringify
   ]);
 
@@ -585,10 +719,14 @@ const Dashboard = () => {
     ? { [selectedElasticityModel]: elasticityModels?.[selectedElasticityModel] || {} }
     : {};
   const eparamsCacheKey = stableStringify({
+    datasetId,
     regularFilters,
     cpFilters,
     activeEmodel,
-    numCurves
+    curveFrom,
+    curveTo,
+    elasticityParams,
+    elasticModelParams
   });
 
   function YoungsModulusBadge({ value }) {
@@ -648,19 +786,22 @@ const Dashboard = () => {
       eparamsAbortRef.current = new AbortController();
 
       // Prefer the SSE endpoint (same format as fmodel); fall back to JSON if unavailable
-      const streamUrl = `${process.env.REACT_APP_BACKEND_URL}/get-all-emodels-stream`;
+      const streamUrl = `${process.env.REACT_APP_BACKEND_URL}/get-all-eparams-stream`;
       let response = await fetch(streamUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          dataset_id: datasetId || null,
           filters: {
             regular: regularFilters,
             cp_filters: cpFilters,
             f_models: forceModels,
             e_models: elasticityModels,
           },
+          elasticity_params: elasticityParams,
+          emodel_params: elasticModelParams,
         }),
         signal: eparamsAbortRef.current.signal
       });
@@ -723,12 +864,15 @@ const Dashboard = () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            dataset_id: datasetId || null,
             filters: {
               regular: regularFilters,
               cp_filters: cpFilters,
               f_models: forceModels,
               e_models: elasticityModels,
             },
+            elasticity_params: elasticityParams,
+            emodel_params: elasticModelParams,
           }),
           signal: eparamsAbortRef.current.signal
         });
@@ -755,7 +899,8 @@ const Dashboard = () => {
   }, [
     showElasticityParameters, selectedElasticityModel, activeTab,
     lastElasticityKey, eparamsCacheKey, allElasticityParams.length,
-    regularFilters, cpFilters, forceModels, elasticityModels,
+    regularFilters, cpFilters, forceModels, elasticityModels, datasetId,
+    elasticityParams, elasticModelParams,
     stableStringify
   ]);
 
@@ -848,16 +993,18 @@ const Dashboard = () => {
     overflow: "hidden",
   };
 
-  const tabButtonStyle = (isActive) => ({
+  // Builds styles for graph tabs; muted look when a tab is disabled.
+  const tabButtonStyle = (isActive, isDisabled = false) => ({
     padding: isMobile ? "8px 10px" : "10px 14px",
     fontSize: isMobile ? "13px" : "14px",
     fontWeight: 600,
     letterSpacing: "0.01em",
     border: "none",
     outline: "none",
-    cursor: "pointer",
+    cursor: isDisabled ? "not-allowed" : "pointer",
     background: isActive ? "#ffffff" : "transparent",
-    color: isActive ? "#1d1e2c" : "#4a4f6a",
+    color: isDisabled ? "#9aa0b5" : isActive ? "#1d1e2c" : "#4a4f6a",
+    opacity: isDisabled ? 0.55 : 1,
     transition: "all .15s ease",
     boxShadow: isActive ? "inset 0 0 0 1px #cfd6ff" : "none",
   });
@@ -1128,18 +1275,22 @@ const Dashboard = () => {
             <button
               role="tab"
               aria-selected={activeTab === "forceIndentation"}
-              onClick={() => setActiveTab("forceIndentation")}
-              style={tabButtonStyle(activeTab === "forceIndentation")}
-              {...pressable}
+              aria-disabled="true"
+              disabled
+              title="Temporarily disabled"
+              onClick={() => {}}
+              style={tabButtonStyle(activeTab === "forceIndentation", true)}
             >
               Force–Indentation
             </button>
             <button
               role="tab"
               aria-selected={activeTab === "elasticitySpectra"}
-              onClick={() => setActiveTab("elasticitySpectra")}
-              style={tabButtonStyle(activeTab === "elasticitySpectra")}
-              {...pressable}
+              aria-disabled="true"
+              disabled
+              title="Temporarily disabled"
+              onClick={() => {}}
+              style={tabButtonStyle(activeTab === "elasticitySpectra", true)}
             >
               Elasticity Spectra
             </button>
@@ -1147,9 +1298,10 @@ const Dashboard = () => {
 
           {/* Middle: WebSocket status */}
           <div style={statusPillWrapperStyle}>
-            <YoungsModulusBadge
-              value={useDashboardStore.getState().modelStats?.force?.[0]?.value}
-            />
+            {/* Temporarily hidden with Force–Indentation / Elasticity Spectra */}
+            {/* <YoungsModulusBadge
+              value={modelStats?.force?.[0]?.value}
+            /> */}
 
             <span style={statusPillStyle(connectionStatus)}>
               <span style={statusDotStyle(connectionStatus)} />
@@ -1183,6 +1335,23 @@ const Dashboard = () => {
                     </button>
                   )}
                 />
+              </div>
+            </Suspense>
+
+            {/* Trim Data — opens the force-range trimming dialog */}
+            <Suspense fallback={null}>
+              <div {...pressable}>
+                <button
+                  style={
+                    (!isWebSocketConnected || !datasetId)
+                      ? actionBtnStyle("disabled")
+                      : actionBtnStyle("secondary")
+                  }
+                  onClick={() => setTrimDataOpen(true)}
+                  disabled={!isWebSocketConnected || !datasetId}
+                >
+                  Trim data
+                </button>
               </div>
             </Suspense>
 
@@ -1318,7 +1487,8 @@ const Dashboard = () => {
            />
         </div>
 
-        {/* Tab Content */}
+        {/* Tab Content — wrapped in UnitPreferencesProvider so all graphs share the same unit selection */}
+        <UnitPreferencesProvider>
         <div style={tabContentStyle}>
           {activeTab === "forceDisplacement" && (
             <ForceDisplacementPanel
@@ -1371,9 +1541,13 @@ const Dashboard = () => {
             />
           )}
         </div>
+        </UnitPreferencesProvider>
         <CurveControlsComponent
-          numCurves={numCurves}
-          handleNumCurvesChange={handleNumCurvesChange}
+          curveFrom={curveFrom}
+          curveTo={curveTo}
+          handleCurveFromChange={handleCurveFromChange}
+          handleCurveToChange={handleCurveToChange}
+          maxNumCurves={metadataObject?.num_curves ?? null}
           curveId={selectedCurveId}
           setCurveId={handleSetCurveId}
           forceData={forceData}
@@ -1381,7 +1555,7 @@ const Dashboard = () => {
           setSelectedCurveIds={setSelectedCurveIds}
           setGraphType={setGraphType}
           graphType={graphType}
-          filename={filename} // Pass filename
+          filename={filename || "No file selected"} // Pass filename
                        onExportCurveIdsChange={handleExportCurveIdsChange} // Pass the handler
              selectedExportCurveIds={selectedExportCurveIds}
              activeTab={activeTab}
@@ -1390,12 +1564,28 @@ const Dashboard = () => {
              onParameterChange={setSelectedParameters}
              showParameters={showParameters}
              setShowParameters={setShowParameters}
+             onApplyChangesShortcut={handleApplyCurveUpdatesShortcut}
              // Disable curve controls when socket is down
              isSocketConnected={isWebSocketConnected}
+             selectedSegmentType={selectedSegmentType}
+             onSegmentTypeChange={handleSegmentTypeChange}
+             availableSegmentTypes={metadataObject?.available_segment_types}
         />
       </div>
     </div>
+        {/* Trim Data modal — permanently removes out-of-range force points */}
+        <Suspense fallback={null}>
+          <TrimDataModal
+            open={trimDataOpen}
+            onClose={() => setTrimDataOpen(false)}
+            datasetId={datasetId}
+            onSuccess={() => {
+              setTrimDataOpen(false);
+              resetAndReload();
+            }}
+            forceDomain={domainRange}
+          />
+        </Suspense>
       </Suspense>
     </MetadataContext.Provider>);
 }; export default Dashboard;
-

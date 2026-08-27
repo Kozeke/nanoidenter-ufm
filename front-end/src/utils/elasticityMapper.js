@@ -57,36 +57,55 @@ export function normalizeForceStats(stats, models) {
   export function normalizeElasticityStats(stats, models) {
     if (!stats || !models) return [];
     const elasticityModel = Object.keys(models.e_models || {})[0];
-   // ─────────────────────────────
+    
+    // Normalize model name to lowercase for case-insensitive matching
+    const normalizedModel = elasticityModel ? elasticityModel.toLowerCase() : null;
+    
+    // ─────────────────────────────
     // ELASTICITY MODELS
     // ─────────────────────────────
-    if (elasticityModel && stats.elasticity_params) {
-      switch (elasticityModel) {
-        case "bilayer":
-          return [
-            { label: "Cortex Young's modulus", value: stats.elasticity_params.p0?.formatted },
-            { label: "Bulk Young's modulus", value: stats.elasticity_params.p1?.formatted },
-            { label: "Cortex thickness", value: stats.elasticity_params.p2?.formatted },
-          ];
-  
-        case "linemax":
-          return [
-            { label: "Average modulus", value: stats.elasticity_params.p0?.formatted },
-            { label: "Median modulus", value: stats.elasticity_params.p1?.formatted },
-            { label: "Max modulus", value: stats.elasticity_params.p2?.formatted },
-            { label: "Min modulus", value: stats.elasticity_params.p3?.formatted },
-          ];
-  
-        case "sigmoid":
-          return [
-            { label: "Higher modulus", value: stats.elasticity_params.p0?.formatted },
-            { label: "Lower modulus", value: stats.elasticity_params.p1?.formatted },
-            { label: "Thickness", value: stats.elasticity_params.p2?.formatted },
-            { label: "Sharpness", value: stats.elasticity_params.p3?.formatted },
-          ];
-  
-        default:
-          return [];
+    if (normalizedModel) {
+      // For Constant model, check both elasticity_params and force_params (backend may send it under force_params)
+      const params = stats.elasticity_params || (normalizedModel === "constant" ? stats.force_params : null);
+      
+      if (params) {
+        switch (normalizedModel) {
+          case "bilayer":
+            return [
+              { label: "Cortex Young's modulus", value: params.p0?.formatted },
+              { label: "Bulk Young's modulus", value: params.p1?.formatted },
+              { label: "Cortex thickness", value: params.p2?.formatted },
+            ];
+
+          case "linemax":
+            return [
+              { label: "Average modulus", value: params.p0?.formatted },
+              { label: "Median modulus", value: params.p1?.formatted },
+              { label: "Max modulus", value: params.p2?.formatted },
+              { label: "Min modulus", value: params.p3?.formatted },
+            ];
+
+          case "sigmoid":
+          case "sigmoidnew":
+            return [
+              { label: "Higher modulus", value: params.p0?.formatted },
+              { label: "Lower modulus", value: params.p1?.formatted },
+              { label: "Thickness", value: params.p2?.formatted },
+              { label: "Sharpness", value: params.p3?.formatted },
+            ];
+
+          case "constant":
+            return [
+              { label: "Young's modulus", value: params.p0?.formatted },
+            ];
+
+          default:
+            console.warn(`Unknown elasticity model: ${elasticityModel} (normalized: ${normalizedModel})`);
+            return [];
+        }
       }
     }
+    
+    // Return empty array if no model or no stats
+    return [];
   }

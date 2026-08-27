@@ -14,6 +14,9 @@ def create_experiment(
     elasticity_params: dict,
     force_model_params: dict,
     results: dict,
+    dataset_id: Optional[int] = None,
+    # Optional free-text description provided by the user at save time
+    description: Optional[str] = None,
 ):
     conn = get_conn()
 
@@ -22,6 +25,8 @@ def create_experiment(
         INSERT INTO experiments (
             user_id,
             name,
+            description,
+            dataset_id,
             spring_constant,
             curve_id,
             tip_radius,
@@ -32,13 +37,21 @@ def create_experiment(
             f_model,
             e_model,
             youngs_modulus_mean,
-            youngs_modulus_std
+            youngs_modulus_std,
+            k_raw_mean,
+            k_raw_std,
+            k_contact_mean,
+            k_contact_std,
+            stiffness_youngs_modulus_mean,
+            stiffness_youngs_modulus_std
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
             name,
+            description,
+            dataset_id,
             spring_constant,
             curve_id,
             tip_radius,
@@ -50,7 +63,15 @@ def create_experiment(
             next(iter(filters.get("e_models", {})), None),
             results.get("youngs_modulus_mean"),
             results.get("youngs_modulus_std"),
-            # json.dumps(results.get("elasticity_param")),
+            # K_raw, K_contact, and E computed by the LinearWindowFit regular filter
+            # (see linear_window_fit_filter.py / compute_derived()), distinct from the
+            # Hertz-model youngs_modulus_mean/std above.
+            results.get("k_raw_mean"),
+            results.get("k_raw_std"),
+            results.get("k_contact_mean"),
+            results.get("k_contact_std"),
+            results.get("stiffness_youngs_modulus_mean"),
+            results.get("stiffness_youngs_modulus_std"),
         ),
     )
 
@@ -63,13 +84,20 @@ def list_experiments(user_id: int) -> List[dict]:
         SELECT
             id,
             name,
+            description,
             curve_id,
             created_at,
             tip_geometry,
             tip_radius,
             e_model,
             youngs_modulus_mean,
-            youngs_modulus_std
+            youngs_modulus_std,
+            k_raw_mean,
+            k_raw_std,
+            k_contact_mean,
+            k_contact_std,
+            stiffness_youngs_modulus_mean,
+            stiffness_youngs_modulus_std
         FROM experiments
         WHERE user_id = ?
         ORDER BY created_at DESC
@@ -81,14 +109,23 @@ def list_experiments(user_id: int) -> List[dict]:
         {
             "id": r[0],
             "name": r[1],
-            "curve_id": r[2],
-            "created_at": r[3],
-            "tip_geometry": r[4],
-            "tip_radius": r[5],
-            "e_model": r[6],
-            "youngs_modulus_mean": r[7],
-            "youngs_modulus_std": r[8],
-            "status_code": "success" if (r[7] is not None or r[8] is not None) else "pending"
+            # Optional description provided at save time
+            "description": r[2],
+            "curve_id": r[3],
+            "created_at": r[4],
+            "tip_geometry": r[5],
+            "tip_radius": r[6],
+            "e_model": r[7],
+            "youngs_modulus_mean": r[8],
+            "youngs_modulus_std": r[9],
+            # LinearWindowFit-derived stiffness results (see linear_window_fit_filter.py)
+            "k_raw_mean": r[10],
+            "k_raw_std": r[11],
+            "k_contact_mean": r[12],
+            "k_contact_std": r[13],
+            "stiffness_youngs_modulus_mean": r[14],
+            "stiffness_youngs_modulus_std": r[15],
+            "status_code": "success" if any(v is not None for v in r[8:16]) else "pending"
         }
         for r in rows
     ]
@@ -100,19 +137,29 @@ def get_experiment(exp_id: int, user_id: int) -> Optional[dict]:
     row = conn.execute(
         """
         SELECT
-            id,
-            name,
-            curve_id,
-            spring_constant,
-            tip_radius,
-            tip_geometry,
-            filters_json,
-            elasticity_params_json,
-            force_model_params_json,
-            youngs_modulus_mean,
-            youngs_modulus_std
-        FROM experiments
-        WHERE id = ? AND user_id = ?
+            e.id,
+            e.name,
+            e.description,
+            e.dataset_id,
+            e.curve_id,
+            e.spring_constant,
+            e.tip_radius,
+            e.tip_geometry,
+            e.filters_json,
+            e.elasticity_params_json,
+            e.force_model_params_json,
+            e.youngs_modulus_mean,
+            e.youngs_modulus_std,
+            d.name as dataset_name,
+            e.k_raw_mean,
+            e.k_raw_std,
+            e.k_contact_mean,
+            e.k_contact_std,
+            e.stiffness_youngs_modulus_mean,
+            e.stiffness_youngs_modulus_std
+        FROM experiments e
+        LEFT JOIN datasets d ON e.dataset_id = d.id
+        WHERE e.id = ? AND e.user_id = ?
         """,
         (exp_id, user_id),
     ).fetchone()
@@ -123,17 +170,28 @@ def get_experiment(exp_id: int, user_id: int) -> Optional[dict]:
     return {
         "id": row[0],
         "name": row[1],
-        "curve_id": row[2],
+        # Optional description provided at save time
+        "description": row[2],
+        "dataset_id": row[3],
+        "curve_id": row[4],
         "metadata": {
-            "spring_constant": row[3],
-            "tip_radius": row[4],
-            "tip_geometry": row[5],
+            "spring_constant": row[5],
+            "tip_radius": row[6],
+            "tip_geometry": row[7],
         },
-        "filters": json.loads(row[6]),
-        "elasticity_params": json.loads(row[7]),
-        "force_model_params": json.loads(row[8]),
-        "youngs_modulus_mean": row[9],
-        "youngs_modulus_std": row[10]
+        "filters": json.loads(row[8]),
+        "elasticity_params": json.loads(row[9]),
+        "force_model_params": json.loads(row[10]),
+        "youngs_modulus_mean": row[11],
+        "youngs_modulus_std": row[12],
+        "dataset_name": row[13],  # The name from the datasets table (saved from metadata file_id)
+        # LinearWindowFit-derived stiffness results (see linear_window_fit_filter.py)
+        "k_raw_mean": row[14],
+        "k_raw_std": row[15],
+        "k_contact_mean": row[16],
+        "k_contact_std": row[17],
+        "stiffness_youngs_modulus_mean": row[18],
+        "stiffness_youngs_modulus_std": row[19],
     }
 
 

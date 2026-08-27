@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import ReactECharts from "echarts-for-react";
 import echarts from "../../utils/echartsConfig";
+import {
+  CHART_AXIS_NAME_TEXT_STYLE,
+  CHART_AXIS_TICK_STYLE,
+  buildValueAxisTickLabel,
+} from "../../utils/chartAxisStyles";
 
 // --- Toolbar styles (match other panels) ---
 const toolbarCardStyle = {
@@ -433,38 +438,63 @@ const ParametersGraph = ({
   const yExponent = Math.log10(yScaleFactor);
   const yUnit = yExponent === 0 ? 'Parameter Value' : `×10^{-${Math.round(yExponent)}} Parameter Value`;
 
+  // Scientific notation formatter for y-axis labels and tooltip
+  const formatScientific = (value, decimals = 2) => {
+    if (value === 0 || value === null || value === undefined) return '0';
+    const absVal = Math.abs(value);
+    const exp = Math.floor(Math.log10(absVal));
+    const coeff = value / Math.pow(10, exp);
+    return `${coeff.toFixed(decimals)}×10^${exp}`;
+  };
+
+  // Determine exponent for the y-axis name based on the dominant magnitude
+  const yMagnitudeLabel = (() => {
+    const nonZero = allParamValues.filter(v => v !== 0 && isFinite(v));
+    if (nonZero.length === 0) return 0;
+    const refVal = nonZero.reduce((min, v) => Math.abs(v) < Math.abs(min) ? v : min);
+    return Math.floor(Math.log10(Math.abs(refVal)));
+  })();
+
   const chartOptions = {
     tooltip: { 
       trigger: "axis",
       formatter: function(params) {
-        const data = params[0];
-        return `Curve Index: ${data.value[0]}<br/>Parameter Value: ${data.value[1].toFixed(4)}`;
+        const lines = params.map(p => {
+          const val = p.value[1];
+          const formatted = val === 0 ? '0' : formatScientific(val, 3);
+          return `<span style="display:inline-block;margin-right:5px;border-radius:50%;width:9px;height:9px;background:${p.color}"></span>${p.seriesName}: <b>${formatted}</b>`;
+        });
+        return `Curve Index: ${params[0].value[0]}<br/>${lines.join('<br/>')}`;
       }
     },
     xAxis: {
       type: "value",
       name: `Curve Index`,
       nameLocation: "middle",
-      nameGap: 25,
+      nameGap: 34,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       min: allCurveIndices.length > 0 ? Math.min(...allCurveIndices) - 0.5 : 0,
       max: allCurveIndices.length > 0 ? Math.max(...allCurveIndices) + 0.5 : 10,
-      axisLabel: {
-        formatter: function (value) {
-          return value.toFixed(0);
-        },
-      },
+      axisLabel: buildValueAxisTickLabel((value) => value.toFixed(0)),
     },
     yAxis: {
       type: "value",
       name: `Parameter Value`,
       nameLocation: "middle",
-      nameGap: 40,
+      nameGap: 78,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       scale: true,
       min: adjustedYMin,
       max: adjustedYMax,
       axisLabel: {
+        ...CHART_AXIS_TICK_STYLE,
         formatter: function (value) {
-          return value.toFixed(yDecimals);
+          if (value === 0) return '0';
+          const absVal = Math.abs(value);
+          if (!isFinite(absVal) || absVal === 0) return '0';
+          const exp = Math.floor(Math.log10(absVal));
+          const coeff = value / Math.pow(10, exp);
+          return `${coeff.toFixed(1)}×10^${exp}`;
         },
       },
     },

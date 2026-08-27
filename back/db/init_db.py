@@ -1,4 +1,24 @@
+"""Database schema initialization and backward-compatible migrations."""
 import duckdb
+
+
+def _run_migration(conn: duckdb.DuckDBPyConnection, sql: str) -> None:
+    """
+    Execute a single DDL migration statement and, if it fails (e.g. because
+    the column already exists), roll back the aborted transaction so the
+    connection stays usable for all subsequent statements.
+
+    Without the ROLLBACK, DuckDB leaves the connection in an aborted-transaction
+    state and every following conn.execute() raises:
+        TransactionContext Error: Current transaction is aborted (please ROLLBACK)
+    """
+    try:
+        conn.execute(sql)
+    except Exception:
+        try:
+            conn.execute("ROLLBACK")
+        except Exception:
+            pass
 
 def init_cache_tables(conn: duckdb.DuckDBPyConnection) -> None:
     """
@@ -14,6 +34,7 @@ def init_cache_tables(conn: duckdb.DuckDBPyConnection) -> None:
             spring_constant DOUBLE,
             tip_radius DOUBLE,
             tip_geometry VARCHAR,
+            tip_angle DOUBLE,
             PRIMARY KEY (curve_id, method, params_hash)
         )
     """)
@@ -73,6 +94,61 @@ def ensure_cache_tables(conn):
     init_cache_tables(conn)
 
 
+def init_datasets_table(conn: duckdb.DuckDBPyConnection) -> None:
+    """
+    Create the datasets table to store file uploads and metadata.
+    """
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS datasets (
+            id INTEGER PRIMARY KEY,
+            name VARCHAR NOT NULL,
+            description VARCHAR,
+            filename VARCHAR NOT NULL,
+            file_hash VARCHAR UNIQUE,
+            user_id BIGINT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            
+            -- Metadata from file
+            num_curves INTEGER DEFAULT 0,
+            spring_constant DOUBLE,
+            tip_radius DOUBLE,
+            tip_geometry VARCHAR,
+
+            -- True once flip_force_sign has been applied (F -> -F) so trim_retract
+            -- can detect peaks correctly (max F rather than min signed F).
+            force_sign_flipped BOOLEAN DEFAULT FALSE,
+
+            -- True once the retract phase has been trimmed; prevents the
+            -- operation from being applied a second time on already-approach-only data.
+            retract_trimmed BOOLEAN DEFAULT FALSE,
+
+            -- True once z-normalization has been applied (z[i] -= z[0] per curve);
+            -- prevents accidental double-shift on already-normalized data.
+            z_normalized BOOLEAN DEFAULT FALSE,
+            
+            FOREIGN KEY (user_id) REFERENCES users(id)
+        )
+    """)
+
+    # Backward-compatible migrations: add columns if an older DB is opened.
+    # After each failed ALTER TABLE, DuckDB marks the transaction as aborted —
+    # a ROLLBACK is required to clear that state before issuing further statements.
+    # Rename the legacy force_absolute column (from the old |F| behaviour) to
+    # force_sign_flipped now that the operation negates F instead of abs'ing it.
+    _run_migration(conn, "ALTER TABLE datasets RENAME COLUMN force_absolute TO force_sign_flipped")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN force_sign_flipped BOOLEAN DEFAULT FALSE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN retract_trimmed BOOLEAN DEFAULT FALSE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN z_normalized BOOLEAN DEFAULT FALSE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN tip_angle DOUBLE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN velocity DOUBLE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN force_scale_to_n DOUBLE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN z_scale_to_m DOUBLE")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN sensor_type VARCHAR")
+    _run_migration(conn, "ALTER TABLE datasets ADD COLUMN sampling_rate DOUBLE")
+
+
 def init_experiment_tables(conn):
     conn.execute("""
         CREATE SEQUENCE IF NOT EXISTS experiments_id_seq
@@ -88,8 +164,10 @@ def init_experiment_tables(conn):
             
             user_id BIGINT NOT NULL,
             name VARCHAR,
+            description VARCHAR,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
+            dataset_id INTEGER,
             spring_constant DOUBLE,
             curve_id VARCHAR,
             tip_radius DOUBLE,
@@ -106,34 +184,28 @@ def init_experiment_tables(conn):
             youngs_modulus_std DOUBLE,
             elasticity_params JSON,
 
-            FOREIGN KEY (user_id) REFERENCES users(id)
+            -- K_raw, K_contact, and E (Young's modulus) computed by the LinearWindowFit
+            -- regular filter (see linear_window_fit_filter.py / compute_derived()). Kept
+            -- separate from youngs_modulus_mean/std above, which comes from the Hertz
+            -- force-model population stats instead.
+            k_raw_mean DOUBLE,
+            k_raw_std DOUBLE,
+            k_contact_mean DOUBLE,
+            k_contact_std DOUBLE,
+            stiffness_youngs_modulus_mean DOUBLE,
+            stiffness_youngs_modulus_std DOUBLE,
+
+            FOREIGN KEY (user_id) REFERENCES users(id),
+            FOREIGN KEY (dataset_id) REFERENCES datasets(id)
         )
     """)
 
-
-def migrate_database(conn: duckdb.DuckDBPyConnection) -> None:
-    """
-    Apply database migrations to update schema without losing data.
-    Uses a schema_version table to track which migrations have been applied.
-    """
-    # Initialize schema version table if it doesn't exist
-    try:
-        result = conn.execute("SELECT version FROM schema_version").fetchone()
-        current_version = result[0] if result else 0
-    except:
-        conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER)")
-        conn.execute("INSERT INTO schema_version VALUES (0)")
-        current_version = 0
-    
-    # Apply migrations in order
-    # Migration 1: Example - add a new column to users table
-    # if current_version < 1:
-    #     conn.execute("ALTER TABLE users ADD COLUMN new_field VARCHAR")
-    #     conn.execute("UPDATE schema_version SET version = 1")
-    
-    # Migration 2: Example - add a new column to experiments table
-    # if current_version < 2:
-    #     conn.execute("ALTER TABLE experiments ADD COLUMN another_field DOUBLE")
-    #     conn.execute("UPDATE schema_version SET version = 2")
-    
-    # Add future migrations here following the same pattern
+    # Backward-compatible migration: add description column to existing databases
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN description VARCHAR")
+    # Backward-compatible migrations: add LinearWindowFit stiffness result columns
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN k_raw_mean DOUBLE")
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN k_raw_std DOUBLE")
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN k_contact_mean DOUBLE")
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN k_contact_std DOUBLE")
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN stiffness_youngs_modulus_mean DOUBLE")
+    _run_migration(conn, "ALTER TABLE experiments ADD COLUMN stiffness_youngs_modulus_std DOUBLE")

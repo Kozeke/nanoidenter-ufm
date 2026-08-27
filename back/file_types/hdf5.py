@@ -1,9 +1,13 @@
+"""Provides HDF5 parsing utilities and legacy DuckDB-to-HDF5 export helpers."""
+
 import h5py
 import numpy as np
 from models.force_curve import ForceCurve, Segment
 import logging
 import os
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
+import duckdb
+from segment_utils import normalize_segment_type
 
 def get_hdf5_structure(file_path: str) -> Dict[str, Any]:
     """Return the HDF5 file structure as a nested dictionary for frontend display."""
@@ -70,6 +74,54 @@ def get_hdf5_structure(file_path: str) -> Dict[str, Any]:
     return structure
 
 
+def read_tip_metadata_from_hdf5(file_path: str) -> Dict[str, Any]:
+    """Read experiment metadata from the first curve/tip group in an HDF5 file."""
+    # Stores normalized metadata extracted from tip group attributes.
+    extracted: Dict[str, Any] = {}
+    try:
+        with h5py.File(file_path, "r") as hdf5_file:
+            for curve_name, curve_group in hdf5_file.items():
+                if not isinstance(curve_group, h5py.Group):
+                    continue
+                tip_group = curve_group.get("tip")
+                if tip_group is None or not isinstance(tip_group, h5py.Group):
+                    continue
+                for attr_name, attr_value in tip_group.attrs.items():
+                    if isinstance(attr_value, bytes):
+                        attr_value = attr_value.decode("utf-8")
+                    elif isinstance(attr_value, (np.integer, np.floating)):
+                        attr_value = float(attr_value) if isinstance(attr_value, np.floating) else int(attr_value)
+                    extracted[str(attr_name)] = attr_value
+                break
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Failed to read tip metadata from %s: %s", file_path, exc
+        )
+        return {}
+
+    # Maps barytech tip attrs to canonical metadata keys used by the ingest pipeline.
+    if extracted.get("geometry") and not extracted.get("tip_geometry"):
+        extracted["tip_geometry"] = str(extracted["geometry"])
+    if extracted.get("value") is not None and extracted.get("tip_radius") in (None, ""):
+        tip_value = float(extracted["value"])
+        tip_unit = str(extracted.get("unit", "")).lower()
+        if tip_unit in ("um", "µm", "micrometer", "micrometers"):
+            extracted["tip_radius"] = tip_value * 1e-6
+        elif tip_unit in ("mm", "millimeter", "millimeters"):
+            extracted["tip_radius"] = tip_value * 1e-3
+        else:
+            extracted["tip_radius"] = tip_value
+    if extracted.get("force_conversion_factor") is not None and extracted.get("force_scale_to_n") in (None, ""):
+        extracted["force_scale_to_n"] = float(extracted["force_conversion_factor"])
+    # z_scale_to_m / z_conversion_factor are not applied during ingest — Z is stored as µm.
+    # if extracted.get("z_conversion_factor") is not None and extracted.get("z_scale_to_m") in (None, ""):
+    #     extracted["z_scale_to_m"] = float(extracted["z_conversion_factor"])
+    extracted.pop("z_scale_to_m", None)
+    extracted.pop("z_conversion_factor", None)
+
+    return extracted
+
+
 
 # Configure logging
 logging.basicConfig(
@@ -90,6 +142,116 @@ def validate_dataset(dataset: h5py.Dataset, path: str) -> None:
         raise ValueError(f"Dataset {path} is empty")
     if len(dataset.shape) != 1:
         raise ValueError(f"Dataset {path} must be 1D, got shape {dataset.shape}")
+
+
+# Minimum number of points required to keep an imported segment.
+MIN_SEGMENT_POINTS = 20
+
+# Barytech-style HDF5 layout: indent in segment0, retract in segment1.
+BARYTECH_SEGMENT_SPECS = (
+    ("segment0", "segment0/Force", "segment0/Z", False),
+    ("segment1", "segment1/Force", "segment1/Z", False),
+)
+
+
+def _resolve_hdf5_node(group: h5py.Group, relative_path: str):
+    """Walk a slash-separated HDF5 path under one curve group."""
+    node = group
+    for part in relative_path.split("/"):
+        node = node[part]
+    return node
+
+
+def _infer_segment_type(force_relative_path: str, z_relative_path: str) -> str:
+    """Infer segment type from legacy user-selected dataset paths."""
+    combined = f"{force_relative_path}/{z_relative_path}".lower()
+    if "segment1" in combined or "retract" in combined:
+        return "segment1"
+    if "segment0" in combined or "approach" in combined or "indent" in combined:
+        return "segment0"
+    return "approach"
+
+
+def _clean_segment_arrays(
+    z_sensor: np.ndarray,
+    deflection: np.ndarray,
+    apply_approach_trim: bool,
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """Normalize one segment's Z/Force arrays for DuckDB storage."""
+    keep = np.isfinite(z_sensor) & np.isfinite(deflection)
+    z_sensor = z_sensor[keep]
+    deflection = deflection[keep]
+
+    if len(z_sensor) < MIN_SEGMENT_POINTS:
+        return None
+
+    if apply_approach_trim:
+        end_idx = int(np.argmax(z_sensor))
+        if end_idx > 0:
+            z_sensor = z_sensor[: end_idx + 1]
+            deflection = deflection[: end_idx + 1]
+        if len(z_sensor) < MIN_SEGMENT_POINTS:
+            return None
+
+    order = np.argsort(z_sensor)
+    z_sensor = z_sensor[order]
+    deflection = deflection[order]
+
+    z_sensor, unique_idx = np.unique(z_sensor, return_index=True)
+    deflection = deflection[unique_idx]
+
+    if len(z_sensor) < MIN_SEGMENT_POINTS:
+        return None
+
+    return z_sensor, deflection
+
+
+def _load_segment_from_relative_paths(
+    curve_group: h5py.Group,
+    segment_type: str,
+    force_relative_path: str,
+    z_relative_path: str,
+    validated_metadata: Dict[str, Any],
+    apply_approach_trim: bool,
+) -> Optional[Segment]:
+    """Load one Force/Z pair from a curve group and return a cleaned Segment."""
+    try:
+        force_dataset = _resolve_hdf5_node(curve_group, force_relative_path)
+        z_dataset = _resolve_hdf5_node(curve_group, z_relative_path)
+        validate_dataset(force_dataset, force_relative_path)
+        validate_dataset(z_dataset, z_relative_path)
+    except KeyError:
+        return None
+
+    deflection = np.array(force_dataset[()])
+    z_sensor = np.array(z_dataset[()])
+
+    # Z and Force are stored as-is in micrometers (µm) and micronewtons (µN).
+    # z_scale_to_m = float(validated_metadata.get("z_scale_to_m", 1.0) or 1.0)
+    # if z_scale_to_m != 1.0:
+    #     z_sensor = z_sensor * z_scale_to_m
+    # force_scale_to_n = float(validated_metadata.get("force_scale_to_n", 1.0) or 1.0)
+    # if force_scale_to_n != 1.0:
+    #     deflection = deflection * force_scale_to_n
+
+    cleaned = _clean_segment_arrays(z_sensor, deflection, apply_approach_trim)
+    if cleaned is None:
+        return None
+
+    z_sensor, deflection = cleaned
+    if not all(np.isfinite(deflection)) or not all(np.isfinite(z_sensor)):
+        return None
+
+    point_count = len(z_sensor)
+    return Segment(
+        type=segment_type,
+        deflection=deflection,
+        z_sensor=z_sensor,
+        sampling_rate=float(validated_metadata.get("sampling_rate", 1e5)),
+        velocity=float(validated_metadata.get("velocity", 1e-6)),
+        no_points=point_count,
+    )
+
 
 def process_hdf5(file_path: str, force_path: str, z_path: str, metadata: Dict[str, Any]) -> Dict[str, ForceCurve]:
     """Process all curves in HDF5 file with validation and error handling."""
@@ -117,41 +279,42 @@ def process_hdf5(file_path: str, force_path: str, z_path: str, metadata: Dict[st
             z_relative_path = z_path[len(sample_curve_name) + 1:]
             logger.info(f"Using relative paths: Force={force_relative_path}, Z={z_relative_path}")
 
-            # Process each curve
+            # Process each curve group and import segment0/segment1 when present.
             for curve_name, curve_group in curve_groups:
                 try:
-                    # Validate datasets
-                    force_dataset = curve_group[force_relative_path]
-                    z_dataset = curve_group[z_relative_path]
-                    validate_dataset(force_dataset, force_path)
-                    validate_dataset(z_dataset, z_path)
-
-                    # Validate data compatibility
-                    deflection = np.array(force_dataset[()])
-                    z_sensor = np.array(z_dataset[()])
-                    min_length = min(len(deflection), len(z_sensor))
-                    if min_length == 0:
-                        logger.warning(f"Skipping {curve_name}: Empty Force or Z data")
-                        continue
-
-                    # Validate metadata
                     validated_metadata = validate_and_fill_metadata(metadata, curve_name)
+                    if validated_metadata.get("tip_geometry") in (None, "") and validated_metadata.get("geometry"):
+                        validated_metadata["tip_geometry"] = str(validated_metadata["geometry"])
 
-                    # Create segment
-                    segments = [
-                        Segment(
-                            type="approach",
-                            deflection=deflection[:min_length],
-                            z_sensor=z_sensor[:min_length],
-                            sampling_rate=float(validated_metadata.get("sampling_rate", 1e5)),
-                            velocity=float(validated_metadata.get("velocity", 1e-6)),
-                            no_points=min_length
+                    segments: List[Segment] = []
+                    for segment_type, force_rel, z_rel, apply_trim in BARYTECH_SEGMENT_SPECS:
+                        segment = _load_segment_from_relative_paths(
+                            curve_group,
+                            segment_type,
+                            force_rel,
+                            z_rel,
+                            validated_metadata,
+                            apply_trim,
                         )
-                    ]
+                        if segment is not None:
+                            segments.append(segment)
 
-                    # Validate segment data
-                    if not all(np.isfinite(segments[0].deflection)) or not all(np.isfinite(segments[0].z_sensor)):
-                        logger.warning(f"Skipping {curve_name}: Invalid data (non-finite values)")
+                    if not segments:
+                        legacy_segment_type = _infer_segment_type(force_relative_path, z_relative_path)
+                        legacy_trim = legacy_segment_type in ("approach", "segment0")
+                        legacy_segment = _load_segment_from_relative_paths(
+                            curve_group,
+                            legacy_segment_type,
+                            force_relative_path,
+                            z_relative_path,
+                            validated_metadata,
+                            legacy_trim,
+                        )
+                        if legacy_segment is not None:
+                            segments.append(legacy_segment)
+
+                    if not segments:
+                        logger.warning(f"Skipping {curve_name}: no valid segment data found")
                         continue
 
                     curves[curve_name] = ForceCurve(
@@ -163,9 +326,12 @@ def process_hdf5(file_path: str, force_path: str, z_path: str, metadata: Dict[st
                         inv_ols=float(validated_metadata["inv_ols"]),
                         tip_geometry=validated_metadata["tip_geometry"],
                         tip_radius=float(validated_metadata["tip_radius"]),
-                        segments=segments
+                        segments=segments,
                     )
-                    logger.info(f"Processed curve: {curve_name}")
+                    logger.info(
+                        f"Processed curve {curve_name} with segments: "
+                        f"{[segment.type for segment in segments]}"
+                    )
                 except KeyError as e:
                     logger.warning(f"Skipping {curve_name} due to missing dataset: {e}")
                     continue
@@ -197,22 +363,35 @@ def validate_and_fill_metadata(metadata: Dict, curve_name: str) -> Dict:
         "tip_geometry": "pyramid",
         "tip_radius": 1e-5,
         "sampling_rate": 1e5,
-        "velocity": 1e-6
+        "velocity": 1e-6,
+        # Unit-calibration factors are accepted in metadata but not applied —
+        # Z and Force arrays are stored as micrometers (µm) and micronewtons (µN).
+        "z_scale_to_m": 1.0,
+        "force_scale_to_n": 1.0,
     }
     validated_metadata = metadata.copy()
     
     for key, default in defaults.items():
         if key not in validated_metadata or validated_metadata[key] is None:
-            logger.warning(f"Missing metadata field {key} for {curve_name}, using default: {default}")
+            # logger.warning(f"Missing metadata field {key} for {curve_name}, using default: {default}")
             validated_metadata[key] = default
-        elif key in ["spring_constant", "inv_ols", "tip_radius", "sampling_rate", "velocity"]:
+        elif key in ["spring_constant", "inv_ols", "tip_radius", "sampling_rate", "velocity", "z_scale_to_m", "force_scale_to_n"]:
             try:
                 validated_metadata[key] = float(validated_metadata[key])
-                if validated_metadata[key] <= 0:
-                    logger.warning(f"Invalid {key} for {curve_name}: {validated_metadata[key]}, using default: {default}")
+                # force_scale_to_n is allowed to be negative — a negative value
+                # means "flip the sign AND scale", which is physically meaningful
+                # for sensors whose voltage convention is inverted relative to
+                # the expected force direction (e.g. the Aurora sensor's raw
+                # voltage is negative-going on approach, but downstream fits
+                # expect a positive-going force curve). Zero is still invalid.
+                if key == "force_scale_to_n":
+                    if validated_metadata[key] == 0:
+                        validated_metadata[key] = default
+                elif validated_metadata[key] <= 0:
+                    # logger.warning(f"Invalid {key} for {curve_name}: {validated_metadata[key]}, using default: {default}")
                     validated_metadata[key] = default
             except (ValueError, TypeError):
-                logger.warning(f"Invalid type for {key} in {curve_name}: {validated_metadata[key]}, using default: {default}")
+                # logger.warning(f"Invalid type for {key} in {curve_name}: {validated_metadata[key]}, using default: {default}")
                 validated_metadata[key] = default
 
     # Optional: Infer sampling_rate from dataset attributes if available
@@ -227,16 +406,22 @@ def validate_and_fill_metadata(metadata: Dict, curve_name: str) -> Dict:
     return validated_metadata
 
 
-import duckdb
-
 def export_from_duckdb_to_hdf5(
     db_path: str,
     output_path: str,
     curve_ids: Optional[List[int]] = None,
-    dataset_path: str = "dataset",
+    dataset_path: str = "curve0/segment0/Force",
     level_names: List[str] = ["curve0", "segment0"],
     metadata_path: str = "tip",
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = {},
+    # Per-curve LinearWindowFit results ({curve_id, k_n_per_m, k_contact,
+    # youngs_modulus_pa}); written as attrs on each curve's own group (distinct
+    # from the dataset-level average in dataset_stats below).
+    kfit_by_curve: Optional[List[Dict[str, Any]]] = None,
+    # Dataset-level (mean ± std) formatted stats — e.g. k_raw_formatted,
+    # k_contact_formatted, stiffness_youngs_modulus_formatted,
+    # youngs_modulus_formatted — written once as attrs on the file's root group.
+    dataset_stats: Optional[Dict[str, Any]] = None,
 ) -> int:
     """
     Export transformed curves from DuckDB to an HDF5 file with specified dataset and metadata paths.
@@ -249,23 +434,61 @@ def export_from_duckdb_to_hdf5(
         level_names: List of group level names (e.g., ["curve0", "segment0"]).
         metadata_path: HDF5 path for storing metadata (e.g., "curve0/segment0/tip").
         metadata: Dictionary of metadata to store as attributes.
+        kfit_by_curve: Per-curve K_raw/K_contact/E rows, keyed onto each curve's group.
+        dataset_stats: Dataset-level averaged K_raw/K_contact/E, keyed onto the root group.
     
     Returns:
         Number of curves exported.
     """
     try:
-        # Connect to DuckDB
+        # Connect to DuckDB using the same local database path as the exporter router.
         with duckdb.connect(db_path) as conn:
+            # Captures available table columns so exports can run against reduced schemas.
+            schema_columns = {row[0] for row in conn.execute("DESCRIBE force_vs_z").fetchall()}
+            # Selects optional instrument column when available, otherwise uses a typed NULL placeholder.
+            instrument_projection = "instrument" if "instrument" in schema_columns else "CAST(NULL AS VARCHAR)"
+            # Selects optional sample column when available, otherwise uses a typed NULL placeholder.
+            sample_projection = "sample" if "sample" in schema_columns else "CAST(NULL AS VARCHAR)"
+            # Selects optional inv_ols column when available, otherwise uses a typed NULL placeholder.
+            inv_ols_projection = "inv_ols" if "inv_ols" in schema_columns else "CAST(NULL AS DOUBLE)"
+            # Selects optional sampling_rate column when available, otherwise uses a typed NULL placeholder.
+            sampling_rate_projection = "sampling_rate" if "sampling_rate" in schema_columns else "CAST(NULL AS DOUBLE)"
+            # Selects optional velocity column when available, otherwise uses a typed NULL placeholder.
+            velocity_projection = "velocity" if "velocity" in schema_columns else "CAST(NULL AS DOUBLE)"
+            # Selects optional no_points column when available, otherwise uses a typed NULL placeholder.
+            no_points_projection = "no_points" if "no_points" in schema_columns else "CAST(NULL AS BIGINT)"
             query = """
-                SELECT curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
+                SELECT curve_id, file_id, date, {instrument_projection} AS instrument, {sample_projection} AS sample, spring_constant, {inv_ols_projection} AS inv_ols,
                        tip_geometry, tip_radius, segment_type, force_values AS deflection,
-                       z_values AS z_sensor, sampling_rate, velocity, no_points
+                       z_values AS z_sensor, {sampling_rate_projection} AS sampling_rate, {velocity_projection} AS velocity, {no_points_projection} AS no_points
                 FROM force_vs_z
-            """
+            """.format(
+                instrument_projection=instrument_projection,
+                sample_projection=sample_projection,
+                inv_ols_projection=inv_ols_projection,
+                sampling_rate_projection=sampling_rate_projection,
+                velocity_projection=velocity_projection,
+                no_points_projection=no_points_projection,
+            )
             params = None
             if curve_ids:
-                query += " WHERE curve_id IN ({})".format(",".join("?" for _ in curve_ids))
-                params = curve_ids
+                # Callers (the frontend, exporter.py) pass curve_ids in the "curveN"
+                # label format (e.g. "curve0", "curve1"), but the DB's curve_id column
+                # stores plain numeric IDs (0, 1, ...) — comparing them as strings
+                # against an integer column silently drops non-matching curves.
+                # Normalize to int here so the WHERE IN clause actually matches.
+                db_curve_ids = []
+                for cid in curve_ids:
+                    cid_str = str(cid)
+                    if cid_str.startswith("curve"):
+                        db_curve_ids.append(int(cid_str[len("curve"):]))
+                    else:
+                        try:
+                            db_curve_ids.append(int(cid_str))
+                        except ValueError:
+                            db_curve_ids.append(cid_str)  # fallback, shouldn't happen
+                query += " WHERE curve_id IN ({})".format(",".join("?" for _ in db_curve_ids))
+                params = db_curve_ids
             
             results = conn.execute(query, params or []).fetchall()
             if not results:
@@ -277,63 +500,153 @@ def export_from_duckdb_to_hdf5(
             error_msg = f"File already exists: {output_path}. Please choose a different filename or remove the existing file manually."
             logger.error(error_msg)
             raise ValueError(error_msg)
-        
+
+        # Per-curve K_raw / K_contact / E, keyed by normalized curve_id ("curve3" and
+        # "3"/3 all resolve to the same key) so it matches regardless of which format
+        # the caller's kfit_by_curve rows or this query's raw curve_id use.
+        def _norm_curve_key(cid):
+            s = str(cid)
+            return s[len("curve"):] if s.startswith("curve") else s
+
+        kfit_lookup = {
+            _norm_curve_key(row.get("curve_id")): row
+            for row in (kfit_by_curve or [])
+            if row.get("curve_id") is not None
+        }
+
         # Open HDF5 file
         with h5py.File(output_path, "w") as f:
-            num_exported = 0
+            exported_curve_names = set()
             for row in results:
                 (curve_id, file_id, date, instrument, sample, spring_constant, inv_ols,
                  tip_geometry, tip_radius, segment_type, deflection, z_sensor,
                  sampling_rate, velocity, no_points) = row
 
-                # Convert curve_id and segment_type to strings
-                curve_id_str = f"curve{curve_id}" if curve_id is not None else f"curve_{id(row)}"
-                segment_type = str(segment_type) if segment_type is not None else "unknown"
-
-                # Create group hierarchy based on level_names
-                group_path = f"{level_names[0]}/{level_names[1]}"  # e.g., curve0/segment0
-                group = f.require_group(group_path)
-
-                # Create datasets at dataset_path (e.g., curve0/segment0/dataset)
-                dataset_group_path = dataset_path  # Use full dataset_path as parent group
-                dataset_group = f.require_group(dataset_group_path)
-                
-                # Store deflection and z_sensor as separate datasets with unique names for each curve
-                dataset_group.create_dataset(
-                    f"deflection_{curve_id_str}",
-                    data=np.array(deflection or [], dtype=np.float64)
+                # Creates deterministic curve group names so each curve keeps its own branch.
+                curve_group_name = f"curve{curve_id}" if curve_id is not None else f"curve_{id(row)}"
+                # Uses this row's own segment_type (approach -> segment0, retract ->
+                # segment1, etc.), not the single static level_names[1] value — the
+                # previous code wrote every row for a curve into the same fixed group,
+                # so a curve's segment1 (retract) silently overwrote its segment0
+                # (approach) data (or vice versa) whenever both existed.
+                canonical_segment = normalize_segment_type(segment_type) or (
+                    level_names[1] if len(level_names) > 1 and level_names[1] else "segment0"
                 )
-                dataset_group.create_dataset(
-                    f"z_sensor_{curve_id_str}",
-                    data=np.array(z_sensor or [], dtype=np.float64)
-                )
+                # Creates/gets the per-curve group where all child objects are attached.
+                curve_group = f.require_group(curve_group_name)
+                # Creates/gets this row's own segment group under the curve.
+                segment_group = curve_group.require_group(canonical_segment)
 
-                # Store metadata at metadata_path (e.g., curve0/segment0/tip)
-                if metadata_path:
-                    metadata_group_path = "/".join(metadata_path.split("/")[:-1])  # Extract parent group path
-                    metadata_name = metadata_path.split("/")[-1]  # Extract metadata group name
-                    if metadata_group_path:
-                        metadata_group = f.require_group(metadata_group_path)
-                    else:
-                        metadata_group = group
-                    metadata_subgroup = metadata_group.require_group(metadata_name)
-                    # Store provided metadata
+                # Prevent crash if the same curve+segment appears multiple times by replacing existing datasets.
+                if "Force" in segment_group:
+                    del segment_group["Force"]
+                # Stores only force values for this curve+segment in the expected dataset name.
+                segment_group.create_dataset("Force", data=np.array(deflection or [], dtype=np.float64))
+
+                # Prevent crash if the same curve+segment appears multiple times by replacing existing datasets.
+                if "Z" in segment_group:
+                    del segment_group["Z"]
+                # Stores only Z values for this curve+segment in the expected dataset name.
+                segment_group.create_dataset("Z", data=np.array(z_sensor or [], dtype=np.float64))
+
+                # Creates/gets the tip group at curve level so it is sibling to segment0/segment1.
+                tip_group = curve_group.require_group("tip")
+                # Stiffness average keys written first so they appear at the top of tip metadata.
+                stiffness_attr_keys = ("k_raw", "k_contact", "youngs_modulus")
+                # Legacy mean/std numeric keys from older clients — never write these.
+                legacy_stiffness_keys = {
+                    "k_raw_mean_n_per_m",
+                    "k_raw_std_n_per_m",
+                    "k_contact_mean_n_per_m",
+                    "k_contact_std_n_per_m",
+                    "youngs_modulus_linfit_mean_pa",
+                    "youngs_modulus_linfit_std_pa",
+                    "youngs_modulus_linfit",
+                }
+                # Defines metadata keys that should not be written into HDF5 tip attributes.
+                blocked_metadata_keys = {"force_scale_to_n", *stiffness_attr_keys, *legacy_stiffness_keys}
+
+                # Guarded so repeated rows for the same curve (segment0 + segment1)
+                # don't rewrite tip attrs / per-curve stiffness multiple times.
+                if "geometry" not in tip_group.attrs:
+                    # ---- Top of tip metadata: dataset-level average stiffness strings ----
+                    # Prefer dataset_stats (authoritative mean±std strings); fall back to
+                    # metadata when the client embedded the same single-string fields.
+                    for key in stiffness_attr_keys:
+                        avg_value = None
+                        if dataset_stats:
+                            avg_value = dataset_stats.get(key)
+                        if not avg_value and metadata:
+                            avg_value = metadata.get(key)
+                        if avg_value:
+                            tip_group.attrs[key] = str(avg_value)
+
+                    # ---- Middle: remaining tip / instrument metadata ----
                     for key, value in metadata.items():
-                        metadata_subgroup.attrs[key] = value
-                    # Store additional row-specific metadata
-                    metadata_subgroup.attrs["file_id"] = file_id or ""
-                    metadata_subgroup.attrs["date"] = date or ""
-                    metadata_subgroup.attrs["instrument"] = instrument or ""
-                    metadata_subgroup.attrs["sample"] = sample or ""
-                    metadata_subgroup.attrs["spring_constant"] = float(spring_constant or 0.1)
-                    metadata_subgroup.attrs["inv_ols"] = float(inv_ols or 1.0)
-                    metadata_subgroup.attrs["tip_geometry"] = tip_geometry or "unknown"
-                    metadata_subgroup.attrs["tip_radius"] = float(tip_radius or 1e-5)
-                    metadata_subgroup.attrs["sampling_rate"] = float(sampling_rate or 1e5)
-                    metadata_subgroup.attrs["velocity"] = float(velocity or 1e-6)
-                    metadata_subgroup.attrs["no_points"] = int(no_points or 0)
+                        # Skips internal calibration keys and stiffness keys already written above.
+                        if key in blocked_metadata_keys:
+                            continue
+                        tip_group.attrs[key] = value
+                    # Stores the tip geometry shape as a string attribute.
+                    tip_group.attrs["geometry"] = str((metadata.get("tip_geometry") or tip_geometry or "sphere"))
+                    # Stores the fixed parameter label expected by consumers.
+                    tip_group.attrs["parameter"] = "Radius"
+                    # Stores the fixed unit label expected by consumers (tip radius is always exported in mm).
+                    tip_group.attrs["unit"] = "mm"
+                    # Tip radius from the request payload is already in mm (matches the export dialog UI).
+                    # Fall back to the DB's SI (meters) tip_radius, converted to mm, when the payload omits it.
+                    payload_tip_radius_mm = metadata.get("tip_radius")
+                    if payload_tip_radius_mm in (None, "", 0):
+                        payload_tip_radius_mm = (float(tip_radius) if tip_radius else 1e-5) * 1e3
+                    # Stores the tip radius value (mm) used by consumers.
+                    tip_group.attrs["value"] = float(payload_tip_radius_mm)
 
-                num_exported += 1
+                    # ---- Bottom of tip metadata: this curve's own K_raw / K_contact / E ----
+                    # Prefixed with "curve_" so they don't overwrite the dataset averages
+                    # written at the top; values are strings with units (like CSV), not floats.
+                    curve_kfit = kfit_lookup.get(_norm_curve_key(curve_id))
+                    if curve_kfit:
+                        k_raw_val = curve_kfit.get("k_n_per_m")
+                        if k_raw_val is not None:
+                            tip_group.attrs["curve_k_raw"] = f"{float(k_raw_val):.6g} N/m"
+                        k_contact_val = curve_kfit.get("k_contact")
+                        if k_contact_val is not None:
+                            tip_group.attrs["curve_k_contact"] = f"{float(k_contact_val):.6g} N/m"
+                        e_val = curve_kfit.get("youngs_modulus_pa")
+                        if e_val is not None:
+                            tip_group.attrs["curve_youngs_modulus"] = f"{float(e_val):.6g} Pa"
+                        # Also mirror onto the curve group under the plain CSV-style names.
+                        if k_raw_val is not None:
+                            curve_group.attrs["k_raw"] = f"{float(k_raw_val):.6g} N/m"
+                        if k_contact_val is not None:
+                            curve_group.attrs["k_contact"] = f"{float(k_contact_val):.6g} N/m"
+                        if e_val is not None:
+                            curve_group.attrs["youngs_modulus"] = f"{float(e_val):.6g} Pa"
+
+                exported_curve_names.add(curve_group_name)
+
+            # ---- Dataset-level metadata block (root group attrs), written once ----
+            # Mirrors the CSV exporter's single dataset-level metadata block: the
+            # experiment-wide fields plus averaged K_raw/K_contact/E strings so they
+            # are visible immediately on opening the file.
+            # Writes average stiffness strings first so they appear at the top of root attrs.
+            if dataset_stats:
+                for key in ("k_raw", "k_contact", "youngs_modulus"):
+                    value = dataset_stats.get(key)
+                    if value:
+                        f.attrs[key] = str(value)
+            for key, value in (metadata or {}).items():
+                # Skips force_scale and stiffness keys already written (or superseded) above.
+                if key in {"force_scale_to_n", "k_raw", "k_contact", "youngs_modulus"}:
+                    continue
+                if key.endswith("_mean_n_per_m") or key.endswith("_std_n_per_m"):
+                    continue
+                if key.endswith("_mean_pa") or key.endswith("_std_pa"):
+                    continue
+                if value is not None:
+                    f.attrs[key] = value
+
+            num_exported = len(exported_curve_names)
 
         logger.info(f"Exported {num_exported} curves from DuckDB to HDF5 file at {output_path}")
         return num_exported

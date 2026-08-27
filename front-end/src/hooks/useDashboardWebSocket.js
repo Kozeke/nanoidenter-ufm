@@ -4,10 +4,34 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useDashboardStore } from "../state/useDashboardStore";
 import { useAuthStore } from "../state/useAuthStore";
 import { normalizeForceStats, normalizeElasticityStats  } from "../utils/elasticityMapper"
+
+// Formats mean ± std in plain decimal notation, sized to the std's precision.
+// Unlike the backend's format_stat() (tuned for values spanning many orders of
+// magnitude, e.g. Young's modulus in Pa), this stays readable for human-scale
+// values like K (~O(1) N/m): "1.2530 ± 0.0050 N/m" instead of "(1258 ± 5) × 10^-3".
+const formatMeanStd = (mean, std, unit) => {
+  if (!Number.isFinite(mean)) return "—";
+  if (!Number.isFinite(std) || std <= 0) {
+    return `${mean.toPrecision(4)} ${unit}`;
+  }
+  // Show one extra digit of precision beyond where std first becomes significant.
+  const decimals = Math.max(0, -Math.floor(Math.log10(std)) + 1);
+  return `${mean.toFixed(decimals)} ± ${std.toFixed(decimals)} ${unit}`;
+};
+
 // Exposes dashboard curve data and WebSocket helpers to the presentation layer.
 export const useDashboardWebSocket = () => {
   // Stores Force–Z curve batches received from the backend.
   const [forceData, setForceData] = useState([]);
+  // Mirrors forceData synchronously so the "complete" handler (see onmessage
+  // below) can read the fully-merged curve list without depending on the
+  // `forceData` closure variable, which is stale inside onmessage since
+  // initializeWebSocket isn't re-created on every forceData change.
+  const forceDataRef = useRef([]);
+  // Real ("curve{N}") ids that have been delivered at least once for the
+  // current dataset. Lets the selection sync distinguish "the user unchecked
+  // this" from "this curve is new" — see syncCurveSelectionsOnLoadComplete.
+  const knownCurveIdsRef = useRef(new Set());
   // Stores Force–Indentation curve batches received from the backend.
   const [indentationData, setIndentationData] = useState({
     curves_cp: [],
@@ -72,54 +96,131 @@ export const useDashboardWebSocket = () => {
     f_models: null,
     e_models: null,
   });
-  // Tracks the previous number of curves to detect request changes.
-  const prevNumCurvesRef = useRef(10);
+  // Tracks the previous curve range to detect request changes.
+  const prevCurveRangeRef = useRef({ from: 0, to: 10 });
+  // Tracks the previous segment selection to detect request changes.
+  const prevSegmentTypeRef = useRef("segment0");
   // Flags when the caller explicitly wants to re-request curves.
   const [forceRequest, setForceRequest] = useState(false);
+  // Ref mirror of forceRequest so sendCurveRequest always reads the current value
+  // even when called from a stale WebSocket onopen closure.
+  const forceRequestRef = useRef(false);
   // Tracks whether get_metadata operation is in progress
   const metadataInProgressRef = useRef(false);
   // Tracks whether compute_stats operation is in progress
   const statsInProgressRef = useRef(false);
-  // Tracks the last status we saw to determine which operation a "complete" belongs to
-  const lastStatusRef = useRef(null);
 
   // Exposes the centralized dashboard store for shared state access.
   const dashboardStore = useDashboardStore();
-  // Provides the collection of active filters shared with the backend.
-  const { filters } = dashboardStore;
-  // Provides elasticity smoothing parameters requested by the backend.
-  const { elasticityParams } = dashboardStore;
-  // Provides elastic model parameters requested by the backend.
-  const { elasticModelParams } = dashboardStore;
-  // Provides force model parameters requested by the backend.
-  const { forceModelParams } = dashboardStore;
-  // Provides the total number of curves requested for rendering.
-  const { numCurves } = dashboardStore;
+  // Provides the start index of the curve range requested for rendering.
+  // Still subscribed here so the return value stays reactive for consumers.
+  const { curveFrom } = dashboardStore;
+  // Provides the end index of the curve range requested for rendering.
+  const { curveTo } = dashboardStore;
   // Provides the identifier of the currently selected curve.
   const { selectedCurveId } = dashboardStore;
-  // Reports whether zero-force correction should be applied server-side.
-  const { setZeroForce } = dashboardStore;
   // Exposes the multi-loading indicator dispatcher.
   const { setLoadingMulti, loadingMulti } = dashboardStore;
   // Exposes the flag that toggles curve-level loading indicators.
   const { setIsLoadingCurves, isLoadingCurves } = dashboardStore;
   // Exposes the setter for maintaining highlighted curve identifiers.
   const { setSelectedCurveIds } = dashboardStore;
+  // Exposes the setter for maintaining the export curve selection.
+  const { setSelectedExportCurveIds } = dashboardStore;
+  // Exposes the setter for the flag that says whether Display/Export
+  // selections should be defaulted to "all curves" once the in-flight load
+  // completes. The current value is always read fresh via
+  // useDashboardStore.getState() inside onmessage to avoid stale closures.
+  const { setNeedsCurveIdInit } = dashboardStore;
   // Updates connection status used for UX.
   const { setConnectionStatus, setLastSocketError, connectionStatus, lastSocketError } = dashboardStore;
-  // Provides setters for selected curve ID and number of curves.
-  const { setSelectedCurveId, setNumCurves } = dashboardStore;
+  // Provides setters for selected curve ID and curve range.
+  const { setSelectedCurveId, setCurveFrom, setCurveTo } = dashboardStore;
 
-  // Simplifies access to regular filter groups.
-  const regularFilters = filters.regular;
-  // Simplifies access to contact point filter groups.
-  const cpFilters = filters.cp_filters;
-  // Simplifies access to force model filter groups.
-  const forceModels = filters.f_models;
-  // Simplifies access to elasticity model filter groups.
-  const elasticityModels = filters.e_models;
+  // Builds a websocket-safe force-model payload that omits Hertz tip_radius overrides.
+  const buildSocketForceModels = useCallback((rawForceModels) => {
+    // Stores a shallow copy so payload sanitation never mutates shared store state.
+    const sanitizedForceModels = { ...(rawForceModels || {}) };
+    // Stores Hertz parameters only when Hertz is selected in the outgoing payload.
+    const hertzModelParams = sanitizedForceModels.hertz;
+
+    if (hertzModelParams && typeof hertzModelParams === "object") {
+      // Excludes tip_radius so backend runtime metadata remains the single source of truth.
+      const { tip_radius, ...hertzParamsWithoutTipRadius } = hertzModelParams;
+      sanitizedForceModels.hertz = hertzParamsWithoutTipRadius;
+    }
+
+    return sanitizedForceModels;
+  }, []);
+
+  // Reconciles the Display/Export curve selections once a curve-data load has
+  // fully finished (all "batch" messages merged). Doing this on the terminal
+  // "complete" message rather than on each incremental batch is essential:
+  // forceData arrives in chunks, so deriving "all curves" from a partial
+  // update would both miss curves that hadn't streamed in yet and clobber
+  // curves the user had deliberately unchecked.
+  //
+  // Only real "curve{N}" ids ever enter the selections. Synthetic diagnostic
+  // overlays that filters add to the same curve list ("0_linfit",
+  // "avg_linfit", "0_hertz", …) are deliberately excluded: they aren't rows in
+  // the curve picker, the export endpoint rejects them, and their on-screen
+  // visibility is derived from the real curve they annotate (see
+  // ForceDisplacementDataSet.jsx).
+  const syncCurveSelectionsOnLoadComplete = useCallback(() => {
+    const finalCurveIds = forceDataRef.current
+      .map((c) => c.curve_id)
+      .filter((id) => /^curve\d+$/.test(String(id)));
+
+    if (finalCurveIds.length === 0) {
+      // Nothing loaded (empty/failed batch) — leave the selections untouched
+      // rather than wiping them.
+      return;
+    }
+
+    const finalCurveIdsSet = new Set(finalCurveIds);
+
+    if (useDashboardStore.getState().needsCurveIdInit) {
+      // Freshly loaded dataset (flagged by Dashboard.jsx's handleProcessSuccess):
+      // default both selections to every curve.
+      setNeedsCurveIdInit(false);
+      knownCurveIdsRef.current = finalCurveIdsSet;
+      setSelectedCurveIds(finalCurveIds);
+      setSelectedExportCurveIds(finalCurveIds);
+      return;
+    }
+
+    // Otherwise: "Update Curves", or a range/segment/filter change on an
+    // already-loaded dataset. Two things must hold at once here:
+    //   • a curve the user explicitly unchecked stays unchecked, and
+    //   • a curve fetched for the first time (e.g. the range grew from 0–5 to
+    //     0–10) arrives checked rather than silently hidden.
+    // Telling the two apart requires knowing which ids have been seen before:
+    // an id missing from the selection that was already known was deliberately
+    // unchecked, whereas an id missing and previously unknown is simply new.
+    const newlyArrivedIds = new Set(
+      finalCurveIds.filter((id) => !knownCurveIdsRef.current.has(id))
+    );
+    knownCurveIdsRef.current = finalCurveIdsSet;
+
+    // Rebuilds a selection: drops ids that no longer exist, keeps existing
+    // choices, adds newly-arrived curves — all in canonical curve order.
+    const reconcile = (prev) => {
+      const prevSet = new Set(prev);
+      const next = finalCurveIds.filter(
+        (id) => prevSet.has(id) || newlyArrivedIds.has(id)
+      );
+      const unchanged =
+        next.length === prev.length && next.every((id, i) => id === prev[i]);
+      return unchanged ? prev : next;
+    };
+    setSelectedCurveIds(reconcile);
+    setSelectedExportCurveIds(reconcile);
+  }, [setSelectedCurveIds, setSelectedExportCurveIds, setNeedsCurveIdInit]);
 
   // Sends a curve metadata request through the active WebSocket channel.
+  // All filter/param values are read directly from the Zustand store snapshot so
+  // that calls originating from stale onopen closures (e.g. after resetAndReload)
+  // always use the freshest state – including resets applied just before the call.
   const sendCurveRequest = useCallback(() => {
     console.log("sendCurveReq")
     // Avoid sending requests when the socket is unavailable.
@@ -127,6 +228,24 @@ export const useDashboardWebSocket = () => {
       return;
     }
     console.log("sendCurveReq2")
+
+    // Read all values fresh from the store so stale closures (e.g. socket.onopen
+    // captured before the latest React render) never send outdated filter state.
+    const liveState = useDashboardStore.getState();
+    const liveFilters = liveState.filters;
+    const liveRegularFilters = liveFilters.regular;
+    const liveCpFilters = liveFilters.cp_filters;
+    const liveForceModels = liveFilters.f_models;
+    const liveElasticityModels = liveFilters.e_models;
+    const liveElasticityParams = liveState.elasticityParams;
+    const liveElasticModelParams = liveState.elasticModelParams;
+    const liveForceModelParams = liveState.forceModelParams;
+    const liveSetZeroForce = liveState.setZeroForce;
+    const liveSelectedCurveId = liveState.selectedCurveId;
+    const liveCurveFrom = liveState.curveFrom;
+    const liveCurveTo = liveState.curveTo;
+    const liveDatasetId = liveState.datasetId;
+    const liveSegmentType = liveState.selectedSegmentType || "segment0";
 
     // Mark metadata operation as in progress
     metadataInProgressRef.current = true;
@@ -136,13 +255,23 @@ export const useDashboardWebSocket = () => {
     // Flag curve-specific loading while waiting for batches.
     setIsLoadingCurves(true);
 
-    // Prevent infinite loading states by timing out stale requests.
+    // Safety-net timeout: clears any stale loading state if neither "complete"
+    // message arrives within 5 minutes. Intentionally generous so that a slow
+    // compute_stats request (> 1 min) is never cut short by this timer.
+    if (socketRef.current.loadingTimeout) {
+      clearTimeout(socketRef.current.loadingTimeout);
+    }
     const loadingTimeout = setTimeout(() => {
+      metadataInProgressRef.current = false;
+      statsInProgressRef.current = false;
       setLoadingMulti({ curves: false });
       setIsLoadingCurves(false);
-    }, 30000);
+    }, 300000); // 5 minutes
     socketRef.current.loadingTimeout = loadingTimeout;
     console.log("sendCurveReq3")
+
+    // Stores force-model filters after websocket sanitation (e.g., Hertz tip_radius removal).
+    const socketSafeForceModels = buildSocketForceModels(liveForceModels);
 
     // Compares previous and current filter snapshots for change detection.
     const areFiltersEqual = (prev, current) => {
@@ -161,15 +290,26 @@ export const useDashboardWebSocket = () => {
         e_models: prevFiltersRef.current.e_models,
       },
       {
-        regular: regularFilters,
-        cp: cpFilters,
-        f_models: forceModels,
-        e_models: elasticityModels,
+        regular: liveRegularFilters,
+        cp: liveCpFilters,
+        f_models: socketSafeForceModels,
+        e_models: liveElasticityModels,
       }
     );
 
-    // Determines whether the requested curve count changed.
-    const numCurvesChanged = prevNumCurvesRef.current !== numCurves;
+    // Determines whether the requested curve range changed.
+    const numCurvesChanged =
+      prevCurveRangeRef.current.from !== liveCurveFrom ||
+      prevCurveRangeRef.current.to !== liveCurveTo;
+
+    // Determines whether the selected segment changed.
+    const segmentTypeChanged = prevSegmentTypeRef.current !== liveSegmentType;
+
+    if (segmentTypeChanged) {
+      console.log(
+        `Segment changed: ${prevSegmentTypeRef.current} -> ${liveSegmentType}`
+      );
+    }
 
     // Resets chart domains to trigger automatic scaling.
     const resetState = {
@@ -179,8 +319,14 @@ export const useDashboardWebSocket = () => {
       yMax: null,
     };
 
-    if (filtersChanged || numCurvesChanged || forceRequest) {
+    // forceRequestRef.current is always up-to-date even inside a stale closure,
+    // unlike forceRequest state which may be stale when called from socket.onopen.
+    const shouldReset = filtersChanged || numCurvesChanged || segmentTypeChanged || forceRequest || forceRequestRef.current;
+    if (shouldReset) {
+      // Clear the ref immediately so subsequent calls don't re-clear unnecessarily.
+      forceRequestRef.current = false;
       setForceData([]);
+      forceDataRef.current = [];
       setIndentationData({ curves_cp: [], curves_fparam: [] });
       setElspectraData({ curves: [], curves_elasticity_param: [] });
       setDomainRange(resetState);
@@ -189,48 +335,45 @@ export const useDashboardWebSocket = () => {
     }
 
     // Builds the payload describing which curves and metadata to retrieve.
+    console.log("sendCurveRequest - datasetId from store:", liveDatasetId);
     const requestData = {
       action: "get_metadata",
-      num_curves: numCurves,
+      curve_from: liveCurveFrom,
+      curve_to: liveCurveTo,
+      dataset_id: liveDatasetId,
+      segment_type: liveSegmentType,
       filters: {
-        regular: regularFilters,
-        cp_filters: cpFilters,
-        f_models: forceModels,
-        e_models: elasticityModels,
+        regular: liveRegularFilters,
+        cp_filters: liveCpFilters,
+        f_models: socketSafeForceModels,
+        e_models: liveElasticityModels,
       },
-      elasticity_params: elasticityParams,
-      elastic_model_params: elasticModelParams,
-      force_model_params: forceModelParams,
-      set_zero_force: setZeroForce,
-      curve_id: selectedCurveId,
+      elasticity_params: liveElasticityParams,
+      elastic_model_params: liveElasticModelParams,
+      force_model_params: liveForceModelParams,
+      set_zero_force: liveSetZeroForce,
+      curve_id: liveSelectedCurveId,
     };
 
     // Record the latest filters so future requests detect changes.
     prevFiltersRef.current = {
-      regular: regularFilters,
-      cp: cpFilters,
-      f_models: forceModels,
-      e_models: elasticityModels,
+      regular: liveRegularFilters,
+      cp: liveCpFilters,
+      f_models: socketSafeForceModels,
+      e_models: liveElasticityModels,
     };
-    // Record the latest curve count so future requests detect changes.
-    prevNumCurvesRef.current = numCurves;
+    // Record the latest curve range so future requests detect changes.
+    prevCurveRangeRef.current = { from: liveCurveFrom, to: liveCurveTo };
+    prevSegmentTypeRef.current = liveSegmentType;
     // Clear the manual refresh flag now that the request is enqueued.
     setForceRequest(false);
 
     socketRef.current.send(JSON.stringify(requestData));
   }, [
-    regularFilters,
-    cpFilters,
-    forceModels,
-    elasticityModels,
-    numCurves,
-    elasticityParams,
-    elasticModelParams,
-    forceModelParams,
-    setZeroForce,
-    selectedCurveId,
+    forceRequest,
     setLoadingMulti,
     setIsLoadingCurves,
+    buildSocketForceModels,
   ]);
   
   
@@ -245,35 +388,76 @@ export const useDashboardWebSocket = () => {
     // Ensure loading is shown if stats computation starts
     setLoadingMulti({ curves: true });
     setIsLoadingCurves(true);
-  
+
+    // Reset the safety-net timeout so it starts counting from NOW, giving the
+    // stats operation its own full 5-minute window on top of get_metadata.
+    if (socketRef.current.loadingTimeout) {
+      clearTimeout(socketRef.current.loadingTimeout);
+    }
+    socketRef.current.loadingTimeout = setTimeout(() => {
+      metadataInProgressRef.current = false;
+      statsInProgressRef.current = false;
+      setLoadingMulti({ curves: false });
+      setIsLoadingCurves(false);
+    }, 300000); // 5 minutes from when stats request was sent
+
+    // Read all values fresh from the store snapshot so this function is never
+    // affected by stale closure state (mirrors the pattern used in sendCurveRequest).
+    const liveState = useDashboardStore.getState();
+    const liveFilters = liveState.filters;
+    const liveDatasetId = liveState.datasetId;
+    // Stores force-model filters after websocket sanitation (e.g., Hertz tip_radius removal).
+    const socketSafeForceModels = buildSocketForceModels(liveFilters.f_models);
+    console.log("sendModelStatsRequest - datasetId from store:", liveDatasetId);
+    // Real curve IDs only ("curve0", "curve12", …) — skip synthetic overlays
+    // like "0_linfit" / "avg_linfit" that LinearWindowFit adds for display.
+    // When the Curve ID field is set (single-curve mode), prefer that value over
+    // selectedCurveIds so compute_stats cannot keep a stale multi-select list
+    // (e.g. ["curve1"]) while get_metadata already sent the updated curve_id.
+    const liveSelectedCurveId = String(liveState.selectedCurveId ?? "").trim();
+    // Normalizes bare "2" / "curve2" into the "curve{N}" form compute_stats expects.
+    const singleCurveLabel = (() => {
+      if (!liveSelectedCurveId) return null;
+      if (/^curve\d+$/i.test(liveSelectedCurveId)) {
+        return `curve${liveSelectedCurveId.slice(5)}`;
+      }
+      if (/^\d+$/.test(liveSelectedCurveId)) {
+        return `curve${liveSelectedCurveId}`;
+      }
+      return null;
+    })();
+    const chosenCurveIds = singleCurveLabel
+      ? [singleCurveLabel]
+      : (liveState.selectedCurveIds || []).filter((id) =>
+          /^curve\d+$/.test(String(id))
+        );
     const requestData = {
       action: "compute_stats",
       compute_scope: "model_stats",
-      num_curves: numCurves,
+      curve_from: liveState.curveFrom,
+      curve_to: liveState.curveTo,
+      dataset_id: liveDatasetId,
+      segment_type: liveState.selectedSegmentType || "segment0",
       filters: {
-        regular: regularFilters,
-        cp_filters: cpFilters,
-        f_models: forceModels,
-        e_models: elasticityModels,
+        regular: liveFilters.regular,
+        cp_filters: liveFilters.cp_filters,
+        f_models: socketSafeForceModels,
+        e_models: liveFilters.e_models,
       },
-      elasticity_params: elasticityParams,
-      elastic_model_params: elasticModelParams,
-      force_model_params: forceModelParams,
-      set_zero_force: setZeroForce,
-      // IMPORTANT: DO NOT send curve_id
+      elasticity_params: liveState.elasticityParams,
+      elastic_model_params: liveState.elasticModelParams,
+      force_model_params: liveState.forceModelParams,
+      set_zero_force: liveState.setZeroForce,
+      // Scopes K_raw / K_contact / E (and other model_stats) to the curves the
+      // user currently has chosen — Curve ID field when set, else multi-select.
+      curve_ids: chosenCurveIds,
     };
   
     socketRef.current.send(JSON.stringify(requestData));
   }, [
-    numCurves,
-    regularFilters,
-    cpFilters,
-    forceModels,
-    elasticityModels,
-    elasticityParams,
-    elasticModelParams,
-    forceModelParams,
-    setZeroForce,
+    setLoadingMulti,
+    setIsLoadingCurves,
+    buildSocketForceModels,
   ]);
   // Removed automatic model stats request - now triggered only by "Update Curves" button
   // Initializes the WebSocket connection and wires up lifecycle handlers.
@@ -297,7 +481,10 @@ export const useDashboardWebSocket = () => {
       wsBase = backend.replace(/^http/, "ws");
     }
 
-    const wsUrl = `${wsBase}/ws/data`;
+    // Include JWT token in WebSocket URL query parameter
+    const wsUrl = token 
+      ? `${wsBase}/ws/data?token=${encodeURIComponent(token)}`
+      : `${wsBase}/ws/data`;
     console.log("Connecting WebSocket to:", wsUrl);
 
     // Update status before attempting the connection
@@ -323,13 +510,7 @@ export const useDashboardWebSocket = () => {
       // Parses the incoming message payload for downstream handling.
       const response = JSON.parse(event.data);
 
-      // Track the previous status before processing current one
-      // This helps us determine which operation a "complete" belongs to
-      const previousStatus = lastStatusRef.current;
-      
       if (response.status === "batch" && response.data) {
-        // Track that we're receiving batch data (part of get_metadata operation)
-        lastStatusRef.current = "batch";
         const {
           graphForcevsZ,
           graphForceIndentation,
@@ -360,11 +541,11 @@ export const useDashboardWebSocket = () => {
             : graphElspectra) || { curves: [], domain: {} };
 
         setForceData((prevData) => {
-          if (graphForcevsZSingle?.curves?.length > 0) {
-            return forceGraph.curves || [];
-          }
-          const newCurves = forceGraph.curves || [];
-          return [...prevData, ...newCurves];
+          const next = graphForcevsZSingle?.curves?.length > 0
+            ? (forceGraph.curves || [])
+            : [...prevData, ...(forceGraph.curves || [])];
+          forceDataRef.current = next;
+          return next;
         });
 
         setIndentationData((prevData) => {
@@ -486,26 +667,74 @@ export const useDashboardWebSocket = () => {
         }
       }
       if (response.status === "model_stats" && response.data.stats) {
-        // Track that we're receiving model_stats (part of compute_stats operation)
-        lastStatusRef.current = "model_stats";
-        
         const liveFilters = useDashboardStore.getState().filters;
         // const liveElasticityModels = liveFilters.e_models;
         const stats = response.data.stats
+        console.log("MODEL_STATS received:", stats);
         console.log("filters (LIVE)", liveFilters);
         // console.log("elasticityModel (LIVE)", liveElasticityModels);
         const normalizedForceStats = normalizeForceStats(stats, liveFilters);
         const normalizedElasticStats = normalizeElasticityStats(stats, liveFilters);
-        
+
         useDashboardStore.getState().setModelStats("force", normalizedForceStats);
         useDashboardStore.getState().setModelStats("elasticity", normalizedElasticStats);
-        
+
+        // K-stiffness comes back as a single format_stat() dict {mean, std, formatted}.
+        // format_stat()'s "formatted" string is tuned for values spanning many orders
+        // of magnitude (e.g. Young's modulus in Pa) and switches to "(1258 ± 5) × 10^-3"
+        // style notation whenever std's exponent is small — which is exactly the case
+        // for K (~O(1) N/m), producing an unreadable result. So K gets its own plain
+        // decimal formatting from the raw mean/std instead of using .formatted.
+        // K-stiffness, compliance-corrected k_contact, and Young's modulus E
+        // all come from the LinearWindowFit pipeline. k_raw is always present;
+        // k_contact and E only appear when the dataset's spring_constant
+        // (k_spring) is large enough for the compliance correction to be valid.
+        // Each entry keeps a stable "key" plus the raw (unformatted) mean/std alongside
+        // the display-ready "value" string, so consumers like the export dialog and the
+        // Save Experiment button can persist/show the numeric values, not just the label.
+        // Values are aggregated only over the chosen curve_ids sent with the request
+        // (one or many); stats.kfit_by_curve holds the per-id breakdown.
+        const stiffnessStats = stats.k_stiffness
+          ? [
+              {
+                key: "k_raw",
+                label: "K_raw =",
+                value: formatMeanStd(stats.k_stiffness.mean, stats.k_stiffness.std, "N/m"),
+                mean: stats.k_stiffness.mean,
+                std: stats.k_stiffness.std,
+              },
+              ...(stats.k_contact
+                ? [{
+                    key: "k_contact",
+                    label: "K_contact =",
+                    value: formatMeanStd(stats.k_contact.mean, stats.k_contact.std, "N/m"),
+                    mean: stats.k_contact.mean,
+                    std: stats.k_contact.std,
+                  }]
+                : []),
+              ...(stats.youngs_modulus
+                ? [{
+                    key: "youngs_modulus",
+                    label: "E =",
+                    value: formatMeanStd(stats.youngs_modulus.mean, stats.youngs_modulus.std, "Pa"),
+                    mean: stats.youngs_modulus.mean,
+                    std: stats.youngs_modulus.std,
+                  }]
+                : []),
+            ]
+          : [];
+        useDashboardStore.getState().setModelStats("stiffness", stiffnessStats);
+        // Persist per-curve LinearWindowFit rows keyed by curve_id for the sidebar /
+        // export consumers that need the chosen-id breakdown, not only mean±std.
+        useDashboardStore.getState().setModelStats(
+          "stiffnessByCurve",
+          Array.isArray(stats.kfit_by_curve) ? stats.kfit_by_curve : []
+        );
+
         // Note: Don't mark stats as complete here - wait for "complete" status
       }
       
       if (response.status === "metadata") {
-        // Track that we're receiving metadata (part of get_metadata operation)
-        lastStatusRef.current = "metadata";
         setMetadataObject(response.metadata);
       }    
       console.log("sendCurveReq5")
@@ -555,32 +784,27 @@ export const useDashboardWebSocket = () => {
       console.log("sendCurveReq8")
 
       if (response.status === "complete") {
-        // Determine which operation completed based on the previous status we saw
-        // If the previous status was "model_stats", this complete is for compute_stats
-        // If the previous status was "batch" or "metadata", this complete is for get_metadata
-        if (previousStatus === "model_stats") {
-          // This complete is for compute_stats
+        // Use the action field sent by the backend to identify which operation
+        // finished. This is reliable regardless of message ordering.
+        if (response.action === "compute_stats") {
           statsInProgressRef.current = false;
           console.log("compute_stats completed");
-        } else if (previousStatus === "batch" || previousStatus === "metadata") {
-          // This complete is for get_metadata
+        } else if (response.action === "get_metadata") {
           metadataInProgressRef.current = false;
           console.log("get_metadata completed");
+          syncCurveSelectionsOnLoadComplete();
         } else {
-          // Fallback: if we're not sure, mark both as potentially done
-          // This handles edge cases where status tracking might be off
-          if (metadataInProgressRef.current) {
-            metadataInProgressRef.current = false;
-          }
-          if (statsInProgressRef.current) {
-            statsInProgressRef.current = false;
-          }
+          // Fallback for any other (or missing) action: mark both done to avoid
+          // an infinite loading state. Curve data may have streamed in under
+          // this branch too (e.g. an older backend that omits "action"), so run
+          // the same selection sync rather than leaving the picker unchecked.
+          metadataInProgressRef.current = false;
+          statsInProgressRef.current = false;
+          console.log("unknown action completed – clearing all loading flags");
+          syncCurveSelectionsOnLoadComplete();
         }
-        
-        // Reset last status after processing complete
-        lastStatusRef.current = null;
-        
-        // Only stop loading if BOTH operations are complete
+
+        // Only hide the spinner once ALL in-flight operations have reported done.
         if (!metadataInProgressRef.current && !statsInProgressRef.current) {
           console.log("All operations completed, hiding spinner");
           setLoadingMulti({ curves: false });
@@ -592,7 +816,7 @@ export const useDashboardWebSocket = () => {
         } else {
           console.log("Operations still in progress:", {
             metadata: metadataInProgressRef.current,
-            stats: statsInProgressRef.current
+            stats: statsInProgressRef.current,
           });
         }
       }
@@ -619,6 +843,10 @@ export const useDashboardWebSocket = () => {
     };
 
     socket.onclose = (event) => {
+      // Ignore close events from superseded sockets after resetAndReload().
+      if (socketRef.current !== socket) {
+        return;
+      }
       console.warn("WebSocket connection closed", event);
       setConnectionStatus("disconnected");
       // Reset both operation flags
@@ -636,6 +864,10 @@ export const useDashboardWebSocket = () => {
     console.log("sendCurveReq9")
 
     socket.onerror = (event) => {
+      // Ignore errors from superseded sockets after resetAndReload().
+      if (socketRef.current !== socket) {
+        return;
+      }
       console.error("WebSocket error:", event);
       setConnectionStatus("error");
       setLastSocketError("WebSocket error");
@@ -657,6 +889,10 @@ export const useDashboardWebSocket = () => {
     setConnectionStatus,
     setLastSocketError,
     setSelectedCurveIds,
+    setSelectedExportCurveIds,
+    setNeedsCurveIdInit,
+    syncCurveSelectionsOnLoadComplete,
+    token,
   ]);
 
   // Auto-initializes the WebSocket connection and tears it down on unmount.
@@ -681,13 +917,16 @@ export const useDashboardWebSocket = () => {
     };
     // socketRef.current = null;
     // We only want this to run once on mount/unmount,
-    // not every time initializeWebSocket (and thus numCurves) changes.
+    // not every time initializeWebSocket (and thus curveFrom/curveTo) changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated, token]);
 
   // Forces a fresh WebSocket connection when the caller requests a hard reload.
   const resetAndReload = useCallback(() => {
     console.log("resetAndReload")
+    // Set the ref synchronously so the new socket's onopen closure always sees
+    // the reset signal, regardless of React's async state batching.
+    forceRequestRef.current = true;
     setForceRequest(true);
     initialRequestSent.current = false;
     initializeWebSocket();
@@ -703,8 +942,10 @@ export const useDashboardWebSocket = () => {
     lastSocketError,
     selectedCurveId,
     setSelectedCurveId,
-    numCurves,
-    setNumCurves,
+    curveFrom,
+    curveTo,
+    setCurveFrom,
+    setCurveTo,
     domainRange,
     indentationDomain,
     elspectraDomain,

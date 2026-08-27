@@ -21,6 +21,12 @@ back/__pycache__/db.cpython-310.pyc
 back/__pycache__/main.cpython-310.pyc
 back/data/experiment.db
 
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
 # Broad patterns to cover new generated artifacts
 __pycache__/
 *.py[cod]

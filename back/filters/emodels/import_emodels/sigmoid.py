@@ -14,40 +14,39 @@ class SigmoidModel(EmodelBase):
         self.add_parameter("Lower", "int", "Lower Percentile threshold", 10, options={"min": 5, "max": 50})
 
     def theory(self, x, *parameters):
-        """
-        Sigmoidal model: EL + A / (1 + exp(-4 * (x - T) / k)), where A = EH - EL
-        :param x: Input array (e.g., indentation depth)
-        :param parameters: [EH, EL, T, k] (Pa, Pa, nm, Pa/nm)
-        :return: Theoretical y-values
-        """
         EH, EL, T, k = parameters
         A = EH - EL
         return EL + A / (1 + np.exp(-4 * (x - T) / k))
 
     def calculate(self, x, y):
-        """
-        Fit the sigmoidal model to the data.
-        :param x: Input array (e.g., indentation depth, DOUBLE[])
-        :param y: Input array (e.g., force values, DOUBLE[])
-        :return: Fitted parameters [EH, EL, T, k] or None if fitting fails
-        """
-        print("Sigmoid calculate called with x length:", len(x), "y length:", len(y))
+        # print("Sigmoid calculate called with x length:", len(x), "y length:", len(y))
         x = np.asarray(x, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
         if len(x) < 2 or len(y) < 2:
-            print("Sigmoid: len(x)<2", len(x), len(y))
+            # print("Sigmoid: len(x)<2", len(x), len(y))
             return None
 
+        # theory_local is a pure closure — never reads self.get_value(),
+        # so it is fully thread-safe (same formula as original theory()).
+        def theory_local(x, EH, EL, T, k):
+            A = EH - EL
+            return EL + A / (1 + np.exp(-4 * (x - T) / k))
+
         try:
-            p0 = [1000, 200000, 1e-6, 1e-6]  # Initial guesses: EH, EL, T, k
-            popt, _ = curve_fit(self.theory, x, y, p0=p0, maxfev=10000)
-            print("Sigmoid popt:", popt)
+            popt, pcov = curve_fit(theory_local, x, y, p0=[1000, 200000, 1e-6, 1e-6], maxfev=10000)
+            # print("Sigmoid popt:", popt)
             params = list(map(float, popt))  # [EH, EL, T, k]
-            print("Sigmoid params:", params)
-            y_fit = self.theory(x, *params)  # Unpack params when calling theory
-            result = [x.tolist(), y_fit.tolist(), params]
-            print("Sigmoid returning:", len(result), "items")
-            return result  # Return with parameters
-        except (RuntimeError, ValueError) as e:
-            print("Sigmoid fitting failed:", e)
+            # print("Sigmoid params:", params)
+        except RuntimeError as e:
+            # print("Sigmoid fitting failed:", e)
             return None
+
+        # Reject physically meaningless fits where any parameter is negative
+        # (matches original: "for p in popt: if p<0: return False")
+        for p in popt:
+            if p < 0:
+                return None
+
+        y_fit = theory_local(x, *popt)
+        # print("Sigmoid returning:", len(popt), "parameters")
+        return [x.tolist(), y_fit.tolist(), params]

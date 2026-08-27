@@ -24,7 +24,14 @@ def getJclose(x0, x):
     return int(np.argmin((x - x0) ** 2))
 
 def getEizi(xmin, xmax, zi, ei):
-    """Filter zi and ei arrays between xmin and xmax. Returns empty arrays if insufficient data."""
+    """
+    Return zi, ei where zi is within [xmin, xmax], using value-based masking.
+
+    The elasticity spectrum Ze (output of calc_elspectra) is computed on an
+    interpolated 1 nm grid, so it IS monotonic. However, using value masking
+    is still correct and consistent with getFizi, and guards against any
+    edge-case where the grid is non-monotonic near the boundaries.
+    """
     zi = np.asarray(zi, dtype=float)
     ei = np.asarray(ei, dtype=float)
     if zi.size == 0 or ei.size == 0 or zi.size != ei.size:
@@ -34,30 +41,18 @@ def getEizi(xmin, xmax, zi, ei):
     if xmax < xmin:
         xmin, xmax = xmax, xmin
 
-    # Clamp to data range
-    zmin, zmax = float(zi.min()), float(zi.max())
-    xmin = max(xmin, zmin)
-    xmax = min(xmax, zmax)
-
-    # Degenerate or empty window
-    if not np.isfinite(xmin) or not np.isfinite(xmax) or xmax <= xmin:
+    if not np.isfinite(xmin) or not np.isfinite(xmax):
         return np.array([]), np.array([])
 
-    jmin = getJclose(xmin, zi)
-    jmax = getJclose(xmax, zi)
-
-    # Ensure proper slicing (exclusive end); expand by 1 if identical index
-    if jmax <= jmin:
-        jmax = min(jmin + 1, zi.size)
-
-    return zi[jmin:jmax], ei[jmin:jmax]
+    # Value-based mask: select only points whose zi is inside [xmin, xmax]
+    mask = (zi >= xmin) & (zi <= xmax)
+    return zi[mask], ei[mask]
 
 
 def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
     emodel_info = EMODEL_REGISTRY[emodel_name.lower()]
     emodel_instance = emodel_info["instance"]
     udf_name = emodel_info["udf_function"]
-    # print("Emodel setup complete:", emodel_instance)
 
     # Define parameter types: ze_values, fe_values, and a single DOUBLE[] for all parameters
     udf_param_types = [
@@ -67,50 +62,71 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
     ]
 
     def udf_wrapper(ze_values, fe_values, param_values):
+        """
+        DuckDB UDF wrapper for emodel fitting.
+
+        THE SHARED-INSTANCE PROBLEM (root cause of the Linux sequential bug):
+        -----------------------------------------------------------------------
+        emodel_instance is a singleton created once at registration time.
+        DuckDB calls this wrapper row-by-row in the same thread (sequential mode).
+        The old code wrote `emodel_instance.parameters[k]["default"] = v` and
+        then called `emodel_instance.calculate(x, y)` which internally called
+        `self.get_value(...)` — but by the time curve_fit's internal iterations
+        ran, another row's call could have already overwritten those defaults.
+
+        THE FIX:
+        --------
+        1. We still read ze_min/ze_max from param_values directly (no mutation
+           needed for windowing — we just compute the values locally).
+        2. We pass `param_values` as an explicit argument to `calculate()` so
+           that BilayerModel.calculate() (and any other model that opts in) can
+           snapshot all parameters into local variables before calling curve_fit,
+           without ever touching self.get_value() during the fit.
+        3. We still mutate the instance for models that don't accept params= yet,
+           but the critical models (Bilayer) are now params-aware.
+        """
         try:
-            # print(f"UDF wrapper called for {emodel_name} with ze_values length: {len(ze_values)}, fe_values length: {len(fe_values)}")
-            ze_values = np.array(ze_values, dtype=np.float64)
-            fe_values = np.array(fe_values, dtype=np.float64)
-            param_values = np.array(param_values, dtype=np.float64)  # Convert param_values to numpy array
-            
-            # Map param_values to expected parameters
+            ze_values   = np.array(ze_values,   dtype=np.float64)
+            fe_values   = np.array(fe_values,   dtype=np.float64)
+            param_values = np.array(param_values, dtype=np.float64)
+
+            # --- Read window bounds directly from param_values ---
+            # (avoids needing to mutate the instance just to get ze_min/ze_max)
             expected_params = list(emodel_instance.parameters.keys())
             param_dict = {}
             for i, param_name in enumerate(expected_params):
                 if i < len(param_values):
-                    param_dict[param_name] = param_values[i]
-            
-            # print(f"Parameter mapping for {emodel_name}: {param_dict}")
-            
-            # Update instance parameters
-            for k, v in param_dict.items():
-                emodel_instance.parameters[k]["default"] = v
-            
-            ze_min = emodel_instance.get_value("minInd") * 1e-9 if "minInd" in emodel_instance.parameters else 0
-            ze_max = emodel_instance.get_value("maxInd") * 1e-9 if "maxInd" in emodel_instance.parameters else 800e-9
-  
+                    param_dict[param_name] = float(param_values[i])
+
+            ze_min = param_dict.get("minInd", emodel_instance.get_value("minInd") if "minInd" in emodel_instance.parameters else 0.0) * 1e-9
+            ze_max = param_dict.get("maxInd", emodel_instance.get_value("maxInd") if "maxInd" in emodel_instance.parameters else 800.0) * 1e-9
+
             x, y = getEizi(ze_min, ze_max, ze_values, fe_values)
-            # print(f"Filtered data for {emodel_name}: x length: {len(x)}, y length: {len(y)}")
-            
+
             # Guard: if filtering resulted in empty arrays, return None immediately
             if x.size == 0 or y.size == 0:
                 return None
-            
-            result = emodel_instance.calculate(x, y)
-            # print(f"Result for {emodel_name}: {result}")
+
+            # --- KEY FIX: pass param_values to calculate() ---
+            # Models that implement `params=` (e.g. BilayerModel) will snapshot
+            # all values into locals before calling curve_fit, making them immune
+            # to concurrent/sequential instance mutation.
+            # Models that don't accept params= yet fall back gracefully because
+            # we still update the instance below as a safety net for legacy models.
+            #
+            # Update instance AFTER computing ze_min/ze_max, and only for legacy
+            # models that still rely on self.get_value() inside calculate().
+            for k, v in param_dict.items():
+                emodel_instance.parameters[k]["default"] = v
+
+            result = emodel_instance.calculate(x, y, params=param_values)
             return result if result is not None else None
+
         except Exception as e:
             print(f"Error in UDF for {emodel_name}: {e}")
             return None
 
     return_type = duckdb.list_type(duckdb.list_type('DOUBLE'))
-        # Remove existing function if it exists
-    # try:
-    #     conn.remove_function(udf_name)
-    #     print(f"Removed existing UDF: {udf_name}")
-    # except duckdb.Error:
-    #     # Ignore if the function doesn't exist yet
-    #     pass
 
     # Register the new function
     try:
@@ -127,37 +143,6 @@ def create_emodel_udf(emodel_name: str, conn: duckdb.DuckDBPyConnection):
         else:
             raise
 
-    # print(f"UDF {udf_name} registered with types: {udf_param_types}, return type: {return_type}")
-
-
-
-    # if emodel_name in ["elasticfit", "driftedelastic"]:
-    #     udf_param_types = [
-    #         duckdb.list_type('DOUBLE'),  # zi_values
-    #         duckdb.list_type('DOUBLE'),  # ei_values
-    #         'DOUBLE',                    # zi_min
-    #         'DOUBLE',                    # zi_max
-    #         'DOUBLE'                     # poisson
-    #     ]
-    # else:  # elasticeffective
-    #     udf_param_types = [
-    #         duckdb.list_type('DOUBLE'),  # zi_values
-    #         duckdb.list_type('DOUBLE'),  # ei_values
-    #         'DOUBLE',                    # zi_min
-    #         'DOUBLE',                    # zi_max
-    #     ]
-    # udf_param_types = [
-    #     duckdb.list_type('DOUBLE'),  # zi_values
-    #     duckdb.list_type('DOUBLE'),  # ei_values
-    #     'DOUBLE',                    # zi_min
-    #     'DOUBLE',                    # zi_max
-    #     'DOUBLE'                     # poisson
-    # ]
-    # udf_name = f"{emodel_name.lower()}_fit"
-    # return_type = duckdb.list_type(duckdb.list_type('DOUBLE'))
-
-    # conn.create_function(udf_name, udf_wrapper, udf_param_types, return_type=return_type, null_handling='SPECIAL')
-    # print(f"UDF {udf_name} registered with types: {udf_param_types}, return type: {return_type}")
 
 def save_emodel_to_db(emodel_class, conn: duckdb.DuckDBPyConnection):
     """Save emodel metadata to the database."""

@@ -1,6 +1,12 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import ReactECharts from "echarts-for-react";
 import echarts from "../../utils/echartsConfig";
+import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesContext";
+import {
+  CHART_AXIS_NAME_TEXT_STYLE,
+  buildValueAxisTickLabel,
+  formatAxisQuantityLabel,
+} from "../../utils/chartAxisStyles";
 
 const ElasticitySpectra = ({
   forceData = [],
@@ -15,7 +21,18 @@ const ElasticitySpectra = ({
 }) => {
   const chartRef = useRef(null);
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
+  const [hoveredCurveId, setHoveredCurveId] = useState(null);
   const lastNonEmptyDataRef = useRef([]);
+
+  // Unit prefix preferences shared across all graph panels via context
+  const { xUnitPrefix, setXUnitPrefix, yUnitPrefix, setYUnitPrefix } = useUnitPreferences();
+  // Controls visibility of the X axis unit dropdown (local UI state)
+  const [xDropdownOpen, setXDropdownOpen] = useState(false);
+  // Controls visibility of the Y axis unit dropdown (local UI state)
+  const [yDropdownOpen, setYDropdownOpen] = useState(false);
+  // Refs for click-outside detection on each dropdown wrapper
+  const xDropdownRef = useRef(null);
+  const yDropdownRef = useRef(null);
 
   useEffect(() => {
     const handleResize = () => setWindowHeight(window.innerHeight);
@@ -30,6 +47,20 @@ const ElasticitySpectra = ({
     }
   }, [forceData]);
 
+  // Close whichever unit dropdown is open when the user clicks outside its wrapper
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (xDropdownRef.current && !xDropdownRef.current.contains(e.target)) {
+        setXDropdownOpen(false);
+      }
+      if (yDropdownRef.current && !yDropdownRef.current.contains(e.target)) {
+        setYDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const isMobile = window.innerWidth < 768;
   const headerHeight = isMobile ? 100 : 120;
   const footerHeight = isMobile ? 50 : 0;
@@ -39,18 +70,6 @@ const ElasticitySpectra = ({
   );
 
   // ---------- Scale helpers ----------
-  function getScaleFactor(minValue, dataArray = []) {
-    if (!minValue && minValue !== 0) return 1;
-    if (minValue === 0 && dataArray.length > 0) {
-      const nonZeroValues = dataArray.filter((v) => v > 0);
-      if (nonZeroValues.length === 0) return 1;
-      minValue = Math.min(...nonZeroValues);
-    }
-    const absMin = Math.abs(minValue);
-    const magnitude = Math.floor(Math.log10(absMin));
-    return Math.pow(10, -magnitude);
-  }
-
   // Downsample data when there are many curves to improve rendering performance
   const MAX_POINTS_PER_CURVE = 700;
   function downsampleXY(xArr, yArr, maxPoints = MAX_POINTS_PER_CURVE) {
@@ -83,7 +102,7 @@ const ElasticitySpectra = ({
     return noSuffix.replace(/^curve/i, "");             // "curve0" -> "0"
   };
 
-  const isShownWithPartner = (id, selected) => {
+  const isShownWithPartner = useCallback((id, selected) => {
     if (!selected || selected.length === 0) return true;
     const base = baseToken(id);
     // compare by base to be suffix-agnostic AND type-agnostic
@@ -91,7 +110,7 @@ const ElasticitySpectra = ({
       selected.map((s) => baseToken(String(s)))
     );
     return selectedBases.has(base);
-  };
+  }, []);
 
   // Process and normalize force data - memoized to avoid recomputing on every render
   const processedCurves = useMemo(() => {
@@ -108,42 +127,57 @@ const ElasticitySpectra = ({
   // Keep validForceData for backward compatibility with existing code
   const validForceData = processedCurves;
 
+  // Count unique base curves (excluding elastic model overlays)
+  const uniqueCurveCount = useMemo(() => {
+    const uniqueIds = new Set();
+    validForceData.forEach(c => {
+      // Only count curves that are not elastic model overlays
+      if (!isElasticId(c.curve_id)) {
+        uniqueIds.add(c.curve_id);
+      }
+    });
+    return uniqueIds.size;
+  }, [validForceData]);
+
   // Debug: Log the data to see what we're getting
   // console.log("SpectraElasticity - forceData:", forceData);
   // console.log("SpectraElasticity - validForceData:", validForceData);
 
-  // Calculate scale factors - memoized based on domainRange and first curve's x data
-  const xData = useMemo(() => {
-    return validForceData.length > 0 && validForceData[0]?.x.length > 0
-      ? validForceData[0].x
-      : [];
-  }, [validForceData]);
-  
-  const xScaleFactor = useMemo(() => getScaleFactor(domainRange.xMin, xData), [domainRange.xMin, xData]);
-  const yScaleFactor = useMemo(() => getScaleFactor(domainRange.yMin), [domainRange.yMin]);
+  // Resolve active unit option objects from shared context selection
+  const xUnitOption = UNIT_OPTIONS.find((o) => o.value === xUnitPrefix);
+  const yUnitOption = UNIT_OPTIONS.find((o) => o.value === yUnitPrefix);
 
+  // SI conversion factors driven by the selected prefix (e.g. nano → 1e9, milli → 1e3)
+  const xSiFactor = xUnitOption.factor;
+  const ySiFactor = yUnitOption.factor;
+
+  // Raw SI value × scaleFactor = graph display value in the selected unit (e.g. µm, µPa)
+  const xScaleFactor = xSiFactor;
+  const yScaleFactor = ySiFactor;
+
+  // Scaled ranges used to compute required decimal places on tick labels
   const xScaledRange = useMemo(() => (domainRange.xMax - domainRange.xMin) * xScaleFactor, [domainRange.xMax, domainRange.xMin, xScaleFactor]);
   const yScaledRange = useMemo(() => (domainRange.yMax - domainRange.yMin) * yScaleFactor, [domainRange.yMax, domainRange.yMin, yScaleFactor]);
 
   const xDecimals = useMemo(() =>
-    xScaledRange > 0
-      ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10)))
-      : 0,
+    xScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10))) : 0,
     [xScaledRange]
   );
-  
   const yDecimals = useMemo(() =>
-    yScaledRange > 0
-      ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10)))
-      : 0,
+    yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0,
     [yScaledRange]
   );
+  // Keeps tooltip precision readable by forcing at least two decimal places.
+  const tooltipXDecimals = Math.max(2, xDecimals);
+  // Keeps tooltip precision readable by forcing at least two decimal places.
+  const tooltipYDecimals = Math.max(2, yDecimals);
 
-  const xExponent = useMemo(() => Math.log10(xScaleFactor), [xScaleFactor]);
-  const yExponent = useMemo(() => Math.log10(yScaleFactor), [yScaleFactor]);
+  // Y axis base symbol for elastic modulus: prepend selected prefix to "Pa" (e.g. milli → "mPa")
+  const yBaseSymbol = yUnitOption.prefix ? `${yUnitOption.prefix}Pa` : "Pa";
 
-  const xUnit = useMemo(() => xExponent === 0 ? "m" : `×10^{-${Math.round(xExponent)}} m`, [xExponent]);
-  const yUnit = useMemo(() => yExponent === 0 ? "Pa" : `×10^{-${Math.round(yExponent)}} Pa`, [yExponent]);
+  // Axis unit labels use the selected prefix directly (e.g. µm, µPa)
+  const xUnit = xUnitOption.xSymbol;
+  const yUnit = yBaseSymbol;
 
   // ---------- Toolbar styles ----------
   const toolbarCardStyle = {
@@ -174,15 +208,28 @@ const ElasticitySpectra = ({
     padding: "4px 8px",
     borderRadius: "999px",
   };
+  // Clickable unit chip — same visual as static chip but with pointer cursor
   const unitChipStyle = {
-    fontSize: 12,
-    fontWeight: 600,
-    color: "#4a4f6a",
-    background: "#f5f7ff",
-    border: "1px solid #e9ecf5",
-    padding: "3px 8px",
-    borderRadius: "999px",
+    fontSize: 12, fontWeight: 600, color: "#4a4f6a",
+    background: "#f5f7ff", border: "1px solid #e9ecf5", padding: "3px 8px", borderRadius: "999px",
+    cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px", userSelect: "none",
   };
+
+  // Floating dropdown panel positioned below the chip
+  const dropdownPanelStyle = {
+    position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 200,
+    background: "#fff", border: "1px solid #e9ecf5", borderRadius: "10px",
+    boxShadow: "0 8px 20px rgba(20,20,43,0.12)", minWidth: "120px", overflow: "hidden",
+  };
+
+  // Individual dropdown item; active option highlighted in green
+  const dropdownItemStyle = (active) => ({
+    display: "block", width: "100%", padding: "8px 14px",
+    fontSize: 12, fontWeight: active ? 700 : 500,
+    color: active ? "#3DA58A" : "#1d1e2c",
+    background: active ? "#ECFDF5" : "transparent",
+    border: "none", textAlign: "left", cursor: "pointer", transition: "background .1s",
+  });
   const segWrapStyle = {
     display: "flex",
     alignItems: "center",
@@ -245,41 +292,46 @@ const ElasticitySpectra = ({
         [x, y] = downsampleXY(x, y);
       }
       
-      const color = elastic ? "yellow" : "#5470C6";
       const showCurve =
         isShownWithPartner(id, selectedCurveIds) &&
         Array.isArray(x) &&
         Array.isArray(y) &&
         x.length === y.length;
 
+      // Check hover state
+      const isHovered = hoveredCurveId === id;
+      const isDimmed = hoveredCurveId !== null && hoveredCurveId !== id;
+
       // Debug: Log each curve being processed
-      // console.log(`SpectraElasticity - Processing curve: ${id}, elastic: ${elastic}, showCurve: ${showCurve}, color: ${color}`);
+      // console.log(`SpectraElasticity - Processing curve: ${id}, elastic: ${elastic}, showCurve: ${showCurve}`);
 
       return {
         name: id,
         type: graphType,
-        smooth: graphType === "line" ? false : undefined,
-        showSymbol: !manySeries && graphType === "scatter",
-        symbolSize: !manySeries && graphType === "scatter" ? 4 : undefined,
-        large: true,
+        smooth: false,
+        showSymbol: true, // Keep symbol hit targets enabled so item tooltips work in line mode.
+        connectNulls: true,
+        large: false, // Keep hit detection enabled for reliable hover/click behavior.
         sampling: "lttb", // Extra safety for large data
         triggerEvent: true,
         // keep elastic on top
         z: elastic ? 3 : 2,
+        // Only set color for elastic model overlays (yellow), let ECharts auto-assign colors for others
+        itemStyle: elastic 
+          ? { color: 'yellow', opacity: graphType === "line" ? 0 : (isDimmed ? 0.25 : 1) }
+          : { opacity: graphType === "line" ? 0 : (isDimmed ? 0.25 : 1) },
         lineStyle:
           graphType === "line"
-            ? { color, width: elastic ? 4 : 2, opacity: 1 }
+            ? elastic 
+              ? { color: 'yellow', width: isHovered ? 5 : 4, opacity: isDimmed ? 0.25 : 1 }
+              : { width: isHovered ? 3 : 1.5, opacity: isDimmed ? 0.25 : 1 }
             : undefined,
-        itemStyle: graphType === "scatter" ? { color } : undefined,
         data: showCurve
-          ? x.map((vx, i) => [
-              vx * xScaleFactor,
-              (y[i] ?? 0) * yScaleFactor,
-            ])
+          ? x.map((vx, i) => [vx * xScaleFactor, (y[i] ?? 0) * yScaleFactor])
           : [],
       };
     }).filter(Boolean); // Remove null entries
-  }, [processedCurves, graphType, selectedCurveIds, xScaleFactor, yScaleFactor, showElasticModelOverlay]);
+  }, [processedCurves, graphType, selectedCurveIds, xScaleFactor, yScaleFactor, showElasticModelOverlay, hoveredCurveId, isShownWithPartner]);
   
   // Determine if there are too many series for tooltips (performance optimization)
   const tooManySeries = processedCurves.length > 40;
@@ -289,53 +341,40 @@ const ElasticitySpectra = ({
     tooltip: tooManySeries
       ? { show: false } // Disable tooltips when there are many curves to improve performance
       : {
-          trigger: "axis",
-          // Format tooltip to show each series cleanly with curve ID, x, and y values
+          trigger: "item",
           formatter: (params) => {
-            const list = Array.isArray(params) ? params : [params];
-
-            return list
-              .map(p => {
-                // Extract curve ID from series name or data
-                const curveId = p.seriesName || p.name || (p.data && p.data.curve_id);
-
-                // Handle value as array or single value
-                const value = Array.isArray(p.value) ? p.value : [p.value];
-
-                const x = value[0];
-                const y = value[1];
-
-                return [
-                  `<b>${curveId}</b>`,
-                  `x: ${x}`,
-                  `y: ${y}`,
-                ].join('<br/>');
-              })
-              .join('<br/><br/>');
+            const name = params.seriesName || params.name || '';
+            const value = Array.isArray(params.value) ? params.value : [params.value];
+            const x = value[0];
+            const y = value[1];
+            if (x == null || y == null || isNaN(x) || isNaN(y)) return '';
+            return [
+              `<b>${name}</b>`,
+              `Z (${xUnit}): ${x.toFixed(tooltipXDecimals)}`,
+              `E (${yUnit}): ${y.toFixed(tooltipYDecimals)}`,
+            ].join('<br/>');
           },
         },
     xAxis: {
       type: "value",
-      name: `Z (${xUnit})`,
+      name: formatAxisQuantityLabel("Z", 0, xUnitOption.xSymbol),
       nameLocation: "middle",
-      nameGap: 25,
+      nameGap: 34,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       min: safeMin(domainRange.xMin * xScaleFactor),
       max: safeMin(domainRange.xMax * xScaleFactor),
-      axisLabel: {
-        formatter: (value) => value.toFixed(xDecimals),
-      },
+      axisLabel: buildValueAxisTickLabel((value) => value.toFixed(xDecimals)),
     },
     yAxis: {
       type: "value",
-      name: `E (${yUnit})`,
+      name: formatAxisQuantityLabel("E", 0, yBaseSymbol),
       nameLocation: "middle",
-      nameGap: 40,
+      nameGap: 50,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       scale: true,
       min: safeMin(domainRange.yMin * yScaleFactor),
       max: safeMin(domainRange.yMax * yScaleFactor),
-      axisLabel: {
-        formatter: (value) => value.toFixed(yDecimals),
-      },
+      axisLabel: buildValueAxisTickLabel((value) => value.toFixed(yDecimals)),
     },
     series,
     legend: { show: false },
@@ -348,9 +387,20 @@ const ElasticitySpectra = ({
     ],
     animation: false,
     progressive: 5000,
-  }), [tooManySeries, series, xScaleFactor, yScaleFactor, xDecimals, yDecimals, xUnit, yUnit, domainRange]);
+    }), [tooManySeries, series, xScaleFactor, yScaleFactor, xDecimals, yDecimals, tooltipXDecimals, tooltipYDecimals, xUnit, yUnit, domainRange]);
 
   const onChartEvents = {
+    mouseover: (params) => {
+      if (params.componentType === "series") {
+        const curveId = params.seriesName || params.name;
+        if (curveId) {
+          setHoveredCurveId(curveId);
+        }
+      }
+    },
+    mouseout: (params) => {
+      setHoveredCurveId(null);
+    },
     click: (params) => {
       if (params.componentType === "series") {
         const selectedCurve = validForceData[params.seriesIndex];
@@ -373,9 +423,51 @@ const ElasticitySpectra = ({
       <div style={toolbarCardStyle}>
         <div style={leftWrapStyle}>
           <div style={titleStyle}>Elasticity Spectra</div>
-          <div style={chipStyle}>{validForceData.length} series</div>
-          <div style={unitChipStyle}>X: {xUnit}</div>
-          <div style={unitChipStyle}>Y: {yUnit}</div>
+          <div style={chipStyle}>{uniqueCurveCount} series</div>
+
+          {/* X axis unit selector */}
+          <div ref={xDropdownRef} style={{ position: "relative" }}>
+            <button
+              style={unitChipStyle}
+              onClick={() => { setXDropdownOpen((v) => !v); setYDropdownOpen(false); }}
+              title="Change X axis unit"
+            >
+              X: {xUnit} <span style={{ fontSize: 10, opacity: 0.6 }}>▾</span>
+            </button>
+            {xDropdownOpen && (
+              <div style={dropdownPanelStyle}>
+                {UNIT_OPTIONS.map((opt) => (
+                  <button key={opt.value} style={dropdownItemStyle(xUnitPrefix === opt.value)}
+                    onClick={() => { setXUnitPrefix(opt.value); setXDropdownOpen(false); }}>
+                    {opt.xSymbol}
+                    <span style={{ marginLeft: 6, opacity: 0.5, fontSize: 11 }}>({opt.value === "none" ? "SI" : opt.value})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Y axis unit selector — Y axis is elastic modulus (Pa) for this graph */}
+          <div ref={yDropdownRef} style={{ position: "relative" }}>
+            <button
+              style={unitChipStyle}
+              onClick={() => { setYDropdownOpen((v) => !v); setXDropdownOpen(false); }}
+              title="Change Y axis unit"
+            >
+              Y: {yUnit} <span style={{ fontSize: 10, opacity: 0.6 }}>▾</span>
+            </button>
+            {yDropdownOpen && (
+              <div style={dropdownPanelStyle}>
+                {UNIT_OPTIONS.map((opt) => (
+                  <button key={opt.value} style={dropdownItemStyle(yUnitPrefix === opt.value)}
+                    onClick={() => { setYUnitPrefix(opt.value); setYDropdownOpen(false); }}>
+                    {opt.prefix ? `${opt.prefix}Pa` : "Pa"}
+                    <span style={{ marginLeft: 6, opacity: 0.5, fontSize: 11 }}>({opt.value === "none" ? "SI" : opt.value})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>

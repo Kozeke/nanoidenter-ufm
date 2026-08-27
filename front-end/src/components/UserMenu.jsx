@@ -131,6 +131,17 @@ export default function UserMenu() {
                 navigate("/experiments");
               }}
             />
+            <MenuItem
+              label="My Datasets"
+              onClick={() => {
+                if (!profileCompleted) {
+                  alert("Profile required fields are required. Please complete your profile to access datasets.");
+                  navigate("/profile");
+                  return;
+                }
+                navigate("/datasets");
+              }}
+            />
             <Divider />
             <MenuItem label="Logout" danger onClick={handleLogout} />
           </div>,

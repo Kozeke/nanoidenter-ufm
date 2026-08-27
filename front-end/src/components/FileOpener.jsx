@@ -9,18 +9,23 @@ import {
   TextField,
   FormControl,
   InputLabel,
-  FormHelperText,
   Typography,
   Alert,
   Box,
   Stepper,
   Step,
   StepLabel,
+  ListSubheader,
   CircularProgress,
 } from '@mui/material';
 import { useFileOpener } from '../hooks/useFileOpener';
+import {
+  formatAttributeValueForDisplay,
+  getGroupAttributes,
+  metadataValueForDisplay,
+  VISIBLE_FILE_OPENER_METADATA_FIELDS,
+} from '../config/fileOpenerMetadata';
 
-// same styles as before
 // Applies consistent button styling matching the application's design system.
 const actionBtnStyle = (variant = 'primary', disabled = false) => {
   const base = {
@@ -90,10 +95,15 @@ const FileOpener = ({ onProcessSuccess, setIsLoading, renderTrigger }) => {
     handleSelectForce,
     handleSelectZ,
     handleSelectMetadata,
-    handleMetadataChange,
+    handleUseCurrentMetadataLocation,
+    handleVisibleMetadataChange,
     handleSubmit,
     goBack,
+    navigateToGroup,
   } = useFileOpener({ onProcessSuccess, setIsLoading });
+
+  // Resolves attributes for the currently browsed HDF5 group in the metadata step.
+  const currentLocationAttributes = getGroupAttributes(currentGroup);
 
   return (
     <div>
@@ -195,12 +205,12 @@ const FileOpener = ({ onProcessSuccess, setIsLoading, renderTrigger }) => {
               </Alert>
             </Box>
           )}
-          {loading && step <= 3 && (
+          {loading && step <= 2 && (
             <Box display="flex" justifyContent="center" my={2}>
               <CircularProgress />
             </Box>
           )}
-          {open && step <= 3 && !loading && isDialogReady && ( // Add isDialogReady to condition
+          {open && step <= 2 && !loading && isDialogReady && ( // Add isDialogReady to condition
               <div>
                 <Typography variant="body1" gutterBottom>
                   Current Path: {navigationPath.length ? navigationPath.join('/') : 'Root'}
@@ -217,36 +227,83 @@ const FileOpener = ({ onProcessSuccess, setIsLoading, renderTrigger }) => {
                         else if (step === 1) handleSelectZ(cleanPath);
                         else if (step === 2) handleSelectMetadata(cleanPath);
                       } else if (value.includes('(Group')) {
-                        const cleanPath = value.split(' (Group')[0];
                         if (step === 2) {
-                          let fullPath;
+                          const cleanPath = value.split(' (Group')[0];
                           if (cleanPath === 'current') {
-                            fullPath = navigationPath.join('/') || 'root';
+                            handleUseCurrentMetadataLocation();
                           } else {
-                            fullPath = [...navigationPath, cleanPath].join('/');
+                            navigateToGroup(cleanPath);
                           }
-                          handleSelectMetadata(fullPath);
                         }
                       }
                     }}
                   >
-                    {step === 2 &&
-                      Object.keys(currentGroup.attributes || {}).length > 0 && (
-                      <MenuItem 
+                    {step === 2 && [
+                      ...(Object.keys(currentLocationAttributes).length > 0
+                        ? [
+                            <ListSubheader
+                              key="metadata-attributes-header"
+                              sx={{
+                                fontWeight: 700,
+                                lineHeight: '32px',
+                                color: '#1d1e2c',
+                                background: '#fafbff',
+                              }}
+                            >
+                              Attributes at this location
+                            </ListSubheader>,
+                            ...Object.entries(currentLocationAttributes).map(
+                              ([attributeName, attributeValue]) => (
+                                <MenuItem
+                                  key={attributeName}
+                                  disabled
+                                  value={`__attribute__${attributeName}`}
+                                  sx={{
+                                    fontSize: 13,
+                                    fontWeight: 500,
+                                    pl: 3,
+                                    color: '#4b5568',
+                                  }}
+                                >
+                                  {attributeName}:{' '}
+                                  {formatAttributeValueForDisplay(attributeValue)}
+                                </MenuItem>
+                              )
+                            ),
+                          ]
+                        : []),
+                      <MenuItem
+                        key="use-current-location"
                         value="current (Group)"
-                          sx={{
-                            fontSize: 14,
-                            fontWeight: 600,
-                            '&:hover': { background: '#f5f7ff' },
-                          }}
+                        sx={{
+                          fontSize: 14,
+                          fontWeight: 600,
+                          '&:hover': { background: '#f5f7ff' },
+                        }}
                       >
-                        Current Location (Group, Has Attributes)
-                      </MenuItem>
-                    )}
+                        Use this location
+                        {Object.keys(currentLocationAttributes).length > 0 &&
+                          ` (${Object.keys(currentLocationAttributes).length} attributes)`}
+                      </MenuItem>,
+                    ]}
 
                     {Object.keys(currentGroup.groups || {})
                       .filter((key) => key !== 'datasets' && key !== 'attributes')
-                      .map((name) => (
+                      .map((name) => {
+                        const subgroupAttributes = getGroupAttributes(
+                          currentGroup.groups[name]
+                        );
+                        const attributeSummary = Object.entries(
+                          subgroupAttributes
+                        )
+                          .slice(0, 3)
+                          .map(
+                            ([attributeName, attributeValue]) =>
+                              `${attributeName}=${formatAttributeValueForDisplay(attributeValue)}`
+                          )
+                          .join(', ');
+
+                        return (
                         <MenuItem 
                           key={name} 
                           value={`${name} (Group)`}
@@ -257,10 +314,15 @@ const FileOpener = ({ onProcessSuccess, setIsLoading, renderTrigger }) => {
                           }}
                         >
                           {name} (Group)
-                          {Object.keys(currentGroup.groups[name].attributes || {})
-                            .length > 0 && ' (Has Attributes)'}
+                          {Object.keys(subgroupAttributes).length > 0 &&
+                            ` — ${attributeSummary}${
+                              Object.keys(subgroupAttributes).length > 3
+                                ? ', ...'
+                                : ''
+                            }`}
                         </MenuItem>
-                      ))}
+                        );
+                      })}
                     {(currentGroup.groups?.datasets || []).map((ds) => (
                       <MenuItem
                         key={ds.path}
@@ -289,7 +351,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading, renderTrigger }) => {
                 )}
               </div>
             )}
-          {step === 4 && (
+          {step === 3 && (
             <div>
               {loading && (
                 <Box display="flex" justifyContent="center" my={2}>
@@ -303,56 +365,50 @@ const FileOpener = ({ onProcessSuccess, setIsLoading, renderTrigger }) => {
                 </Typography>
               )}
 
-              {Object.entries(metadata).map(([key, value]) => {
-                // Special case: tip_geometry as dropdown
-                if (key === 'tip_geometry') {
-                  const options = ['sphere', 'cylinder', 'cone', 'pyramid'];
+              {VISIBLE_FILE_OPENER_METADATA_FIELDS.map((field) => {
+                const displayValue = metadataValueForDisplay(field, metadata);
 
+                if (field.inputType === 'select') {
                   return (
-                    <FormControl key={key} fullWidth margin="normal">
-                      <InputLabel id="tip-geometry-label">Tip Geometry</InputLabel>
+                    <FormControl key={field.key} fullWidth margin="normal">
+                      <InputLabel id={`${field.key}-label`}>{field.label}</InputLabel>
                       <Select
-                        labelId="tip-geometry-label"
-                        label="Tip Geometry"
-                        value={value ?? ''}
-                        // make sure we pass name + value in the same shape as TextField
+                        labelId={`${field.key}-label`}
+                        label={field.label}
+                        value={displayValue || ''}
                         onChange={(e) =>
-                          handleMetadataChange({
-                            target: { name: key, value: e.target.value },
-                          })
+                          handleVisibleMetadataChange(field, e.target.value)
                         }
                       >
-                        {options.map((opt) => (
-                          <MenuItem key={opt} value={opt}>
-                            {opt.charAt(0).toUpperCase() + opt.slice(1)}
+                        {(field.options || []).map((option) => (
+                          <MenuItem key={option} value={option}>
+                            {option.charAt(0).toUpperCase() + option.slice(1)}
                           </MenuItem>
                         ))}
                       </Select>
-                      <FormHelperText>Select the AFM tip geometry</FormHelperText>
                     </FormControl>
                   );
                 }
 
-                // Default: normal text field for all other metadata
                 return (
                   <TextField
-                  key={key}
-                  name={key}
-                  label={key.replace('_', ' ').toUpperCase()}
-                  type={key === 'date' ? 'date' : 'text'}
-                  value={value ?? ''}
-                  onChange={handleMetadataChange}
-                  InputLabelProps={key === 'date' ? { shrink: true } : undefined}
-                  fullWidth
-                  margin="normal"
-                />
-
+                    key={field.key}
+                    name={field.key}
+                    label={field.label}
+                    type={field.inputType === 'number' ? 'number' : 'text'}
+                    value={displayValue}
+                    onChange={(e) =>
+                      handleVisibleMetadataChange(field, e.target.value)
+                    }
+                    fullWidth
+                    margin="normal"
+                  />
                 );
               })}
             </div>
           )}
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2, gap: 8 }}>
+        <DialogActions sx={{ px: 3, pb: 2, gap: 2 }}>
           <button
             onClick={() => setOpen(false)}
             disabled={loading}
@@ -361,7 +417,7 @@ const FileOpener = ({ onProcessSuccess, setIsLoading, renderTrigger }) => {
           >
             Cancel
           </button>
-          {step === 4 && (
+          {step === 3 && (
             <button
               onClick={handleSubmit}
               disabled={errors.length > 0 || loading}

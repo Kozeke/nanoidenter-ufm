@@ -135,7 +135,9 @@ const SingleSelectFilter = ({
   size = "small",
   sx = fieldFontSx,
   disabled = false,
-  helperText = null
+  helperText = null,
+  // Placeholder shown when disabled and nothing is selected
+  disabledPlaceholder = "Enter Curve ID first",
 }) => (
   <Grid item xs={3}>
     <FormControl fullWidth size={size} disabled={disabled}>
@@ -180,7 +182,7 @@ const SingleSelectFilter = ({
             onChange(syntheticEvent);
           }
         }}
-        renderValue={(selected) => selected ? formatLabel(selected) : (disabled ? "Enter Curve ID first" : "Select...")}
+        renderValue={(selected) => selected ? formatLabel(selected) : (disabled ? disabledPlaceholder : "Select...")}
         sx={sx}
         disabled={disabled}
       >
@@ -267,6 +269,13 @@ const FiltersComponent = ({
   // Derives a flag indicating whether controls should be disabled.
   const isDisabled = !isSocketConnected;
 
+  // Opens the sidebar only when it is currently closed to avoid accidental close toggles.
+  const ensureSidebarOpen = useCallback(() => {
+    if (!open && typeof onToggle === "function") {
+      onToggle();
+    }
+  }, [open, onToggle]);
+
   // Remove local "isOpen" as the source of truth; rely on `open` from props
   // Toggle handler that calls parent's onToggle function
   const toggleFilters = () => {
@@ -286,6 +295,8 @@ const FiltersComponent = ({
   // Handle multi-select changes
   const handleRegularChange = (event) => {
     const value = event.target.value || [];
+    // Captures the previous selection count so we can detect newly added filters.
+    const previousCount = selectedRegularFilters.length;
   
     // add newly selected
     value
@@ -296,6 +307,11 @@ const FiltersComponent = ({
     selectedRegularFilters
       .filter((name) => !value.includes(name))
       .forEach((name) => handleRemoveFilter(name, "regular"));
+
+    // Opens the sidebar when a regular filter is newly selected.
+    if (value.length > previousCount) {
+      ensureSidebarOpen();
+    }
   };
   const handleCpChange = (event) => {
     const value = event.target.value || [];
@@ -308,6 +324,8 @@ const FiltersComponent = ({
   
     if (next) {
       handleAddFilter(next, "cp");
+      // Opens the sidebar when a contact-point filter is selected.
+      ensureSidebarOpen();
     }
   };
   const handleForceChange = (event) => {
@@ -321,6 +339,8 @@ const FiltersComponent = ({
     if (next) {
       handleAddFilter(next, "force");
       onForceModelChange?.(next);
+      // Opens the sidebar when a force model is selected.
+      ensureSidebarOpen();
     } else {
       onForceModelChange?.("");
     }
@@ -336,6 +356,8 @@ const FiltersComponent = ({
     if (next) {
       handleAddFilter(next, "elasticity");
       onElasticityModelChange?.(next);
+      // Opens the sidebar when an elasticity model is selected.
+      ensureSidebarOpen();
     } else {
       onElasticityModelChange?.("");
     }
@@ -349,11 +371,15 @@ const FiltersComponent = ({
     // Check if any models are selected and send model stats request if needed
     const hasForceModels = forceModels && Object.keys(forceModels).length > 0;
     const hasElasticModels = elasticityModels && Object.keys(elasticityModels).length > 0;
-    
-    if ((hasForceModels || hasElasticModels) && sendModelStatsRequest) {
+    // Stiffness (K) comes from the LinearWindowFit regular filter, not an f/e model,
+    // so its stats must also trigger a model_stats refresh. Same detection the
+    // sidebar uses to render the "Stiffness Results" card.
+    const hasStiffnessFilter = Object.prototype.hasOwnProperty.call(regularFilters || {}, "linearwindowfit");
+
+    if ((hasForceModels || hasElasticModels || hasStiffnessFilter) && sendModelStatsRequest) {
       sendModelStatsRequest();
     }
-  }, [sendCurveRequest, sendModelStatsRequest, forceModels, elasticityModels]);
+  }, [sendCurveRequest, sendModelStatsRequest, forceModels, elasticityModels, regularFilters]);
         
 
   // Theme and media query to determine if content should shift on desktop
@@ -397,6 +423,8 @@ const FiltersComponent = ({
           value={selectedCpFilters}
           onChange={handleCpChange}
           formatLabel={safeCapitalize}
+          disabled
+          disabledPlaceholder="Disabled"
         />
 
         {activeTab === "forceIndentation" && (
@@ -484,6 +512,7 @@ const FiltersComponent = ({
           onToggle={onToggle}
           fparamsProgress={fparamsProgress}
           eparamsProgress={eparamsProgress}
+          onApplyChangesShortcut={handleUpdateCurves}
         />
       </Suspense>
     </Box>

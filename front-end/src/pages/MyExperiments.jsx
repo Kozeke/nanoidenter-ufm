@@ -75,6 +75,20 @@ export default function MyExperiments() {
     dashboard.setForceModelParams(data.force_model_params ?? {});
     dashboard.setSelectedCurveId(data.curve_id ?? null);
     dashboard.setSelectedCurveIds([]);
+    // Update dataset_id and filename from the experiment's saved data
+    // This ensures each experiment shows its own dataset name, not the current one
+    if (data.dataset_id) {
+      dashboard.setDatasetId(data.dataset_id);
+    }
+    // Set filename from the experiment's dataset_name (the name saved when file was opened)
+    // This is critical - use the dataset_name from the experiment, not the current store
+    if (data.dataset_name) {
+      dashboard.setFilename(data.dataset_name);
+      console.log("Set filename from experiment:", data.dataset_name, "for dataset_id:", data.dataset_id);
+    } else {
+      // If dataset_name is not available, clear filename to avoid showing wrong name
+      dashboard.setFilename(null);
+    }
     console.log("AFTER SET FILTERS:", useDashboardStore.getState());
 
     // ✅ 2. THEN navigate
@@ -115,8 +129,26 @@ export default function MyExperiments() {
                 {paginatedExperiments.map((exp) => (
                   <tr key={exp.id} style={rowStyle} className="row">
                     <td style={tdStyle}>
+                      {/* Experiment title (name) */}
                       <div style={{ fontWeight: 600 }}>{exp.name}</div>
-                      <div style={{ fontSize: 12, color: "#6b7280" }}>
+                      {/* Optional description shown below the title */}
+                      {exp.description && (
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: "#6b7280",
+                            marginTop: 2,
+                            maxWidth: 300,
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                          title={exp.description}
+                        >
+                          {exp.description}
+                        </div>
+                      )}
+                      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 2 }}>
                         ID: {exp.id}
                       </div>
                     </td>

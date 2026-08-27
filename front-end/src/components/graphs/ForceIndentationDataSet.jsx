@@ -1,6 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import ReactECharts from "echarts-for-react";
 import echarts from "../../utils/echartsConfig";
+import { useUnitPreferences, UNIT_OPTIONS } from "../../context/UnitPreferencesContext";
+import {
+  CHART_AXIS_NAME_TEXT_STYLE,
+  buildValueAxisTickLabel,
+  formatAxisQuantityLabel,
+} from "../../utils/chartAxisStyles";
 
 const ForceIndentationDataSet = ({
   forceData = [],
@@ -18,6 +24,17 @@ const ForceIndentationDataSet = ({
   const echartsRef = useRef(null);    // ECharts instance
   // Track window height for responsive chart
   const [windowHeight, setWindowHeight] = useState(window.innerHeight);
+  const [hoveredCurveId, setHoveredCurveId] = useState(null);
+
+  // Unit prefix preferences shared across all graphs via context
+  const { xUnitPrefix, setXUnitPrefix, yUnitPrefix, setYUnitPrefix } = useUnitPreferences();
+  // Controls visibility of the X axis unit dropdown (local UI state)
+  const [xDropdownOpen, setXDropdownOpen] = useState(false);
+  // Controls visibility of the Y axis unit dropdown (local UI state)
+  const [yDropdownOpen, setYDropdownOpen] = useState(false);
+  // Refs for click-outside detection on each dropdown wrapper
+  const xDropdownRef = useRef(null);
+  const yDropdownRef = useRef(null);
 
   // Handle window resize and chart resize
   useEffect(() => {
@@ -45,6 +62,20 @@ const ForceIndentationDataSet = ({
     }
   }, [activeTab, forceData, domainRange]);
 
+  // Close whichever unit dropdown is open when the user clicks outside its wrapper
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (xDropdownRef.current && !xDropdownRef.current.contains(e.target)) {
+        setXDropdownOpen(false);
+      }
+      if (yDropdownRef.current && !yDropdownRef.current.contains(e.target)) {
+        setYDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   // --- Toolbar look (same as others) ---
   const toolbarCardStyle = {
     display: "flex",
@@ -64,10 +95,28 @@ const ForceIndentationDataSet = ({
     fontSize: 12, fontWeight: 700, color: "#3DA58A",
     background: "#ECFDF5", border: "1px solid #CFFAEA", padding: "4px 8px", borderRadius: "999px",
   };
+  // Clickable unit chip — same visual as static chip but with pointer cursor
   const unitChipStyle = {
     fontSize: 12, fontWeight: 600, color: "#4a4f6a",
     background: "#f5f7ff", border: "1px solid #e9ecf5", padding: "3px 8px", borderRadius: "999px",
+    cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px", userSelect: "none",
   };
+
+  // Floating dropdown panel positioned below the chip
+  const dropdownPanelStyle = {
+    position: "absolute", top: "calc(100% + 5px)", left: 0, zIndex: 200,
+    background: "#fff", border: "1px solid #e9ecf5", borderRadius: "10px",
+    boxShadow: "0 8px 20px rgba(20,20,43,0.12)", minWidth: "120px", overflow: "hidden",
+  };
+
+  // Individual dropdown item; active option highlighted in green
+  const dropdownItemStyle = (active) => ({
+    display: "block", width: "100%", padding: "8px 14px",
+    fontSize: 12, fontWeight: active ? 700 : 500,
+    color: active ? "#3DA58A" : "#1d1e2c",
+    background: active ? "#ECFDF5" : "transparent",
+    border: "none", textAlign: "left", cursor: "pointer", transition: "background .1s",
+  });
   const segWrapStyle = {
     display: "flex", alignItems: "center", gap: 0,
     background: "#f2f4ff", border: "1px solid #dfe3ff", borderRadius: "12px", overflow: "hidden",
@@ -99,19 +148,6 @@ const ForceIndentationDataSet = ({
     800 // Max 800px
   );
 
-  function getScaleFactor(minValue, dataArray = []) {
-    if (!minValue && minValue !== 0) return 1;
-    if (minValue === 0 && dataArray.length > 0) {
-      const nonZeroValues = dataArray.filter((v) => v > 0);
-      if (nonZeroValues.length === 0) return 1;
-      minValue = Math.min(...nonZeroValues);
-    }
-    const absMin = Math.abs(minValue);
-    const magnitude = Math.floor(Math.log10(absMin));
-    return Math.pow(10, -magnitude);
-  }
-
-  // Downsample data when there are many curves to improve rendering performance
   const MAX_POINTS_PER_CURVE = 700;
   function downsampleXY(xArr, yArr, maxPoints = MAX_POINTS_PER_CURVE) {
     if (!xArr || !yArr || xArr.length !== yArr.length) return [[], []];
@@ -204,38 +240,52 @@ const ForceIndentationDataSet = ({
   const allCurves = useMemo(() => {
     return [...finalCp, ...finalFp];
   }, [finalCp, finalFp]);
+
+  // Count unique base curves (excluding model overlays like _hertz)
+  const uniqueCurveCount = useMemo(() => {
+    const uniqueIds = new Set();
+    finalCp.forEach(c => {
+      // Only count curves that are not model overlays
+      if (!c.curve_id.includes('_hertz')) {
+        uniqueIds.add(c.curve_id);
+      }
+    });
+    return uniqueIds.size;
+  }, [finalCp]);
   
   // console.log("forceData (Indentation):", validForceData);
   // console.log("curves_cp:", curvesCpData);
   // console.log("curves_fparam:", curvesFparamData);
 
-  // If the first curve is invalid, fall back to the first valid curve for scaling
-  const firstValid = (arr) => arr.find(c => Array.isArray(c?.x) && c.x.length && Array.isArray(c?.y) && c.y.length);
-  
-  const xData = useMemo(() => {
-    return allCurves.length > 0 ? (firstValid(allCurves)?.x || []) : [];
-  }, [allCurves]);
-  
-  const xScaleFactor = useMemo(() => getScaleFactor(domainRange.xMin, xData), [domainRange.xMin, xData]);
-  
-  // Normalize y-axis scaling to avoid edge-cases when yMin is 0
-  const yFirst = useMemo(() => {
-    return firstValid(allCurves)?.y || [];
-  }, [allCurves]);
-  
-  const yScaleFactor = useMemo(() => getScaleFactor(domainRange.yMin, yFirst), [domainRange.yMin, yFirst]);
+  // Resolve active unit option objects from the shared context selection
+  const xUnitOption = UNIT_OPTIONS.find((o) => o.value === xUnitPrefix);
+  const yUnitOption = UNIT_OPTIONS.find((o) => o.value === yUnitPrefix);
 
+  // SI conversion factors driven by the selected prefix (e.g. nano → 1e9, milli → 1e3)
+  const xSiFactor = xUnitOption.factor;
+  const ySiFactor = yUnitOption.factor;
+
+  // Raw SI value × scaleFactor = graph display value in the selected unit (e.g. µm, µN)
+  const xScaleFactor = xSiFactor;
+  const yScaleFactor = ySiFactor;
+
+  // Scaled ranges used to compute how many decimal places are needed on tick labels
   const xScaledRange = useMemo(() => (domainRange.xMax - domainRange.xMin) * xScaleFactor, [domainRange.xMax, domainRange.xMin, xScaleFactor]);
   const xDecimals = useMemo(() => xScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(xScaledRange / 10))) : 0, [xScaledRange]);
 
   const yScaledRange = useMemo(() => (domainRange.yMax - domainRange.yMin) * yScaleFactor, [domainRange.yMax, domainRange.yMin, yScaleFactor]);
   const yDecimals = useMemo(() => yScaledRange > 0 ? Math.max(0, Math.ceil(-Math.log10(yScaledRange / 10))) : 0, [yScaledRange]);
+  // Keeps tooltip precision readable by forcing at least two decimal places.
+  const tooltipXDecimals = Math.max(2, xDecimals);
+  // Keeps tooltip precision readable by forcing at least two decimal places.
+  const tooltipYDecimals = Math.max(2, yDecimals);
 
-  const xExponent = useMemo(() => Math.log10(xScaleFactor), [xScaleFactor]);
-  const xUnit = useMemo(() => xExponent === 0 ? 'm' : `×10^{-${Math.round(xExponent)}} m`, [xExponent]);
+  // Y axis base symbol for force: prepend selected metric prefix to "N" (e.g. milli → "mN")
+  const yBaseSymbol = yUnitOption.prefix ? `${yUnitOption.prefix}N` : "N";
 
-  const yExponent = useMemo(() => Math.log10(yScaleFactor), [yScaleFactor]);
-  const yUnit = useMemo(() => yExponent === 0 ? 'N' : `×10^{-${Math.round(yExponent)}} N`, [yExponent]);
+  // Axis unit labels use the selected prefix directly (e.g. µm, µN)
+  const xUnit = xUnitOption.xSymbol;
+  const yUnit = yBaseSymbol;
 
   // Debug: Log curve data before building chartOptions
   console.log("FI curves_cp len:", curvesCpData[0]?.x?.length, "fparams len:", curvesFparamData.length, "domain:", domainRange);
@@ -264,13 +314,14 @@ const ForceIndentationDataSet = ({
             name: curve.curve_id,
             type: graphType === "scatter" ? "scatter" : "line",
             smooth: false,
-            showSymbol: false, // Keep symbols off for cp curves (fparam uses scatter with symbols)
+            showSymbol: true, // Keep symbol hit targets enabled so item tooltips work in line mode.
             connectNulls: true,
-            large: true,
+            large: false, // Keep hit detection enabled for reliable hover/click behavior.
             sampling: "lttb", // Extra safety for large data
             triggerEvent: true,
             itemStyle: {
               color: curve.curve_id.includes('_hertz') ? 'yellow' : undefined,
+              opacity: graphType === "line" ? 0 : 1,
             },
             lineStyle: {
               width: curve.curve_id.includes('_hertz') ? 5 : 1.5,
@@ -308,57 +359,40 @@ const ForceIndentationDataSet = ({
     tooltip: tooManySeries
       ? { show: false } // Disable tooltips when there are many curves to improve performance
       : {
-          trigger: "axis",
-          // Format tooltip to show each series cleanly with curve ID, x, and y values
+          trigger: "item",
           formatter: (params) => {
-            const list = Array.isArray(params) ? params : [params];
-
-            return list
-              .map(p => {
-                // Extract curve ID from series name or data
-                const curveId = p.seriesName || p.name || (p.data && p.data.curve_id);
-
-                // Handle value as array or single value
-                const value = Array.isArray(p.value) ? p.value : [p.value];
-
-                const x = value[0];
-                const y = value[1];
-
-                return [
-                  `<b>${curveId}</b>`,
-                  `x: ${x}`,
-                  `y: ${y}`,
-                ].join('<br/>');
-              })
-              .join('<br/><br/>');
+            const name = params.seriesName || params.name || '';
+            const value = Array.isArray(params.value) ? params.value : [params.value];
+            const x = value[0];
+            const y = value[1];
+            if (x == null || y == null || isNaN(x) || isNaN(y)) return '';
+            return [
+              `<b>${name}</b>`,
+              `Indentation (${xUnit}): ${x.toFixed(tooltipXDecimals)}`,
+              `Force (${yUnit}): ${y.toFixed(tooltipYDecimals)}`,
+            ].join('<br/>');
           },
         },
     xAxis: {
       type: "value",
-      name: `Indentation (${xUnit})`,
+      name: formatAxisQuantityLabel("Indentation", 0, xUnitOption.xSymbol),
       nameLocation: "middle",
-      nameGap: 25,
+      nameGap: 34,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       min: domainRange.xMin !== null ? domainRange.xMin * xScaleFactor : undefined,
       max: domainRange.xMax !== null ? domainRange.xMax * xScaleFactor : undefined,
-      axisLabel: {
-        formatter: function (value) {
-          return value.toFixed(xDecimals);
-        },
-      },
+      axisLabel: buildValueAxisTickLabel((value) => value.toFixed(xDecimals)),
     },
     yAxis: {
       type: "value",
-      name: `Force (${yUnit})`,
+      name: formatAxisQuantityLabel("Force", 0, yBaseSymbol),
       nameLocation: "middle",
-      nameGap: 40,
+      nameGap: 50,
+      nameTextStyle: CHART_AXIS_NAME_TEXT_STYLE,
       scale: true,
       min: domainRange.yMin !== null ? domainRange.yMin * yScaleFactor : undefined,
       max: domainRange.yMax !== null ? domainRange.yMax * yScaleFactor : undefined,
-      axisLabel: {
-        formatter: function (value) {
-          return value.toFixed(yDecimals);
-        },
-      },
+      axisLabel: buildValueAxisTickLabel((value) => value.toFixed(yDecimals)),
     },
     series,
 
@@ -396,9 +430,18 @@ const ForceIndentationDataSet = ({
     ],
     animation: false,
     progressive: 5000,
-  }), [tooManySeries, series, xScaleFactor, yScaleFactor, xDecimals, yDecimals, xUnit, yUnit, domainRange]);
+  }), [tooManySeries, series, xScaleFactor, yScaleFactor, xDecimals, yDecimals, tooltipXDecimals, tooltipYDecimals, xUnit, yUnit, domainRange, hoveredCurveId]);
 
   const onChartEvents = {
+    mouseover: (params) => {
+      if (params.componentType === "series") {
+        const curveId = params.seriesName || params.name;
+        if (curveId) setHoveredCurveId(curveId);
+      }
+    },
+    mouseout: () => {
+      setHoveredCurveId(null);
+    },
     click: (params) => {
       console.log("Chart click event (Indentation):", {
         componentType: params.componentType,
@@ -460,9 +503,51 @@ const ForceIndentationDataSet = ({
       <div style={toolbarCardStyle}>
         <div style={leftWrapStyle}>
           <div style={titleStyle}>Force–Indentation</div>
-          <div style={chipStyle}>{allCurves.length} series</div>
-          <div style={unitChipStyle}>X: {xUnit}</div>
-          <div style={unitChipStyle}>Y: {yUnit}</div>
+          <div style={chipStyle}>{uniqueCurveCount} series</div>
+
+          {/* X axis unit selector */}
+          <div ref={xDropdownRef} style={{ position: "relative" }}>
+            <button
+              style={unitChipStyle}
+              onClick={() => { setXDropdownOpen((v) => !v); setYDropdownOpen(false); }}
+              title="Change X axis unit"
+            >
+              X: {xUnit} <span style={{ fontSize: 10, opacity: 0.6 }}>▾</span>
+            </button>
+            {xDropdownOpen && (
+              <div style={dropdownPanelStyle}>
+                {UNIT_OPTIONS.map((opt) => (
+                  <button key={opt.value} style={dropdownItemStyle(xUnitPrefix === opt.value)}
+                    onClick={() => { setXUnitPrefix(opt.value); setXDropdownOpen(false); }}>
+                    {opt.xSymbol}
+                    <span style={{ marginLeft: 6, opacity: 0.5, fontSize: 11 }}>({opt.value === "none" ? "SI" : opt.value})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Y axis unit selector */}
+          <div ref={yDropdownRef} style={{ position: "relative" }}>
+            <button
+              style={unitChipStyle}
+              onClick={() => { setYDropdownOpen((v) => !v); setXDropdownOpen(false); }}
+              title="Change Y axis unit"
+            >
+              Y: {yUnit} <span style={{ fontSize: 10, opacity: 0.6 }}>▾</span>
+            </button>
+            {yDropdownOpen && (
+              <div style={dropdownPanelStyle}>
+                {UNIT_OPTIONS.map((opt) => (
+                  <button key={opt.value} style={dropdownItemStyle(yUnitPrefix === opt.value)}
+                    onClick={() => { setYUnitPrefix(opt.value); setYDropdownOpen(false); }}>
+                    {opt.prefix ? `${opt.prefix}N` : "N"}
+                    <span style={{ marginLeft: 6, opacity: 0.5, fontSize: 11 }}>({opt.value === "none" ? "SI" : opt.value})</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>

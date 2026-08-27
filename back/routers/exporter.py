@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import FileResponse
 from typing import Dict, Any, List
 import os
@@ -8,12 +8,20 @@ from pathlib import Path
 import duckdb
 
 from exporters import get_exporter  # Assuming exporters package similar to openers
+from auth.dependencies import get_current_user
+# Confirms a dataset_id belongs to the requesting user before scoping an export to it.
+from db.datasets import get_dataset_for_user
 
 router = APIRouter(prefix="", tags=["export"])
 
 logger = logging.getLogger(__name__)
 
 SUPPORTED_EXPORT_EXTENSIONS = ["hdf5", "json", "csv", "txt"]
+
+# Read from the environment so a Render Persistent Disk mount (e.g.
+# DB_PATH=/var/data/all.db) survives redeploys instead of the container's
+# ephemeral local disk; falls back to the old relative path for local dev.
+DB_PATH = os.environ.get("DB_PATH", "data/all.db")
 
 
 # Sanitize file system paths
@@ -24,7 +32,7 @@ def sanitize_file_path(path: str) -> str:
     return str(path)
 
 @router.post("/export/{extension}")
-async def export_endpoint(extension: str, data: Dict[str, Any]):
+async def export_endpoint(extension: str, data: Dict[str, Any], user=Depends(get_current_user)):
     """Export curves from DuckDB to a file with custom level names and metadata."""
     extension = extension.lower()
     if extension not in SUPPORTED_EXPORT_EXTENSIONS:
@@ -33,6 +41,10 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
     export_path = data.get("export_path")
     curve_ids = data.get("curve_ids", [])
     num_curves = data.get("num_curves")
+    # Scopes the export query to a single dataset. curve_id alone is only unique
+    # per dataset (PK is dataset_id + curve_id + segment_type), so without this a
+    # curve_id like "curve0" could match rows belonging to a different dataset.
+    dataset_id = data.get("dataset_id")
     level_names = data.get("level_names", ["curve0", "segment0"])
     metadata = data.get("metadata", {})
     
@@ -47,7 +59,7 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
     # Stores force model parameters (maxInd, minInd, poisson) used for Hertz fit calculations.
     force_model_params = data.get("force_model_params")
     
-    db_path = "data/experiment.db"
+    db_path = DB_PATH
     errors = []
 
     # Validate export_path
@@ -76,6 +88,12 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
     if export_type == "scatter":
         if dataset_type not in ["Force Model", "Elasticity Model"]:
             errors.append("dataset_type must be one of: Force Model, Elasticity Model")
+
+    # Verify the dataset belongs to the requesting user before scoping any queries to
+    # it, so one user can never export another user's curves by guessing a dataset_id.
+    if dataset_id is not None:
+        if not get_dataset_for_user(dataset_id, user["id"]):
+            raise HTTPException(status_code=404, detail={"status": "error", "message": "Dataset not found"})
 
     try:
         # Sanitize file system path
@@ -108,7 +126,15 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
                 errors.append("num_curves must be a positive integer")
                 raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid num_curves", "errors": errors})
             with duckdb.connect(db_path) as conn:
-                curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
+                if dataset_id is not None:
+                    curve_ids_result = conn.execute(
+                        "SELECT DISTINCT curve_id FROM force_vs_z WHERE dataset_id = ? ORDER BY curve_id LIMIT ?",
+                        (dataset_id, num_curves),
+                    ).fetchall()
+                else:
+                    curve_ids_result = conn.execute(
+                        "SELECT DISTINCT curve_id FROM force_vs_z ORDER BY curve_id LIMIT ?", (num_curves,)
+                    ).fetchall()
                 converted_curve_ids = [row[0] for row in curve_ids_result]
         logger.info("exporter3")
 
@@ -139,6 +165,7 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
         
         # Prepare kwargs with SoftMech-style parameters
         export_kwargs = {
+            "dataset_id": dataset_id,  # Scopes curve lookups to this dataset only
             "dataset_path": data.get("dataset_path"),
             "level_names": level_names if level_names else None,
             "metadata_path": data.get("metadata_path", ""),
@@ -152,6 +179,16 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
             "force_model_params": force_model_params,  # Pass force model parameters for Hertz fit calculations
             "elasticity_params": data.get("elasticity_params") or {},  # optional, but add
             "youngs_modulus_formatted": data.get("youngs_modulus_formatted"),  # Pass Young's modulus from websocket stats
+            # K_raw / K_contact / E from the LinearWindowFit regular filter (see
+            # linear_window_fit_filter.py / compute_derived()); None when that filter
+            # wasn't active, in which case the CSV exporter simply skips these lines.
+            "k_raw_formatted": data.get("k_raw_formatted"),
+            "k_contact_formatted": data.get("k_contact_formatted"),
+            "stiffness_youngs_modulus_formatted": data.get("stiffness_youngs_modulus_formatted"),
+            # Per-curve K_raw / K_contact / E rows (one dict per curve_id) used by the
+            # CSV exporter's raw export to write each curve's own values on top of its
+            # data block, alongside the dataset-level average written above.
+            "kfit_by_curve": data.get("kfit_by_curve") or [],
         }
         
         num_exported = exporter.export(
@@ -181,18 +218,26 @@ async def export_endpoint(extension: str, data: Dict[str, Any]):
         })
 
 @router.post("/calculate-softmech-metadata")
-async def calculate_softmech_metadata(data: Dict[str, Any]):
+async def calculate_softmech_metadata(data: Dict[str, Any], user=Depends(get_current_user)):
     """Calculate SoftMech-style metadata for preview in frontend."""
     try:
         curve_ids = data.get("curve_ids", [])
         num_curves = data.get("num_curves")
+        # Scopes curve/tip lookups to one dataset for the same reason as the export
+        # endpoint above: curve_id is only unique per dataset, not globally.
+        dataset_id = data.get("dataset_id")
         export_type = data.get("export_type", "raw")
         dataset_type = data.get("dataset_type", "Force")
         direction = data.get("direction", "V")
         loose = data.get("loose", 100)
         filters = data.get("filters", {})
         
-        db_path = "data/experiment.db"
+        db_path = DB_PATH
+
+        # Verify dataset ownership before scoping any queries to it.
+        if dataset_id is not None:
+            if not get_dataset_for_user(dataset_id, user["id"]):
+                return {"status": "error", "message": "Dataset not found"}
         
         # Convert curve_ids
         converted_curve_ids = None
@@ -212,7 +257,15 @@ async def calculate_softmech_metadata(data: Dict[str, Any]):
         # Fetch curve_ids if num_curves is provided
         if not converted_curve_ids and num_curves is not None:
             with duckdb.connect(db_path) as conn:
-                curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
+                if dataset_id is not None:
+                    curve_ids_result = conn.execute(
+                        "SELECT DISTINCT curve_id FROM force_vs_z WHERE dataset_id = ? ORDER BY curve_id LIMIT ?",
+                        (dataset_id, num_curves),
+                    ).fetchall()
+                else:
+                    curve_ids_result = conn.execute(
+                        "SELECT DISTINCT curve_id FROM force_vs_z ORDER BY curve_id LIMIT ?", (num_curves,)
+                    ).fetchall()
                 converted_curve_ids = [row[0] for row in curve_ids_result]
         
         if not converted_curve_ids:
@@ -229,19 +282,21 @@ async def calculate_softmech_metadata(data: Dict[str, Any]):
             # Check if tip_angle column exists
             columns = conn.execute("DESCRIBE force_vs_z").fetchall()
             column_names = [col[0] for col in columns]
+            tip_query_suffix = " WHERE dataset_id = ?" if dataset_id is not None else ""
+            tip_query_params = [dataset_id] if dataset_id is not None else []
             
             if "tip_angle" in column_names:
-                metadata_row = conn.execute("""
-                    SELECT tip_geometry, tip_radius, tip_angle, spring_constant 
-                    FROM force_vs_z LIMIT 1
-                """).fetchone()
+                metadata_row = conn.execute(
+                    f"SELECT tip_geometry, tip_radius, tip_angle, spring_constant FROM force_vs_z{tip_query_suffix} LIMIT 1",
+                    tip_query_params,
+                ).fetchone()
                 tip_geometry, tip_radius, tip_angle, spring_constant = metadata_row or ("sphere", 1e-6, 30.0, 0.1)
             else:
                 # tip_angle column doesn't exist, use default value
-                metadata_row = conn.execute("""
-                    SELECT tip_geometry, tip_radius, spring_constant 
-                    FROM force_vs_z LIMIT 1
-                """).fetchone()
+                metadata_row = conn.execute(
+                    f"SELECT tip_geometry, tip_radius, spring_constant FROM force_vs_z{tip_query_suffix} LIMIT 1",
+                    tip_query_params,
+                ).fetchone()
                 tip_geometry, tip_radius, spring_constant = metadata_row or ("sphere", 1e-6, 0.1)
                 tip_angle = 30.0  # Default value
         
@@ -281,7 +336,7 @@ async def calculate_softmech_metadata(data: Dict[str, Any]):
         })
 
 @router.get("/exports/{file_path:path}")
-async def serve_exported_file(file_path: str):
+async def serve_exported_file(file_path: str, user=Depends(get_current_user)):
     """Serve an exported file from the exports directory."""
     # Strip leading 'exports/' if present to fix double prefix issue
     if file_path.startswith("exports/"):

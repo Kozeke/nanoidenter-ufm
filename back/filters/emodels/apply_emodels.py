@@ -4,7 +4,8 @@ from .emodel_registry import EMODEL_REGISTRY
 def apply_emodels(query: str, emodels: Dict, curve_ids: List[str], elastic_model_params: Dict = None) -> str:
     # print("apply_emodels")
     if elastic_model_params:
-        print(f"🔧 Using elastic model parameters: {elastic_model_params}")
+        # print(f"🔧 Using elastic model parameters: {elastic_model_params}")
+        pass
     z_col = "elspectra_result[1]"
     e_col = "elspectra_result[2]"
     
@@ -19,6 +20,11 @@ def apply_emodels(query: str, emodels: Dict, curve_ids: List[str], elastic_model
                     value = elastic_model_params.get("minInd", emodel_instance.get_value(param_name))
                 elif param_name == "maxInd" and elastic_model_params:
                     value = elastic_model_params.get("maxInd", emodel_instance.get_value(param_name))
+                elif param_name == "tip_radius" and elastic_model_params:
+                    # Use the actual tip_radius from the experiment metadata so that the
+                    # bilayer (and any other geometry-aware emodel) uses the same R that
+                    # calc_elspectra used when building the elastic spectrum.
+                    value = elastic_model_params.get("tip_radius", emodel_instance.get_value(param_name))
                 else:
                     value = params.get(param_name, emodel_instance.get_value(param_name))
                 param_values.append(str(value))  # Convert to string for array literal
@@ -51,5 +57,5 @@ def apply_emodels(query: str, emodels: Dict, curve_ids: List[str], elastic_model
         FROM base_results
         WHERE curve_id IN ({','.join(map(str, numeric_curve_ids))})
     """
-    print(f"Generated queryemodel:\n{query}")
+    # print(f"Generated queryemodel:\n{query}")
     return query

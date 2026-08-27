@@ -9,4 +9,9 @@ scipy
 pandas
 python-multipart
 python-jose[cryptography]
+pyjwt
 bcrypt
+psutil
+python-dotenv
+sqlalchemy[asyncio]
+aiosqlite

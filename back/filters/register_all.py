@@ -114,8 +114,9 @@ def register_filters(conn):
             duckdb.list_type(duckdb.list_type('DOUBLE')),  # Return: DOUBLE[][]
             null_handling='SPECIAL'
         )
-    except duckdb.CatalogException as e:
-        if "already exists" in str(e):
+    except (duckdb.CatalogException, duckdb.NotImplementedException) as e:
+        msg = str(e).lower()
+        if "already exists" in msg or "already created" in msg:
             print(f"Function 'calc_indentation' already exists. Skipping creation.")
         else:
             raise
@@ -138,8 +139,9 @@ def register_filters(conn):
             duckdb.list_type(duckdb.list_type('DOUBLE')),  # Return: DOUBLE[][]
             null_handling='SPECIAL'
         )
-    except duckdb.CatalogException as e:
-        if "already exists" in str(e):
+    except (duckdb.CatalogException, duckdb.NotImplementedException) as e:
+        msg = str(e).lower()
+        if "already exists" in msg or "already created" in msg:
             print(f"Function 'calc_elspectra' already exists. Skipping creation.")
         else:
             raise

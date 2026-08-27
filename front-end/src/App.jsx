@@ -8,6 +8,7 @@ import { useAuthInit } from "./hooks/useAuthInit";
 import { useAuthStore } from "./state/useAuthStore";
 import Profile from "./pages/Profile";
 import MyExperiments from "./pages/MyExperiments";
+import MyDatasets from "./pages/MyDatasets";
 import ProfileCompletedRoute from "./auth/ProfileCompletedRoute";
 
 function App() {
@@ -59,6 +60,14 @@ function App() {
           element={
             <ProfileCompletedRoute>
               <MyExperiments />
+            </ProfileCompletedRoute>
+          }
+        />
+        <Route
+          path="/datasets"
+          element={
+            <ProfileCompletedRoute>
+              <MyDatasets />
             </ProfileCompletedRoute>
           }
         />

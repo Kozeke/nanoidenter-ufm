@@ -75,12 +75,48 @@ export const useDashboardStore = create(
       elasticModelParams: createDefaultElasticModelParams(),
       // Stores the active force model parameters shared with the backend.
       forceModelParams: createDefaultForceModelParams(),
-      // Default value for the number of curves requested from the backend.
-      numCurves: 10,
-      // Updates the stored curve count while defaulting invalid input to 10.
-      setNumCurves: (value) =>
+      // Start index (inclusive, 0-based) of the curve range to request.
+      curveFrom: 0,
+      // End index (exclusive) of the curve range to request.
+      curveTo: 10,
+      // Selected HDF5 segment: segment0 (indent) or segment1 (retract).
+      selectedSegmentType: "segment0",
+      // Updates the active segment filter sent to the backend.
+      setSelectedSegmentType: (segmentType) =>
+        set({ selectedSegmentType: segmentType || "segment0" }),
+      // Updates the start of the curve range, defaulting to 0 on invalid input.
+      setCurveFrom: (value) =>
+        set({ curveFrom: Number.isNaN(+value) ? 0 : Math.max(0, parseInt(value, 10)) }),
+      // Updates the end of the curve range, defaulting to 10 on invalid input.
+      setCurveTo: (value) =>
+        set({ curveTo: Number.isNaN(+value) ? 10 : Math.max(1, parseInt(value, 10)) }),
+      // Stores the current dataset ID from the most recently loaded file.
+      datasetId: null,
+      // Updates the dataset ID when a new file is loaded.
+      setDatasetId: (id) => set({ datasetId: id }),
+      // Stores the current dataset filename.
+      filename: null,
+      // Updates the dataset filename.
+      setFilename: (name) => set({ filename: name }),
+      // ID of the experiment opened from My Experiments (null = create on save).
+      experimentId: null,
+      // Persists which opened experiment future Save actions should update.
+      setExperimentId: (id) => set({ experimentId: id }),
+      // Name of the opened experiment, pre-filled in the save modal.
+      experimentName: null,
+      // Updates the opened experiment name stored for the save modal.
+      setExperimentName: (name) => set({ experimentName: name }),
+      // Description of the opened experiment, pre-filled in the save modal.
+      experimentDescription: null,
+      // Updates the opened experiment description stored for the save modal.
+      setExperimentDescription: (description) =>
+        set({ experimentDescription: description }),
+      // Clears opened-experiment identity so the next save creates a new row.
+      clearOpenedExperiment: () =>
         set({
-          numCurves: Number.isNaN(+value) ? 10 : parseInt(value, 10),
+          experimentId: null,
+          experimentName: null,
+          experimentDescription: null,
         }),
       // Records which main dashboard tab is currently active.
       activeTab: "forceDisplacement",
@@ -106,6 +142,15 @@ export const useDashboardStore = create(
               ? updater(state.selectedExportCurveIds)
               : updater,
         })),
+      // True only right after a brand-new dataset is loaded. Tells the
+      // websocket layer to default selectedCurveIds/selectedExportCurveIds to
+      // "every curve" once the in-flight get_metadata request fully completes,
+      // instead of on every partial batch (batches stream in incrementally,
+      // so re-deriving "all curves" from each partial forceData update would
+      // both miss curves that hadn't arrived yet and clobber any curve the
+      // user had manually unchecked before clicking "Update Curves").
+      needsCurveIdInit: true,
+      setNeedsCurveIdInit: (value) => set({ needsCurveIdInit: value }),
       // Stores the graph visualization style used by the dashboard charts.
       graphType: "line",
       // Updates the shared graph visualization style.
@@ -151,7 +196,10 @@ export const useDashboardStore = create(
       // Stores population model statistics (e.g. Young's modulus)
       modelStats: {
         force: [],
-        elasticity: []
+        elasticity: [],
+        stiffness: [],
+        // Per-curve LinearWindowFit rows ({curve_id, k_n_per_m, k_contact, youngs_modulus_pa})
+        stiffnessByCurve: [],
       },
       
       setModelStats: (type, statsArray) =>
@@ -183,6 +231,18 @@ export const useDashboardStore = create(
         set((s) => ({
           forceModelParams: { ...s.forceModelParams, ...updater },
         })),
+      // Resets all filter and analysis-parameter state to defaults when a new
+      // experiment is loaded, preventing stale filter choices from a previous
+      // dataset from leaking into the first request for the new dataset.
+      resetFiltersAndParams: () =>
+        set({
+          filters: createDefaultFilters(),
+          elasticityParams: createDefaultElasticityParams(),
+          elasticModelParams: createDefaultElasticModelParams(),
+          forceModelParams: createDefaultForceModelParams(),
+          setZeroForce: true,
+          selectedSegmentType: "segment0",
+        }),
       // Restores all dashboard state to defaults so components can reset their view.
       reset: () =>
         set({
@@ -193,7 +253,9 @@ export const useDashboardStore = create(
           lastSocketError: null,
           modelStats: {
             force: [],
-            elasticity: []
+            elasticity: [],
+            stiffness: [],
+            stiffnessByCurve: [],
           },
           selectedCurveId: null,
           computeScope: "full",
@@ -202,11 +264,19 @@ export const useDashboardStore = create(
           elasticityParams: createDefaultElasticityParams(),
           elasticModelParams: createDefaultElasticModelParams(),
           forceModelParams: createDefaultForceModelParams(),
-          numCurves: 10,
+          curveFrom: 0,
+          curveTo: 10,
+          selectedSegmentType: "segment0",
+          datasetId: null,
+          filename: null,
+          experimentId: null,
+          experimentName: null,
+          experimentDescription: null,
           activeTab: "forceDisplacement",
           graphType: "line",
           selectedCurveIds: [],
           selectedExportCurveIds: [],
+          needsCurveIdInit: true,
           isLoading: false,
           isLoadingCurves: false,
           isLoadingImport: false,

@@ -20,8 +20,12 @@ from utils.cache import (
     warmup_cp_cache, 
     get_cached_indentations, 
     cache_indentations_batch,
-    get_cp_cache_key
+    get_cp_cache_key,
+    CACHE_ENABLED
 )
+
+# Tracks whether cache-enabled status has already been logged for this process.
+_cache_status_logged = False
 
 # Stores absolute DuckDB database path for analysis queries
 # DB_PATH = "data/all.db"
@@ -37,40 +41,82 @@ def _hash_dict(d: Dict) -> str:
     payload = json.dumps(d, sort_keys=True, separators=(",", ":"))
     return hashlib.md5(payload.encode("utf-8")).hexdigest()
 
-# Ensure cache tables exist for hash-based curve caching
-# def ensure_cache_tables(conn: duckdb.DuckDBPyConnection) -> None:
-#     """
-#     Ensure cache tables exist (contact_points, indentations, elspectra).
-#     Delegates to _ensure_extended_cache_tables which defines the canonical schema.
-#     """
-#     _ensure_extended_cache_tables(conn)
 
-# Singleton connection to ensure consistent DuckDB configuration
-# _conn_singleton = None
-
-# def get_conn():
-#     """
-#     Return a module-level singleton DuckDB connection with consistent configuration.
-#     This ensures all code paths use the same connection config to avoid
-#     DuckDB's "different configuration" error.
-    
-#     Returns:
-#         duckdb.DuckDBPyConnection: A DuckDB connection with consistent config
-#     """
-#     global _conn_singleton
-#     if _conn_singleton is None:
-#         # Use read/write to match WebSocket connection config (DuckDB constraint: same config per process)
-#         _conn_singleton = duckdb.connect(DB_PATH)
-#         # Register filters on first connection
-#         register_filters(_conn_singleton)
-#         # Ensure cache tables exist
-#         ensure_cache_tables(_conn_singleton)
-#     return _conn_singleton
 
 def _json_hash(obj) -> str:
     """Create a stable hash from a JSON-serializable object."""
     json_str = json.dumps(obj, sort_keys=True)
     return hashlib.md5(json_str.encode()).hexdigest()
+
+
+# Emit script-style baseline/K diagnostics for backend-vs-script comparisons.
+def _print_import_fit_summary(
+    dataset_id: Optional[int],
+    baseline_slopes_by_curve: List[Dict[str, float]],
+    k_values_by_curve: List[Dict[str, float]],
+) -> None:
+    """
+    Print baseline and K logs in the same format as the standalone script.
+    """
+    # Store a readable dataset label so logs identify which dataset produced the numbers.
+    dataset_label = f"dataset_id={dataset_id}" if dataset_id is not None else "dataset_id=unknown"
+    print(f"Processed {dataset_label}")
+
+    # Store the number of unique curves that contributed to baseline/K diagnostics.
+    unique_curve_ids = sorted(
+        {
+            row.get("curve_id")
+            for row in baseline_slopes_by_curve + k_values_by_curve
+            if row.get("curve_id") is not None
+        }
+    )
+    print(f"Curves used: {len(unique_curve_ids)}")
+    print()
+
+    print("Baseline drift slope from detrending:")
+    for row in baseline_slopes_by_curve:
+        # Store curve identifier in the same "curveN" format used by the script output.
+        curve_name = str(row["curve_id"])
+        # Store baseline slope value; numerically identical in nN/nm and N/m.
+        slope_n_per_m = float(row["slope_n_per_m"])
+        print(f"{curve_name}: {slope_n_per_m:.6g} nN/nm ({slope_n_per_m:.6g} N/m)")
+
+    if baseline_slopes_by_curve:
+        # Store all baseline slopes for mean/std aggregation across processed curves.
+        slope_values = [float(row["slope_n_per_m"]) for row in baseline_slopes_by_curve]
+        # Store mean baseline slope in script-matching units and formatting.
+        mean_slope = sum(slope_values) / len(slope_values)
+        # Store sample standard deviation to match script behavior (ddof=1 when n>1).
+        if len(slope_values) > 1:
+            std_slope = math.sqrt(sum((value - mean_slope) ** 2 for value in slope_values) / (len(slope_values) - 1))
+        else:
+            std_slope = 0.0
+        print()
+        print(f"Average baseline drift slope: {mean_slope:.6g} +/- {std_slope:.6g} nN/nm")
+        print(f"Average baseline drift slope: {mean_slope:.6g} +/- {std_slope:.6g} N/m")
+
+    print()
+    print("K from each curve:")
+    for row in k_values_by_curve:
+        # Store curve identifier in the same "curveN" format used by the script output.
+        curve_name = str(row["curve_id"])
+        # Store stiffness slope value; numerically identical in nN/nm and N/m.
+        k_n_per_m = float(row["k_n_per_m"])
+        print(f"{curve_name}: {k_n_per_m:.6g} nN/nm ({k_n_per_m:.6g} N/m)")
+
+    if k_values_by_curve:
+        # Store all K values for mean/std aggregation across processed curves.
+        k_values = [float(row["k_n_per_m"]) for row in k_values_by_curve]
+        # Store mean K in script-matching units and formatting.
+        mean_k = sum(k_values) / len(k_values)
+        # Store sample standard deviation to match script behavior (ddof=1 when n>1).
+        if len(k_values) > 1:
+            std_k = math.sqrt(sum((value - mean_k) ** 2 for value in k_values) / (len(k_values) - 1))
+        else:
+            std_k = 0.0
+        print()
+        print(f"Average K: {mean_k:.6g} +/- {std_k:.6g} nN/nm")
+        print(f"Average K: {mean_k:.6g} +/- {std_k:.6g} N/m")
 
 # Preserve legacy cache structures that store extended intermediate results
 # def _ensure_extended_cache_tables(conn: duckdb.DuckDBPyConnection):
@@ -111,72 +157,131 @@ def _json_hash(obj) -> str:
 #         )
 #     """)
 
-def get_metadata_for_curves(conn: duckdb.DuckDBPyConnection, curve_ids: List[str]) -> Dict:
+def get_metadata_for_curves(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], dataset_id: int = None) -> Dict:
     """
-    Retrieve metadata (spring_constant, tip_radius, tip_geometry) for the given curves.
+    Retrieve metadata (spring_constant, tip_radius, tip_geometry, tip_angle) for the given curves.
     Returns a dictionary with metadata values, using the first curve's values as representative.
     """
     if not curve_ids:
         return {
             'spring_constant': 1.0,
             'tip_radius': 1e-5,
-            'tip_geometry': 'sphere'
+            'tip_geometry': 'sphere',
+            'tip_angle': 0.0,
         }
     
-    # Convert curve_ids to numeric format
-    numeric_curve_ids = curve_ids
+    # Convert "curveN" strings to plain integers for safe SQL parameterisation.
+    numeric_curve_ids = []
+    for cid in curve_ids:
+        if isinstance(cid, str) and cid.startswith('curve'):
+            try:
+                numeric_curve_ids.append(int(cid[5:]))
+            except ValueError:
+                continue
+        else:
+            try:
+                numeric_curve_ids.append(int(cid))
+            except (ValueError, TypeError):
+                continue
 
-    # numeric_curve_ids = []
-    # for cid in curve_ids:
-    #     if isinstance(cid, str) and cid.startswith('curve'):
-    #         try:
-    #             numeric_id = int(cid[5:])
-    #             numeric_curve_ids.append(str(numeric_id))
-    #         except ValueError:
-    #             continue
-    #     else:
-    #         numeric_curve_ids.append(cid)
-    
     if not numeric_curve_ids:
         return {
             'spring_constant': 1.0,
             'tip_radius': 1e-5,
-            'tip_geometry': 'sphere'
+            'tip_geometry': 'sphere',
+            'tip_angle': 0.0,
         }
-    
+
     try:
-        # Get metadata from the first curve (assuming all curves have same metadata)
-        result = conn.execute(f"""
-            SELECT spring_constant, tip_radius, tip_geometry
-            FROM force_vs_z 
-            WHERE curve_id = {numeric_curve_ids[0]}
-            LIMIT 1
-        """).fetchone()
-        
-        if result:
-            spring_constant, tip_radius, tip_geometry = result
-            return {
-                'spring_constant': spring_constant or 1.0,
-                'tip_radius': tip_radius or 1e-5,
-                'tip_geometry': tip_geometry or 'sphere'
-            }
+        # Stores dataset-level metadata row, which is the authoritative source for user edits.
+        dataset_metadata_row = None
+        # Prevent crash if datasets lookup fails or older schema is missing columns.
+        try:
+            if dataset_id is not None:
+                # Retrieves authoritative dataset metadata from datasets table for this dataset.
+                dataset_metadata_row = conn.execute(
+                    """
+                    SELECT spring_constant, tip_radius, tip_geometry, tip_angle
+                    FROM datasets
+                    WHERE id = ?
+                    LIMIT 1
+                    """,
+                    (dataset_id,),
+                ).fetchone()
+        except Exception:
+            dataset_metadata_row = None
+
+        # Stores curve-level metadata row used only as a fallback for missing dataset values.
+        curve_metadata_row = None
+        # Get metadata from the first curve (assuming all curves share the same metadata).
+        # Use parameterised queries (?) so the values are never interpolated as SQL identifiers.
+        if dataset_id is not None:
+            curve_metadata_row = conn.execute(
+                """
+                SELECT spring_constant, tip_radius, tip_geometry
+                FROM force_vs_z
+                WHERE dataset_id = ? AND curve_id = ?
+                LIMIT 1
+                """,
+                (dataset_id, numeric_curve_ids[0]),
+            ).fetchone()
         else:
-            return {
-                'spring_constant': 1.0,
-                'tip_radius': 1e-5,
-                'tip_geometry': 'sphere'
-            }
+            curve_metadata_row = conn.execute(
+                """
+                SELECT spring_constant, tip_radius, tip_geometry
+                FROM force_vs_z
+                WHERE curve_id = ?
+                LIMIT 1
+                """,
+                (numeric_curve_ids[0],),
+            ).fetchone()
+
+        # Stores dataset-level values, because these should override stale curve-level values.
+        ds_spring_constant = None
+        ds_tip_radius = None
+        ds_tip_geometry = None
+        ds_tip_angle = None
+        if dataset_metadata_row:
+            ds_spring_constant, ds_tip_radius, ds_tip_geometry, ds_tip_angle = dataset_metadata_row
+
+        # Stores curve-level fallback values for legacy rows with incomplete dataset metadata.
+        curve_spring_constant = None
+        curve_tip_radius = None
+        curve_tip_geometry = None
+        if curve_metadata_row:
+            curve_spring_constant, curve_tip_radius, curve_tip_geometry = curve_metadata_row
+
+        return {
+            'spring_constant': (
+                ds_spring_constant
+                if ds_spring_constant is not None
+                else (curve_spring_constant if curve_spring_constant is not None else 1.0)
+            ),
+            'tip_radius': (
+                ds_tip_radius
+                if ds_tip_radius is not None
+                else (curve_tip_radius if curve_tip_radius is not None else 1e-5)
+            ),
+            'tip_geometry': (
+                ds_tip_geometry
+                if ds_tip_geometry is not None
+                else (curve_tip_geometry if curve_tip_geometry is not None else 'sphere')
+            ),
+            # Preserve explicit 0.0 values; only default when metadata is truly missing.
+            'tip_angle': ds_tip_angle if ds_tip_angle is not None else 0.0,
+        }
     except Exception as e:
         print(f"Error retrieving metadata: {e}")
         return {
             'spring_constant': 1.0,
             'tip_radius': 1e-5,
-            'tip_geometry': 'sphere'
+            'tip_geometry': 'sphere',
+            'tip_angle': 0.0,
         }
 
 
 
-def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict, single = False, metadata: Dict = None, set_zero_force: bool = True, elasticity_params: Dict = None, elastic_model_params: Dict = None, force_model_params: Dict = None, compute_elspectra: bool = True, force_model_population: bool = False, elastic_model_population: bool = False) -> Tuple[List[Dict], Dict]:
+def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], filters: Dict, single = False, metadata: Dict = None, set_zero_force: bool = True, elasticity_params: Dict = None, elastic_model_params: Dict = None, force_model_params: Dict = None, compute_elspectra: bool = True, force_model_population: bool = False, elastic_model_population: bool = False, dataset_id: int = None, segment_type: str = "segment0") -> Tuple[List[Dict], Dict]:
     """
     Fetches a batch of curve data from DuckDB and applies filters dynamically in SQL.
     
@@ -198,6 +303,12 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         - graph_force_indentation: Dict with curves and domain for Force vs Indentation
         - graph_elspectra: Dict with curves and domain for Elspectra
     """
+    global _cache_status_logged
+    # Emits cache toggle state once so runtime behavior is visible in logs.
+    if not _cache_status_logged:
+        print(f"🧠 Cache enabled: {CACHE_ENABLED}")
+        _cache_status_logged = True
+
     # Stores request metadata overrides ensuring fallbacks for indentation defaults
     meta = metadata or {}
 
@@ -231,6 +342,16 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         elastic_model_params = {"maxInd": 800, "minInd": 0}
     if force_model_params is None:
         force_model_params = {"maxInd": 800, "minInd": 0, "poisson": 0.5}
+
+    # Propagate the actual tip_radius into elastic_model_params so that geometry-
+    # aware emodels (e.g. BilayerModel) use the same R that calc_elspectra used
+    # when building the elastic spectrum for each curve.
+    elastic_model_params = {**elastic_model_params, "tip_radius": r_default}
+    
+    # Also propagate tip_radius into force_model_params so that geometry-aware
+    # fmodels (e.g. HertzFmodel, DriftedHertzModel) use the same R that was used
+    # for indentation and elspectra calculations.
+    force_model_params = {**force_model_params, "tip_radius": r_default}
     # print(f"Fetching batch of {len(curve_ids)} curves...")
     
     # Extract regular and cp_filters from the input
@@ -286,31 +407,180 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                 "spring_constant": metadata.get("spring_constant") if metadata else None,
                 "tip_radius": metadata.get("tip_radius") if metadata else None,
                 "tip_geometry": metadata.get("tip_geometry") if metadata else None,
+                "tip_angle": metadata.get("tip_angle") if metadata else None,
+                "dataset_id": dataset_id,  # Include dataset_id so trimming invalidates the hash
             }
             cp_params_hash = _json_hash(cp_hash_payload)
             break
     
-    base_query = """
-        SELECT curve_id, z_values, force_values 
-        FROM force_vs_z 
-        WHERE curve_id IN ({})
-    """.format(",".join(map(str, numeric_curve_ids)))
+    # Build base query with dataset_id and segment filters.
+    from segment_utils import segment_types_sql, segment_types_for_filter
+    segment_sql = segment_types_sql(segment_type)
+    if dataset_id is not None:
+        base_query = """
+            SELECT curve_id, z_values, force_values 
+            FROM force_vs_z 
+            WHERE dataset_id = {} AND {} AND curve_id IN ({})
+        """.format(dataset_id, segment_sql, ",".join(map(str, numeric_curve_ids)))
+    else:
+        base_query = """
+            SELECT curve_id, z_values, force_values 
+            FROM force_vs_z 
+            WHERE {} AND curve_id IN ({})
+        """.format(segment_sql, ",".join(map(str, numeric_curve_ids)))
 
     # --- Graph 1: Force vs Z (Regular Filters) ---
-    query_regular = apply(base_query, regular_filters, curve_ids)
+    # Pull FixedBaseline and LinearWindowFit out of the SQL chain so neither
+    # silently overwrites the displayed curve, and so their per-curve fit
+    # results (baseline curve, K slope) can be reliably read back — the
+    # DuckDB UDF path shares one filter instance across every row in a
+    # batched query, so instance attributes aren't safe to read there.
+    # Both are applied here in Python, in the same order they'd have run in
+    # the SQL chain, then shown as separate overlay curves — the same
+    # pattern used for the Hertz fit overlay ("{curve_id}_hertz") further
+    # down in this function.
+    regular_filters_for_sql = dict(regular_filters)
+    baseline_cfg = regular_filters_for_sql.pop("fixedbaseline", None)
+    linfit_cfg = regular_filters_for_sql.pop("linearwindowfit", None)
+
+    query_regular = apply(base_query, regular_filters_for_sql, curve_ids)
     result_regular = conn.execute(query_regular).fetchall()
-    
-    curves_regular = [
-        {
-            "curve_id": f"curve{row[0]}",
-            "x": row[1],
-            "y": row[2]
-        }
-        for row in result_regular
-    ]
-    # print("graphgorcevsz",curves_regular)
+
+    curves_regular = []
+    curves_kfit = []  # scalar K per curve, collected for mean ± std aggregation
+    # Collect per-curve baseline slopes so backend logs can mirror script diagnostics.
+    baseline_slopes_by_curve = []
+    _curves_for_avg_line = []  # (z_values, working_y) pairs, collected only if linfit_cfg is active
+
+    for row in result_regular:
+        curve_id, z_values, force_values = row[0], row[1], row[2]
+        # Store stable script-style curve label used by all diagnostic log lines.
+        curve_label = f"curve{curve_id}"
+
+        # working_y tracks the curve as it passes through whichever of
+        # FixedBaseline / LinearWindowFit were popped out above, so the main
+        # displayed curve and the K fit both see the fully-corrected signal
+        # (e.g. K should be fit on the baseline-corrected curve, not the raw one).
+        working_y = force_values
+
+        if baseline_cfg is not None:
+            from filters.filters.import_filters.fixed_baseline_filter import FixedBaselineFilter
+            bl = FixedBaselineFilter()
+            bl.create()
+            for pname, pval in baseline_cfg.items():
+                if pname in bl.parameters:
+                    bl.parameters[pname]["default"] = pval
+
+            corrected_y = bl.calculate(z_values, working_y)
+            if bl.last_baseline_slope is not None:
+                baseline_slopes_by_curve.append(
+                    {
+                        "curve_id": curve_label,
+                        "slope_n_per_m": float(bl.last_baseline_slope),
+                    }
+                )
+
+            # if bl.last_baseline_values is not None:
+            #     # Drawn across the WHOLE curve, not clipped to the fit window —
+            #     # matches the reference script's `curve.baseline`, which is
+            #     # np.polyval evaluated over the entire z_nm domain (unlike the
+            #     # K line, which the reference script never extrapolates).
+            #     curves_regular.append({
+            #         "curve_id": f"{curve_id}_baseline",
+            #         "x": z_values,
+            #         "y": bl.last_baseline_values
+            #     })
+
+            working_y = corrected_y
+
+        curves_regular.append({
+            "curve_id": curve_label,
+            "x": z_values,
+            "y": working_y
+        })
+
+        if linfit_cfg is not None:
+            from filters.filters.import_filters.linear_window_fit_filter import LinearWindowFitFilter
+            fit = LinearWindowFitFilter()
+            fit.create()
+            for pname, pval in linfit_cfg.items():
+                if pname in fit.parameters:
+                    fit.parameters[pname]["default"] = pval
+
+            fitted_y = fit.calculate(z_values, working_y)
+
+            if fit.last_slope_per_meter is not None:
+                # Compute compliance-corrected k_contact and Young's modulus
+                # using dataset-level metadata (spring_constant = k_spring,
+                # tip_radius = punch radius a).
+                fit.compute_derived(
+                    k_spring=meta.get('spring_constant', 1.0),
+                    tip_radius=meta.get('tip_radius', 1e-5),
+                )
+
+                # Slice down to just the [t1_um, t2_um] window using the mask the
+                # filter exposes, instead of drawing the fitted line across the
+                # whole curve — matches the original script, which only ever
+                # draws the fit line within the region it was fit on.
+                mask = fit.last_window_mask
+                if mask is not None:
+                    window_x = [zv for zv, m in zip(z_values, mask) if m]
+                    window_y = [fy for fy, m in zip(fitted_y, mask) if m]
+                else:
+                    window_x, window_y = z_values, fitted_y
+
+                curves_regular.append({
+                    "curve_id": f"{curve_id}_linfit",
+                    "x": window_x,
+                    "y": window_y
+                })
+                curves_kfit.append({
+                    "curve_id": curve_label,
+                    "k_n_per_m": fit.last_slope_per_meter,
+                    "k_contact": fit.last_k_contact,
+                    "youngs_modulus_pa": fit.last_youngs_modulus,
+                })
+
+            # Collected regardless of whether this particular curve's own fit
+            # succeeded — average_curve_fit_line (below) decides per-curve
+            # usability itself, same as the reference script.
+            _curves_for_avg_line.append((z_values, working_y))
+
+    if linfit_cfg is not None and len(_curves_for_avg_line) > 0:
+        import numpy as np
+        try:
+            t1_um = float(linfit_cfg.get("t1_um", 317.0))
+            t2_um = float(linfit_cfg.get("t2_um", 580.0))
+        except (TypeError, ValueError):
+            t1_um, t2_um = 317.0, 580.0
+        # z_values are µm-native here (device-raw Z, not SI meters), same as
+        # the window bounds (also µm, user-facing UI unit), so compare directly.
+        low_um, high_um = sorted((t1_um, t2_um))
+
+        # Only curves that actually span the whole [low, high] window are usable —
+        # same requirement as the reference script's average_curve_fit_line().
+        usable = [
+            (zv, wy) for zv, wy in _curves_for_avg_line
+            if zv and wy and zv[0] <= low_um and zv[-1] >= high_um and len(zv) == len(wy)
+        ]
+        if usable:
+            z_line = np.linspace(low_um, high_um, 100)
+            y_values = [np.interp(z_line, zv, wy) for zv, wy in usable]
+            y_mean = np.mean(np.vstack(y_values), axis=0)
+            avg_slope, avg_intercept = np.polyfit(z_line, y_mean, 1)
+            curves_regular.append({
+                "curve_id": "avg_linfit",
+                "x": z_line.tolist(),
+                "y": (avg_slope * z_line + avg_intercept).tolist()
+            })
+
+    # Print script-style diagnostics only when at least one relevant import fit is active.
+    if baseline_cfg is not None or linfit_cfg is not None:
+        _print_import_fit_summary(dataset_id, baseline_slopes_by_curve, curves_kfit)
+
+    print("graphgorcevsz", len(curves_regular))
     domain_regular = compute_domain(conn, curves_regular, "curves_temp_regular")
-    graph_force_vs_z = {"curves": curves_regular, "domain": domain_regular}
+    graph_force_vs_z = {"curves": curves_regular, "domain": domain_regular, "curves_kfit": curves_kfit}
     
     # --- Graph 2: Force vs Indentation and Elspectra (CP Filters, if active) ---
     # print("graph_force_vs_z")
@@ -321,38 +591,22 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         # Build cache-aware CP query - check cache BEFORE computing
         # Convert integer curve_ids to strings for SQL IN clause
         ids_csv = ",".join(map(str, numeric_curve_ids))
-        
-        # 1) Check what's already cached
-        cp_cached_check = f"""
-        SELECT curve_id FROM contact_points
-        WHERE method = '{cp_method}'
-          AND params_hash = '{cp_params_hash}'
-          AND curve_id IN ({ids_csv})
-        """
-        cached_ids = {row[0] for row in conn.execute(cp_cached_check).fetchall()}
-        missing_ids = [cid for cid in numeric_curve_ids if cid not in cached_ids]
-        # âš ï¸ ADD THIS DEBUG BLOCK
-        print(f"ðŸ” DEBUG CP Cache Check:")
-        print(f"  method: {cp_method}")
-        print(f"  params_hash: {cp_params_hash}")
-        print(f"  params: {cp_filters.get(cp_method, {})}")
-        print(f"  cached_ids found: {cached_ids}")
-        print(f"  missing_ids: {missing_ids}")
-        print(f"CP Cache: {len(cached_ids)} hits, {len(missing_ids)} misses out of {len(numeric_curve_ids)} curves")
-        
-        # Also check what's ACTUALLY in the cache for these curves (regardless of method)
-        debug_check = f"""
-        SELECT curve_id, method, params_hash, spring_constant, tip_radius, tip_geometry
-        FROM contact_points
-        WHERE curve_id IN ({ids_csv})
-        """
-        debug_results = conn.execute(debug_check).fetchall()
-        print(f"  ALL cache entries for these curves:")
-        for row in debug_results:
-            print(f"    curve_id={row[0]}, method={row[1]}, params_hash={row[2][:8]}...")
-        # âš ï¸ END DEBUG BLOCK
 
-        print(f"CP Cache: {len(cached_ids)} hits, {len(missing_ids)} misses out of {len(numeric_curve_ids)} curves")
+        # 1) Check what's already cached (skipped entirely when CACHE_ENABLED=false)
+        if CACHE_ENABLED:
+            cp_cached_check = f"""
+            SELECT curve_id FROM contact_points
+            WHERE method = '{cp_method}'
+              AND params_hash = '{cp_params_hash}'
+              AND curve_id IN ({ids_csv})
+            """
+            cached_ids = {row[0] for row in conn.execute(cp_cached_check).fetchall()}
+            missing_ids = [cid for cid in numeric_curve_ids if cid not in cached_ids]
+        else:
+            # Caching disabled: treat every curve as a cache miss and compute fresh
+            cached_ids = set()
+            missing_ids = numeric_curve_ids
+
         # 2) Only compute for missing IDs
         if missing_ids:
             query_cp = apply_cp_filters(base_query, cp_filters, [str(cid) for cid in missing_ids], metadata)
@@ -378,16 +632,23 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         )
         """
         
-        # 4) unified cp_data = cached âˆª computed (need z_values and force_values for indentation)
-        cp_data_cte = """
+        # 4) unified cp_data = cached ∪ computed (need z_values and force_values for indentation)
+        # IMPORTANT: always join force_vs_z with dataset_id so we use the trimmed data,
+        # not stale rows from another dataset that shares the same curve_id numbering.
+        _ds_join = f"AND f.dataset_id = {dataset_id}" if dataset_id is not None else ""
+        _segment_types = ", ".join(
+            f"'{value}'" for value in segment_types_for_filter(segment_type)
+        )
+        _segment_join = f"AND f.segment_type IN ({_segment_types})"
+        cp_data_cte = f"""
         cp_data AS (
             SELECT c.curve_id, f.z_values, f.force_values, c.cp_values, c.spring_constant, c.tip_radius, c.tip_geometry
             FROM cp_compute c
-            LEFT JOIN force_vs_z f ON f.curve_id = c.curve_id
+            LEFT JOIN force_vs_z f ON f.curve_id = c.curve_id {_ds_join} {_segment_join}
             UNION ALL
             SELECT c.curve_id, f.z_values, f.force_values, c.cp_values, c.spring_constant, c.tip_radius, c.tip_geometry
             FROM cp_cached c
-            LEFT JOIN force_vs_z f ON f.curve_id = c.curve_id
+            LEFT JOIN force_vs_z f ON f.curve_id = c.curve_id {_ds_join} {_segment_join}
         )
         """
         
@@ -400,15 +661,17 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         cached_indents = {}
         missing_indent_ids = []  # Initialize for use in result processing
         
-        if cp_hash_for_indent:
+        # Only use the indentation cache when caching is enabled
+        if cp_hash_for_indent and CACHE_ENABLED:
             cached_indents = get_cached_indentations(conn, numeric_curve_ids, cp_hash_for_indent)
             missing_indent_ids = [cid for cid in numeric_curve_ids if cid not in cached_indents]
         else:
-            # No cp_hash, treat all as missing
+            # No cp_hash or caching disabled: compute all curves fresh
             missing_indent_ids = numeric_curve_ids
         
         if cached_indents:
-            print(f"ðŸ“¦ Indentation cache: {len(cached_indents)}/{len(numeric_curve_ids)} hits, {len(missing_indent_ids)} to compute")
+            # print(f"ðŸ"¦ Indentation cache: {len(cached_indents)}/{len(numeric_curve_ids)} hits, {len(missing_indent_ids)} to compute")
+            pass
         
         # Build indentation CTE with cache optimization
         if missing_indent_ids and cached_indents:
@@ -503,7 +766,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             win = elasticity_params.get("window", 61)
             order = elasticity_params.get("order", 2)
             interp = elasticity_params.get("interpolate", True)
-            print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ Using elasticity parameters from frontend: win={win}, order={order}, interp={interp}")
+            print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ # Using elasticity parameters from frontend: win={win}, order={order}, interp={interp}")
         else:
             win = 61
             order = 2
@@ -511,12 +774,19 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
             print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ Using default elasticity parameters: win={win}, order={order}, interp={interp}")
         
         # Log elastic model parameters
-        print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ Using elastic model parameters: maxInd={elastic_model_params.get('maxInd', 800)}, minInd={elastic_model_params.get('minInd', 0)}")
+        # print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ # Using elastic model parameters: maxInd={elastic_model_params.get('maxInd', 800)}, minInd={elastic_model_params.get('minInd', 0)}")
         
         # Log force model parameters  
-        print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ Using force model parameters: maxInd={force_model_params.get('maxInd', 800)}, minInd={force_model_params.get('minInd', 0)}, poisson={force_model_params.get('poisson', 0.5)}")
+        print(f"ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ # Using force model parameters: maxInd={force_model_params.get('maxInd', 800)}, minInd={force_model_params.get('minInd', 0)}, poisson={force_model_params.get('poisson', 0.5)}")
         
-        tip_angle = 30.0
+        # Prevent crash if metadata includes non-numeric tip angle
+        try:
+            # Supplies finite fallback tip angle for elspectra calculations
+            tip_angle = float(meta.get("tip_angle", 0.0))
+        except (TypeError, ValueError):
+            tip_angle = 0.0
+        if not math.isfinite(tip_angle):
+            tip_angle = 0.0
         
         # Define defaults for model parameters
         # model = 'hertz'
@@ -619,12 +889,10 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
         cp_cache_rows = []
         # Collect indentation rows for deferred cache writes
         indent_cache_rows = []
-        # print("result batch", result_batch)
         # print("emodels:", emodels)
         # print("single:", single)
         for i, row in enumerate(result_batch):
             curve_id, indentation_result, cp_values, elspectra_result, hertz_result, elastic_result = row
-            # print("indentation_result",indentation_result)
             # print("elspectra_result", elspectra_result)
             # print("elastic_result", elastic_result)
             # --- Cache contact point, if present ---
@@ -695,39 +963,40 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                     "y": e
                 })
                 
-                # Cache elspectra result using spec_hash
-                try:
-                    # Compute cp_hash from cp_values if available
-                    cp_hash = None
-                    if cp_values is not None:
-                        cp_hash = _json_hash(cp_values)
-                    
-                    # Build spec_payload with cp_hash and elasticity params
-                    spec_payload = {
-                        "cp_hash": cp_hash,
-                        "win": win if need_elspectra else None,
-                        "order": order if need_elspectra else None,
-                        "interp": interp if need_elspectra else None,
-                        "tip_geometry": metadata.get("tip_geometry") if metadata else None,
-                        "tip_radius": metadata.get("tip_radius") if metadata else None,
-                        "tip_angle": tip_angle,
-                    }
-                    spec_hash = _json_hash(spec_payload)
-                    
-                    # Insert into cache (check first since DuckDB doesn't support ON CONFLICT)
-                    existing = conn.execute("""
-                        SELECT curve_id FROM elspectra 
-                        WHERE curve_id = ? AND spec_hash = ?
-                    """, [int(curve_id), spec_hash]).fetchone()
-                    
-                    if not existing:
-                        conn.execute("""
-                            INSERT INTO elspectra (curve_id, spec_hash, ze, ee)
-                            VALUES (?, ?, ?, ?)
-                        """, [int(curve_id), spec_hash, ze, e])
-                except Exception as cache_err:
-                    # Log but don't fail the main query if cache insert fails
-                    print(f"Warning: Failed to cache elspectra for curve {curve_id}: {cache_err}")
+                # Cache elspectra result using spec_hash (skipped when CACHE_ENABLED=false)
+                if CACHE_ENABLED:
+                    try:
+                        # Compute cp_hash from cp_values if available
+                        cp_hash = None
+                        if cp_values is not None:
+                            cp_hash = _json_hash(cp_values)
+
+                        # Build spec_payload with cp_hash and elasticity params
+                        spec_payload = {
+                            "cp_hash": cp_hash,
+                            "win": win if need_elspectra else None,
+                            "order": order if need_elspectra else None,
+                            "interp": interp if need_elspectra else None,
+                            "tip_geometry": metadata.get("tip_geometry") if metadata else None,
+                            "tip_radius": metadata.get("tip_radius") if metadata else None,
+                            "tip_angle": tip_angle,
+                        }
+                        spec_hash = _json_hash(spec_payload)
+
+                        # Insert into cache (check first since DuckDB doesn't support ON CONFLICT)
+                        existing = conn.execute("""
+                            SELECT curve_id FROM elspectra
+                            WHERE curve_id = ? AND spec_hash = ?
+                        """, [int(curve_id), spec_hash]).fetchone()
+
+                        if not existing:
+                            conn.execute("""
+                                INSERT INTO elspectra (curve_id, spec_hash, ze, ee)
+                                VALUES (?, ?, ?, ?)
+                            """, [int(curve_id), spec_hash, ze, e])
+                    except Exception as cache_err:
+                        # Log but don't fail the main query if elspectra cache insert fails
+                        print(f"Warning: Failed to cache elspectra for curve {curve_id}: {cache_err}")
                 if elastic_result is not None and emodels and (single or elastic_model_population):
                     # print("elastic_result", elastic_result)
                     x, y, elasticity_param = elastic_result
@@ -746,8 +1015,8 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                         "elasticity_param": elasticity_param
                     })
         
-        # --- Persist caches (ignore duplicates) ---
-        if cp_cache_rows:
+        # --- Persist caches (ignore duplicates, skip entirely when CACHE_ENABLED=false) ---
+        if CACHE_ENABLED and cp_cache_rows:
             try:
                 conn.executemany(
                     """
@@ -761,14 +1030,12 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
                 # Read-only connections can't write to cache - this is expected in parallel workers
                 pass
 
-        if indent_cache_rows:
+        if CACHE_ENABLED and indent_cache_rows:
             # Use optimized batch caching
-            cached_count = cache_indentations_batch(conn, indent_cache_rows)
-            if cached_count > 0:
-                print(f"ðŸ’¾ Cached {cached_count} new indentations")
+            cache_indentations_batch(conn, indent_cache_rows)
 
-        print("cp filters applied, batch indentation and elspectra calculated")
-        print("curves_elasticity_param count:", len(curves_elasticity_param))
+        # print("cp filters applied, batch indentation and elspectra calculated")
+        # print("curves_elasticity_param count:", len(curves_elasticity_param))
         all_curves_data = {
                 "curves_cp": curves_cp,
                 "curves_fparam": curves_fparam,
@@ -791,7 +1058,7 @@ def fetch_curves_batch(conn: duckdb.DuckDBPyConnection, curve_ids: List[str], fi
     return graph_force_vs_z, graph_force_indentation, graph_elspectra
 
 
-def _select_curve_ids(conn, filters: Dict, num_curves: Optional[int] = None) -> List[str]:
+def _select_curve_ids(conn, filters: Dict, num_curves: Optional[int] = None, dataset_id: Optional[int] = None) -> List[str]:
     """
     Select curve IDs from database after applying filters.
     
@@ -799,15 +1066,20 @@ def _select_curve_ids(conn, filters: Dict, num_curves: Optional[int] = None) -> 
         conn: DuckDB connection
         filters: Filter dictionary
         num_curves: Optional limit on number of curves
+        dataset_id: Optional dataset ID to restrict curves to a specific dataset
     
     Returns:
         List of curve ID strings (e.g., ["0", "1", "2"])
     """
-    # Build query - for now, simple selection; can be enhanced with filter logic
-    q = "SELECT DISTINCT curve_id FROM force_vs_z ORDER BY curve_id"
+    params = []
+    if dataset_id is not None:
+        q = "SELECT DISTINCT curve_id FROM force_vs_z WHERE dataset_id = ? ORDER BY curve_id"
+        params.append(dataset_id)
+    else:
+        q = "SELECT DISTINCT curve_id FROM force_vs_z ORDER BY curve_id"
     if num_curves:
         q += f" LIMIT {int(num_curves)}"
-    result = conn.execute(q).fetchall()
+    result = conn.execute(q, params).fetchall()
     # Convert to string format that fetch_curves_batch expects
     return [f"curve{row[0]}" if isinstance(row[0], int) else str(row[0]) for row in result]
 
@@ -818,7 +1090,8 @@ async def compute_elasticity_params_batched(
     num_curves: Optional[int] = None, 
     batch_size: int = 50,
     elasticity_params: Optional[Dict] = None,
-    elastic_model_params: Optional[Dict] = None
+    elastic_model_params: Optional[Dict] = None,
+    dataset_id: Optional[int] = None,
 ) -> AsyncGenerator[Tuple[int, int, int, int, List[Dict]], None]:
     """
     Async generator yielding batches of elasticity parameters with progress.
@@ -829,8 +1102,8 @@ async def compute_elasticity_params_batched(
         - curve_index: int
         - elasticity_param: List[float] (parameter values)
     """
-    # Select curve IDs
-    curve_ids = _select_curve_ids(conn, filters, num_curves)
+    # Select curve IDs – optionally restricted to a specific dataset
+    curve_ids = _select_curve_ids(conn, filters, num_curves, dataset_id=dataset_id)
     total = len(curve_ids)
     
     if total == 0:
@@ -845,8 +1118,8 @@ async def compute_elasticity_params_batched(
     for i in range(total_batches):
         batch_ids = curve_ids[i * batch_size:(i + 1) * batch_size]
         
-        # Get metadata for this batch
-        metadata = get_metadata_for_curves(conn, batch_ids)
+        # Get metadata for this batch (scoped to dataset when dataset_id provided)
+        metadata = get_metadata_for_curves(conn, batch_ids, dataset_id=dataset_id)
         
         # Compute elasticity params for this batch using existing pipeline
         g_fvz, g_fi, g_el = fetch_curves_batch(

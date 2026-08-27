@@ -1,14 +1,22 @@
+"""Experiment file loading and processing endpoints with dataset persistence."""
 from storage.duckdb_storage import save_to_duckdb
 from transform.transform import transform_data
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from typing import Dict, Any
 import os
 import logging
 from openers import get_opener
 from db.connection import get_conn
+from db.datasets import create_dataset, update_dataset
 from utils.cache import clear_cache
+from auth.dependencies import get_current_user
 
 SUPPORTED_EXTENSIONS = [".json", ".hdf5", ".csv", ".txt"]
+
+# Directory where uploaded raw experiment files are stored. Read from the
+# environment so a Render Persistent Disk mount (e.g. UPLOADS_DIR=/var/data/uploads)
+# survives redeploys instead of the container's ephemeral local disk.
+UPLOADS_DIR = os.environ.get("UPLOADS_DIR", "uploads")
 
 def detect_file_type(file_path: str) -> str:
     """Detect the type of the input file based on its extension."""
@@ -22,11 +30,12 @@ router = APIRouter(prefix="/experiment", tags=["experiment"])  # Prefix for grou
 
 logger = logging.getLogger(__name__)  # Or import a shared logger
 
+
 @router.post("/load-experiment")  # Updated decorator to match the client's requested path
-async def load_experiment_endpoint(file: UploadFile = File(...)):
+async def load_experiment_endpoint(file: UploadFile = File(...), user=Depends(get_current_user)):
     """Handle file upload and return file structure."""
-    file_path = os.path.join("uploads", file.filename)
-    os.makedirs("uploads", exist_ok=True)
+    file_path = os.path.join(UPLOADS_DIR, file.filename)
+    os.makedirs(UPLOADS_DIR, exist_ok=True)
     
     try:
         with open(file_path, "wb") as f:
@@ -55,7 +64,7 @@ async def load_experiment_endpoint(file: UploadFile = File(...)):
         })
 
 @router.post("/process-file")
-async def process_file_endpoint(data: Dict[str, Any]):
+async def process_file_endpoint(data: Dict[str, Any], user=Depends(get_current_user)):
     """Process file with user-selected dataset paths and metadata."""
     file_path = data.get("file_path")
     file_type = data.get("file_type")
@@ -78,53 +87,60 @@ async def process_file_endpoint(data: Dict[str, Any]):
         opener = get_opener(file_type)
         logger.info("info22")
 
-        # Convert tip_radius to meters for internal processing
+        # tip_radius is always stored and processed in metres (SI units).
+        # The UI field is labelled in metres, HDF5 files use SI units, and the
+        # elasticity / contact-point UDFs all expect metres.  No conversion is
+        # performed here – what the user submits is what is stored.
         processed_metadata = metadata.copy()
         if "tip_radius" in processed_metadata:
+            # Stores numeric tip radius in SI units before metadata validation and DB save.
             tip_radius_input = float(processed_metadata["tip_radius"])
-            unit = metadata.get("unit", "").lower()  # Get unit if provided (um, nm, m, etc.)
-            
-            # DEBUG: Log the input value to diagnose unit issues
-            logger.info(f"DEBUG tip_radius conversion: input={tip_radius_input:.6e}, unit={unit}")
-            
-            # Convert based on explicit unit if provided, otherwise auto-detect
-            if unit == "um" or unit == "μm" or unit == "micrometer" or unit == "micrometers":
-                # Convert micrometers to meters: 1 um = 1e-6 m
-                # BUT: if value is very small (< 1e-3), it's likely already in meters
-                # (frontend might send value in meters but label with "um" for display)
-                if tip_radius_input < 1e-3:
-                    # Value is likely already in meters (e.g., 0.00001 m = 10 um)
-                    logger.warning(f"tip_radius input ({tip_radius_input:.6e}) with unit '{unit}' is very small. "
-                                 f"Assuming value is already in meters (not converting).")
-                    processed_metadata["tip_radius"] = tip_radius_input
-                else:
-                    # Convert micrometers to meters: 1 um = 1e-6 m
-                    processed_metadata["tip_radius"] = tip_radius_input * 1e-6
-                    logger.info(f"tip_radius input ({tip_radius_input:.6e} {unit}) converted to {processed_metadata['tip_radius']:.6e} m")
-            elif unit == "nm" or unit == "nanometer" or unit == "nanometers":
-                # Convert nanometers to meters: 1 nm = 1e-9 m
-                processed_metadata["tip_radius"] = tip_radius_input * 1e-9
-                logger.info(f"tip_radius input ({tip_radius_input:.6e} {unit}) converted to {processed_metadata['tip_radius']:.6e} m")
-            elif unit == "m" or unit == "meter" or unit == "meters":
-                # Already in meters, use as-is
-                processed_metadata["tip_radius"] = tip_radius_input
-                logger.info(f"tip_radius input ({tip_radius_input:.6e} {unit}) already in meters, using as-is")
+            processed_metadata["tip_radius"] = tip_radius_input
+            logger.info(f"tip_radius received: {tip_radius_input:.6e} m (used as-is)")
+        if "tip_angle" in processed_metadata and processed_metadata["tip_angle"] not in (None, ""):
+            # Stores numeric tip half-angle in degrees so it can be persisted in datasets metadata.
+            tip_angle_input = float(processed_metadata["tip_angle"])
+            processed_metadata["tip_angle"] = tip_angle_input
+            logger.info(f"tip_angle received: {tip_angle_input:.2f} deg (used as-is)")
+
+        # z_scale_to_m / force_scale_to_n are unit-calibration factors applied
+        # inside process_hdf5 (hdf5.py) directly to the raw Z/Force arrays at
+        # ingestion. Both default to 1.0 (no-op) via validate_and_fill_metadata
+        # if omitted, so this block only needs to coerce them when the user
+        # actually supplies a non-default value (e.g. 1e-6 for an instrument
+        # that exports Z in micrometers).
+        if "z_scale_to_m" in processed_metadata and processed_metadata["z_scale_to_m"] not in (None, ""):
+            z_scale_input = float(processed_metadata["z_scale_to_m"])
+            processed_metadata["z_scale_to_m"] = z_scale_input
+            logger.info(f"z_scale_to_m received: {z_scale_input:.6e} (Z will be multiplied by this to get meters)")
+        if "force_scale_to_n" in processed_metadata and processed_metadata["force_scale_to_n"] not in (None, ""):
+            force_scale_input = float(processed_metadata["force_scale_to_n"])
+            processed_metadata["force_scale_to_n"] = force_scale_input
+            logger.info(f"force_scale_to_n received: {force_scale_input:.6e} (Force will be multiplied by this to get Newtons)")
+        # Accept barytech folder export alias for force calibration metadata.
+        if "force_conversion_factor" in processed_metadata and processed_metadata["force_conversion_factor"] not in (None, ""):
+            force_scale_input = float(processed_metadata["force_conversion_factor"])
+            processed_metadata["force_scale_to_n"] = force_scale_input
+            logger.info(f"force_conversion_factor received: {force_scale_input:.6e} (mapped to force_scale_to_n)")
+        if "z_conversion_factor" in processed_metadata and processed_metadata["z_conversion_factor"] not in (None, ""):
+            z_scale_input = float(processed_metadata["z_conversion_factor"])
+            processed_metadata["z_scale_to_m"] = z_scale_input
+            logger.info(f"z_conversion_factor received: {z_scale_input:.6e} (mapped to z_scale_to_m)")
+        # Map barytech tip group geometry attribute to tip_geometry when present.
+        if processed_metadata.get("tip_geometry") in (None, "") and processed_metadata.get("geometry"):
+            processed_metadata["tip_geometry"] = str(processed_metadata["geometry"])
+        if processed_metadata.get("tip_radius") in (None, "") and processed_metadata.get("value") not in (None, ""):
+            tip_value = float(processed_metadata["value"])
+            tip_unit = str(processed_metadata.get("unit", "")).lower()
+            if tip_unit in ("um", "µm", "micrometer", "micrometers"):
+                processed_metadata["tip_radius"] = tip_value * 1e-6
+            elif tip_unit in ("mm", "millimeter", "millimeters"):
+                processed_metadata["tip_radius"] = tip_value * 1e-3
             else:
-                # No unit specified or unknown unit - auto-detect based on value magnitude
-                # Typical tip radii: 10-1000 nm = 1e-8 to 1e-6 m
-                # If input is <= 1e-5, it's likely already in meters (covers up to 10 um = 1e-5 m)
-                # If input is > 1e-5, it's likely in nanometers and needs conversion
-                if tip_radius_input <= 1e-5:
-                    # Already in meters (e.g., 1e-8 m = 10 nm, 1e-5 m = 10 um)
-                    logger.info(f"tip_radius input ({tip_radius_input:.6e}, no unit) appears to be in meters, using as-is")
-                    processed_metadata["tip_radius"] = tip_radius_input
-                else:
-                    # Assume nanometers, convert to meters
-                    # e.g., 10 nm -> 1e-8 m, 100 nm -> 1e-7 m, 1000 nm -> 1e-6 m
-                    logger.info(f"tip_radius input ({tip_radius_input:.6e}, no unit) assumed to be in nanometers, converting to meters")
-                    processed_metadata["tip_radius"] = tip_radius_input * 1e-9  # Convert nm to m
-            
-            logger.info(f"DEBUG tip_radius after conversion: {processed_metadata['tip_radius']:.6e} m")
+                processed_metadata["tip_radius"] = tip_value
+            logger.info(
+                f"tip radius inferred from value/unit attrs: {processed_metadata['tip_radius']:.6e} m"
+            )
 
         if not opener.validate_metadata(processed_metadata):
             errors.append("Invalid or incomplete metadata")
@@ -135,10 +151,29 @@ async def process_file_endpoint(data: Dict[str, Any]):
         curves = opener.process(file_path, force_path, z_path, processed_metadata)
         logging.info("info2")
 
+        # Create dataset record
+        # Use file_id from metadata as name if provided, otherwise use basename of file_path
+        dataset_name = processed_metadata.get("file_id") or os.path.basename(file_path)
+        dataset_id = create_dataset(
+            user_id=user["id"],
+            name=dataset_name,
+            filename=file_path,
+            num_curves=len(curves),
+            spring_constant=processed_metadata.get("spring_constant"),
+            tip_radius=processed_metadata.get("tip_radius"),
+            tip_geometry=processed_metadata.get("tip_geometry"),
+            tip_angle=processed_metadata.get("tip_angle"),
+            velocity=processed_metadata.get("velocity"),
+            force_scale_to_n=processed_metadata.get("force_scale_to_n"),
+            z_scale_to_m=processed_metadata.get("z_scale_to_m"),
+            sensor_type=processed_metadata.get("sensor_type"),
+        )
+        logger.info(f"Created dataset record with ID: {dataset_id}, name: {dataset_name}")
+        logger.info(f"Created dataset record with ID: {dataset_id}")
+
         transformed_curves = transform_data(curves)
-        db_path = "data/experiment.db"
-        save_to_duckdb(transformed_curves, db_path)
-        logger.info(f"Saved {len(curves)} curves to DuckDB at {db_path}")
+        save_to_duckdb(transformed_curves, dataset_id)
+        logger.info(f"Saved {len(curves)} curves to DuckDB with dataset_id={dataset_id}")
         
         # Clear all caches since we're loading a new experiment
         # This ensures old cached contact points, indentations, and elspectra
@@ -162,7 +197,8 @@ async def process_file_endpoint(data: Dict[str, Any]):
             "status": "success",
             "message": f"{file_type.upper()} file processed",
             "curves": len(curves),
-            "filename": file_path,
+            "filename": dataset_name,  # Return the custom name (from file_id) or basename
+            "dataset_id": dataset_id,
             "duckdb_status": "saved",
             "spring_constant": float(metadata.get("spring_constant", 0.1)),
             # "tip_radius_um": float(metadata.get("tip_radius", 10)) / 1000,  # Convert nm to μm for display
@@ -170,11 +206,35 @@ async def process_file_endpoint(data: Dict[str, Any]):
             "errors": errors
         }
     except Exception as e:
-        errors.append(str(e))
-        logger.error(f"Failed to process file {file_path}: {str(e)}")
+        # Translate low-level DB / processing exceptions into readable messages.
+        raw_error = str(e)
+        if "Duplicate key" in raw_error or "PRIMARY KEY" in raw_error or "unique constraint" in raw_error.lower():
+            # Should not happen after switching to always-new dataset IDs, but kept as safety net
+            friendly_message = (
+                "A database conflict occurred while saving the dataset. "
+                "Please try submitting the file again."
+            )
+        elif "Invalid or incomplete metadata" in raw_error:
+            friendly_message = (
+                "Metadata validation failed. "
+                "Please ensure all required fields (Spring Constant, Tip Radius, Tip Geometry, Date) are filled in correctly."
+            )
+        elif "not found" in raw_error.lower() or "no such file" in raw_error.lower():
+            friendly_message = (
+                f"The file '{os.path.basename(file_path)}' could not be found on the server. "
+                "Please re-upload the file and try again."
+            )
+        elif "Unsupported file type" in raw_error:
+            friendly_message = raw_error  # Already descriptive
+        else:
+            friendly_message = f"Processing failed: {raw_error}"
+
+        errors.append(friendly_message)
+        logger.error(f"Failed to process file {file_path}: {raw_error}")
         raise HTTPException(status_code=500, detail={
             "status": "error",
-            "message": f"Failed to process file: {str(e)}",
+            "message": friendly_message,
             "filename": file_path,
-            "errors": errors
+            "errors": errors,
+            "raw_error": raw_error,  # Included for server-side debugging
         })

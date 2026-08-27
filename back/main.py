@@ -1,5 +1,10 @@
-# FastAPI application exposing REST and WebSocket endpoints for curve analytics streaming.
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
+﻿# FastAPI application exposing REST and WebSocket endpoints for curve analytics streaming.
+
+# Load .env variables first so all subsequent imports (e.g. cache.py) see the correct values
+from dotenv import load_dotenv
+load_dotenv()
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 import json
@@ -7,19 +12,76 @@ import duckdb
 import os
 import platform  
 import logging
+import multiprocessing
 # from db import transform_hdf5_to_db
 from filters.register_all import register_filters
 from pipeline import fetch_curves_batch, get_metadata_for_curves, compute_elasticity_params_batched
 import asyncio
 from db.connection import get_conn
 from db.init_db import ensure_cache_tables
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
-from typing import Dict, List, Tuple, Any
-from utils.stats import format_stat, is_valid_param_vector
-from utils.cache import warmup_cp_cache, clear_cache
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Tuple, Any, Optional
+from segment_utils import segment_types_sql, normalize_segment_type
+from utils.cache import warmup_cp_cache, clear_cache, CACHE_ENABLED
+# Formats mean±std dicts for model_stats WebSocket responses
+from utils.stats import format_stat
 
 # Detect OS for parallel processing strategy
 IS_WINDOWS = platform.system() == 'Windows'
+
+
+# Normalize UI curve labels ("curve12") and raw ints/strings ("12") to DB numeric ids.
+def _normalize_request_curve_ids(raw_ids: Optional[List]) -> List[str]:
+    """
+    Convert frontend-selected curve identifiers into the numeric-string form
+    used by fetch_curves_batch / DuckDB (e.g. "curve5" -> "5").
+    """
+    # Holds the de-duplicated numeric curve id strings, preserving selection order.
+    normalized: List[str] = []
+    # Tracks ids already appended so duplicate picker entries are ignored.
+    seen = set()
+    if not raw_ids:
+        return normalized
+    for cid in raw_ids:
+        if cid is None:
+            continue
+        # Store the raw identifier as a stripped string for prefix checks.
+        text = str(cid).strip()
+        if not text:
+            continue
+        # Strip the UI "curve" prefix when present so DB queries get integers.
+        if text.lower().startswith("curve"):
+            text = text[5:]
+        if not text:
+            continue
+        try:
+            # Validate / canonicalize as an integer so "05" and 5 map the same.
+            numeric_id = str(int(text))
+        except (TypeError, ValueError):
+            continue
+        if numeric_id in seen:
+            continue
+        seen.add(numeric_id)
+        normalized.append(numeric_id)
+    return normalized
+
+
+# True when a LinearWindowFit result row belongs to the chosen curve-id scope.
+def _kfit_row_in_scope(row: Dict, k_scope_ids: Optional[set]) -> bool:
+    """
+    Return True if this per-curve K row should be included in stiffness aggregates.
+    When k_scope_ids is None, every row is kept (no picker filter applied).
+    """
+    if not k_scope_ids:
+        return True
+    # Store the row's curve label as returned by the pipeline (e.g. "curve5").
+    curve_label = row.get("curve_id")
+    if curve_label is None:
+        return False
+    # Reuse the same normalizer so "curve5" and "5" compare equal to the scope set.
+    normalized = _normalize_request_curve_ids([curve_label])
+    return bool(normalized) and normalized[0] in k_scope_ids
+
 
 app = FastAPI()
 
@@ -34,13 +96,141 @@ app.add_middleware(
 )
 
 # Paths
-HDF5_FILE_PATH = "data/all.hdf5"  # HDF5 file path
-DB_PATH = "data/experiment.db"  # DuckDB database file
+# Read from the environment first so a Render Persistent Disk mount (e.g.
+# DB_PATH=/var/data/all.db) survives redeploys instead of the container's
+# ephemeral local disk, which is wiped on every deploy.
+HDF5_FILE_PATH = os.environ.get("HDF5_FILE_PATH", "data/all.hdf5")  # HDF5 file path
+DB_PATH = os.environ.get("DB_PATH", "data/all.db")  # DuckDB database file
 BATCH_SIZE = 10  # Process 10 curves per batch (adjust based on your needs)
 MAX_WORKERS = 8  # Number of parallel workers (tune based on CPU cores)
 
 # Ensure the DB directory exists
 os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+
+def _get_container_cpu_count() -> int:
+    """
+    Return the number of CPUs available to THIS process, respecting
+    Linux cgroup v2 and cgroup v1 quota limits set by Docker / k8s.
+    Falls back to os.cpu_count() when running on Windows or when the
+    cgroup files are absent / unreadable.
+    """
+    cpu_count = os.cpu_count() or 1
+    if platform.system() == 'Windows':
+        return cpu_count
+    # cgroup v2
+    try:
+        with open('/sys/fs/cgroup/cpu.max') as f:
+            quota_str, period_str = f.read().strip().split()
+        if quota_str != 'max':
+            return max(1, int(float(quota_str) / float(period_str)))
+    except Exception:
+        pass
+    # cgroup v1
+    try:
+        with open('/sys/fs/cgroup/cpu/cpu.quota_us') as qf:
+            quota = int(qf.read().strip())
+        with open('/sys/fs/cgroup/cpu/cpu.period_us') as pf:
+            period = int(pf.read().strip())
+        if quota > 0:
+            return max(1, int(quota / period))
+    except Exception:
+        pass
+    return cpu_count
+
+
+def _get_available_ram_gb() -> float:
+    """
+    Return the available RAM in GB, honouring cgroup memory limits so
+    that a container with 512 MB limit does not appear to have the
+    host's full RAM.
+    """
+    try:
+        import psutil
+        available_gb = psutil.virtual_memory().available / (1024 ** 3)
+    except ImportError:
+        available_gb = 0.5  # conservative fallback
+
+    if platform.system() == 'Windows':
+        return available_gb
+
+    # On Linux, cap available_gb by the cgroup memory limit (v2 then v1).
+    for cgroup_mem_file in (
+        '/sys/fs/cgroup/memory.max',                    # cgroup v2
+        '/sys/fs/cgroup/memory/memory.limit_in_bytes',  # cgroup v1
+    ):
+        try:
+            with open(cgroup_mem_file) as f:
+                raw = f.read().strip()
+            if raw not in ('max', ''):
+                limit_gb = int(raw) * 0.70 / (1024 ** 3)  # use 70% of limit
+                available_gb = min(available_gb, limit_gb)
+                break
+        except Exception:
+            continue
+
+    return available_gb
+
+
+def _get_parallelism_config():
+    """
+    Inspect available CPU cores and free RAM (container-aware on Linux),
+    then decide:
+      - whether parallel processing is worthwhile
+      - how many worker threads to use
+      - what batch size to assign each worker
+
+    Uses ThreadPoolExecutor on ALL platforms.  ProcessPoolExecutor is
+    intentionally avoided because on Linux it relies on fork(), which
+    inherits the parent's open DuckDB file handles and causes worker
+    processes to be OOM-killed or crash immediately.
+
+    Container-aware: reads cgroup v1/v2 quotas on Linux so a 1-CPU /
+    0.5-GB container is not mis-identified as a multi-core machine.
+
+    Returns:
+        (can_parallelize: bool, max_workers: int, worker_batch_size: int)
+    """
+    cpu_count    = _get_container_cpu_count()
+    available_gb = _get_available_ram_gb()
+
+    # ── Thresholds ──────────────────────────────────────────────────────────
+    # Need at least 2 logical CPUs **and** 1 GB free RAM before spawning
+    # extra threads.  On a 1-CPU / 0.5-GB container the overhead of context-
+    # switching threads + each thread opening its own DuckDB connection makes
+    # parallel processing slower (or impossible) compared to sequential.
+    MIN_CPUS_FOR_PARALLEL = 2
+    MIN_RAM_GB_FOR_PARALLEL = 1.0
+
+    can_parallelize = (cpu_count >= MIN_CPUS_FOR_PARALLEL and
+                       available_gb >= MIN_RAM_GB_FOR_PARALLEL)
+
+    if not can_parallelize:
+        print(f"⚠️  Parallel processing disabled — "
+              f"CPUs: {cpu_count} (need ≥{MIN_CPUS_FOR_PARALLEL}), "
+              f"free RAM: {available_gb:.2f} GB (need ≥{MIN_RAM_GB_FOR_PARALLEL} GB). "
+              f"Running sequentially.")
+        return False, 1, BATCH_SIZE
+
+    # ── Worker count ────────────────────────────────────────────────────────
+    # Cap workers at half the logical CPUs (leave headroom for DuckDB's own
+    # internal threading and the asyncio event loop).
+    max_workers = max(1, min(cpu_count // 2, 4))  # hard cap at 4
+
+    # ── Per-worker batch size ────────────────────────────────────────────────
+    # Each worker opens its own DuckDB connection and loads curve data; be
+    # conservative with RAM.  Scale down when memory is tight.
+    if available_gb < 2.0:
+        worker_batch_size = 25
+    elif available_gb < 4.0:
+        worker_batch_size = 50
+    else:
+        worker_batch_size = 100
+
+    print(f"ℹ️  Parallel config — workers: {max_workers}, "
+          f"batch: {worker_batch_size} curves/worker, "
+          f"free RAM: {available_gb:.2f} GB, CPUs: {cpu_count}")
+    return True, max_workers, worker_batch_size
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -72,26 +262,26 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
     """
     print(f"[Worker] Processing {len(curve_ids)} curves...")
     
-    # Each worker gets its own read-only connection (separate process, won't conflict with main process)
-    # Use DB_PATH from environment or default
-    db_path = os.environ.get("DB_PATH", "data/experiment.db")
-    conn = duckdb.connect(db_path, read_only=True)
+    # On Windows we use ThreadPoolExecutor (not ProcessPoolExecutor), so all workers
+    # run in the SAME process and would share the singleton returned by get_conn().
+    # Closing that shared singleton in the finally block below would kill it for all
+    # other requests.  Create a fresh, independent connection here instead.
+    conn = duckdb.connect(DB_PATH)
     try:
         # Let DuckDB parallelize *inside* each query too (tune as you like)
         conn.execute(f"PRAGMA threads = {max(1, (os.cpu_count() or 2) // 4)};")  # Limit threads per worker
 
         # Every process must (re)register UDFs
         register_filters(conn)
-        # Ensure cache tables exist (may fail in read-only mode; main process handles this)
-        try:
-            ensure_cache_tables(conn)
-        except Exception as _:
-            # Likely read-only; skip creating cache tables in worker
-            # Main process will handle cache table creation
-            pass
+        # Ensure cache tables exist
+        ensure_cache_tables(conn)
 
         # Per-batch metadata (spring_constant, tip_radius, tip_geometry)
-        metadata = get_metadata_for_curves(conn, curve_ids)
+        # Extract dataset_id early so the metadata query is scoped to the correct dataset.
+        # Without it, curve_id alone can match a curve from a different dataset, returning
+        # a wrong spring_constant / tip_radius and producing badly-scaled elasticity values.
+        worker_dataset_id = compute.get("dataset_id", None) if isinstance(compute, dict) else None
+        metadata = get_metadata_for_curves(conn, curve_ids, dataset_id=worker_dataset_id)
 
         # Parse compute parameter - support both string (backward compat) and dict (new pattern)
         if isinstance(compute, dict):
@@ -102,7 +292,11 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
             emodel = compute_spec.get("emodel")  # Optional; actual model comes from filters
             emodel_params = compute_spec.get("emodel_params", {})  # Model-specific parameters (maxInd, minInd, etc.)
             elasticity_params = compute_spec.get("elasticity_params", {})  # Elspectra parameters (window, order, interpolate)
-            
+            force_model_params = compute_spec.get("force_model_params", None)  # Force model parameters
+            set_zero_force = compute_spec.get("set_zero_force", True)  # Whether to zero force at contact point
+            worker_dataset_id = compute_spec.get("dataset_id", None)  # Dataset ID for cache queries
+            worker_segment_type = compute_spec.get("segment_type", "segment0")
+
             # Extract elastic_model_params from emodel_params or use defaults
             if isinstance(emodel_params, dict):
                 elastic_model_params = {
@@ -112,19 +306,32 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
             else:
                 elastic_model_params = {"maxInd": 800, "minInd": 0}
             
-            # Determine if we need elspectra computation
-            need_elspectra = (compute_type == "elasticity")
-            
-            # Run your full pipeline for this subset (single=True exposes params)
+            # Determine pipeline flags based on compute_type
+            # "both"      → run force model population AND elastic model population
+            # "fparams"   → run force model population only
+            # "elasticity"→ run elastic model population only
+            run_force_pop   = compute_type in ("fparams", "both")
+            run_elastic_pop = compute_type in ("elasticity", "both")
+            need_elspectra  = run_elastic_pop  # elspectra is required for elastic models
+
+            # Use force_model_population=True (matches sequential path) instead of single=True
+            # single=True is for display/UI overlays; force_model_population=True is for batch stats
             g_fvz, g_fi, g_el = fetch_curves_batch(
-                conn, curve_ids, filters, single=True, metadata=metadata,
+                conn, curve_ids, filters,
+                force_model_population=run_force_pop,
+                elastic_model_population=run_elastic_pop,
+                metadata=metadata,
                 compute_elspectra=need_elspectra,
                 elasticity_params=elasticity_params if elasticity_params else None,
-                elastic_model_params=elastic_model_params
+                elastic_model_params=elastic_model_params,
+                force_model_params=force_model_params,
+                set_zero_force=set_zero_force,
+                dataset_id=worker_dataset_id,
+                segment_type=worker_segment_type,
             )
-            
+
             print(f"[Worker] Pipeline complete. g_fi type: {type(g_fi)}, g_el type: {type(g_el)}")
-            
+
             # Build result dict with full structure
             out = {
                 "num_curves": len(curve_ids),
@@ -132,22 +339,31 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
                 "graph_force_indentation": g_fi,
                 "graph_elspectra": g_el
             }
-            
-            # Extract specific params if needed
-            if compute_type == "elasticity":
-                elasticity_params_list = []
-                if g_el and isinstance(g_el, dict):
-                    elasticity_params_list = g_el.get("curves_elasticity_param", [])
-                out["elasticity_params"] = elasticity_params_list
-                print(f"[Worker] Extracted {len(elasticity_params_list)} elasticity params")
-                
-            elif compute_type == "fparams":
+
+            # Extract fparams when force model was run
+            if run_force_pop:
                 fparams_list = []
                 if g_fi and isinstance(g_fi.get("curves"), dict):
                     fparams_list = g_fi["curves"].get("curves_fparam", [])
                 out["fparams"] = fparams_list
                 print(f"[Worker] Extracted {len(fparams_list)} fparams")
-            
+
+            # Extract elasticity params when elastic model was run
+            if run_elastic_pop:
+                elasticity_params_list = []
+                if g_el and isinstance(g_el, dict):
+                    elasticity_params_list = g_el.get("curves_elasticity_param", [])
+                out["elasticity_params"] = elasticity_params_list
+                print(f"[Worker] Extracted {len(elasticity_params_list)} elasticity params")
+
+            # Extract K-stiffness values whenever LinearWindowFit produced them —
+            # unconditional, since it doesn't depend on any fmodel/emodel being active.
+            kfit_list = []
+            if g_fvz and isinstance(g_fvz.get("curves_kfit"), list):
+                kfit_list = g_fvz["curves_kfit"]
+            out["kfit_params"] = kfit_list
+            print(f"[Worker] Extracted {len(kfit_list)} kfit params")
+
             # Return tuple format for streaming endpoints
             return True, out
             
@@ -187,7 +403,15 @@ def _parallel_worker(curve_ids, filters, compute="elasticity"):
 @app.websocket("/ws/data")
 async def websocket_data_stream(websocket: WebSocket):
     """WebSocket endpoint to stream batches of curve data from DuckDB and send filter defaults."""
-    print("WebSocket connected")
+    # Validate token and extract user information
+    is_valid, user_id, user, error_message = await validate_token(websocket)
+    
+    if not is_valid:
+        print(f"WebSocket connection rejected: {error_message}")
+        await websocket.close(code=1008, reason=error_message or "Authentication required")
+        return
+    
+    # Accept the WebSocket connection after authentication
     await websocket.accept()
     conn = duckdb.connect(DB_PATH)
     print(f"Connected to database: {DB_PATH}")
@@ -293,6 +517,24 @@ async def websocket_data_stream(websocket: WebSocket):
                 request = await websocket.receive_text()
                 request_data = json.loads(request)
 
+                # Extract dataset_id from request
+                dataset_id = request_data.get("dataset_id")
+                
+                # Validate dataset exists
+                is_valid, error_message = await validate_dataset(conn, dataset_id, user_id)
+                if not is_valid:
+                    await websocket.send_text(json.dumps({
+                        "status": "error",
+                        "message": error_message
+                    }))
+                    continue
+                
+                # Update last accessed timestamp
+                update_dataset_last_accessed(conn, dataset_id)
+
+                # Selected segment (indent=segment0, retract=segment1) for curve queries.
+                segment_type = request_data.get("segment_type") or "segment0"
+
                 # --- New: action / compute_scope handling ---
                 # Identifies requested operation for downstream handling
                 action = request_data.get("action")
@@ -300,9 +542,9 @@ async def websocket_data_stream(websocket: WebSocket):
                 compute_scope = request_data.get("compute_scope")
 
                 # If client asked for metadata, send it,
-                # but DO NOT skip curve processing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“ we still fall through.
+                # but DO NOT skip curve processing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å" we still fall through.
                 if action == "get_metadata":
-                    await get_metadata(conn, websocket)
+                    await get_metadata(conn, websocket, dataset_id=dataset_id, segment_type=segment_type)
 
                 # Derive compute_scope if not explicitly passed
                 if compute_scope is None:
@@ -317,7 +559,11 @@ async def websocket_data_stream(websocket: WebSocket):
                 compute_scope = str(compute_scope).lower()
                 
                 
-                num_curves = request_data.get("num_curves") or 1
+                curve_from = int(request_data.get("curve_from") or 0)
+                curve_to   = int(request_data.get("curve_to")   or 10)
+                # Clamp to sane values
+                curve_from = max(0, curve_from)
+                curve_to   = max(curve_from + 1, curve_to)
                 filters = request_data.get("filters", {"regular": {}, "cp_filters": {}, "fmodels": {}})
                 curve_id = request_data.get("curve_id", None)  # Extract curve_id
                 filters_changed = request_data.get("filters_changed", False)
@@ -336,20 +582,74 @@ async def websocket_data_stream(websocket: WebSocket):
                     "minInd": 0,
                     "poisson": 0.5
                 })  # Extract force model parameters
-                print(f"Received request: num_curves={num_curves}, curve_id={curve_id}, filters={filters}")
+                # Optional explicit curve selection from the UI curve picker
+                # ("curve0", "curve3", … or bare integers). Used so K_raw / K_contact / E
+                # are aggregated only over chosen curves (1..N).
+                requested_curve_ids = _normalize_request_curve_ids(
+                    request_data.get("curve_ids")
+                )
+                # Fold in a singular curve_id (e.g. from the single-curve picker /
+                # get_metadata) so it's scoped identically to a one-element
+                # curve_ids selection below, rather than falling through to the
+                # "full" (no-stats) code path.
+                if not requested_curve_ids and curve_id:
+                    requested_curve_ids = _normalize_request_curve_ids([curve_id])
+                print(
+                    f"Received request: curve_from={curve_from}, curve_to={curve_to}, "
+                    f"dataset_id={dataset_id}, segment_type={segment_type}, "
+                    f"curve_id={curve_id}, curve_ids={requested_curve_ids}, filters={filters}"
+                )
 
-                # --- Population stats ignore curve_id ---
+                seg_sql = segment_types_sql(segment_type)
+
+                # True when LinearWindowFit is among the active regular filters.
+                has_linfit = "linearwindowfit" in (filters.get("regular") or {})
+                # Added before using has_fmodel and has_emodel (also needed to decide
+                # whether model_stats can be scoped to chosen ids only).
+                has_fmodel = bool(filters.get("f_models", {}))
+                has_emodel = bool(filters.get("e_models", {}))
+                # When set, K aggregation keeps only these numeric-string curve ids.
+                # None means "no extra filter" (use whatever the pipeline returned).
+                k_scope_ids = set(requested_curve_ids) if requested_curve_ids else None
+
+                # --- model_stats curve set ---
+                # Force/elasticity population stats historically run over the whole
+                # dataset. Stiffness-only requests can be scoped to the chosen ids
+                # so one or many selected curves are enough.
                 if compute_scope == "model_stats":
-                    curve_ids_result = conn.execute(
-                        "SELECT curve_id FROM force_vs_z"
-                    ).fetchall()
-                    curve_ids = [str(row[0]) for row in curve_ids_result]
+                    if requested_curve_ids and has_linfit and not (has_fmodel or has_emodel):
+                        # Restrict the pipeline to the curves the user currently has selected.
+                        curve_ids = requested_curve_ids
+                        print(
+                            f"model_stats (stiffness-only) scoped to {len(curve_ids)} "
+                            f"chosen curve id(s): {curve_ids}"
+                        )
+                    else:
+                        # Whole-dataset population (f/e models, or no explicit selection).
+                        curve_ids_result = conn.execute(
+                            f"""
+                            SELECT DISTINCT curve_id FROM force_vs_z
+                            WHERE dataset_id = ? AND {seg_sql}
+                            ORDER BY curve_id
+                            """,
+                            (dataset_id,)
+                        ).fetchall()
+                        curve_ids = [str(row[0]) for row in curve_ids_result]
+                        if k_scope_ids:
+                            print(
+                                f"model_stats population over {len(curve_ids)} curves; "
+                                f"K filtered to chosen ids {sorted(k_scope_ids, key=int)}"
+                            )
                     # Added before using cp_filters
                     cp_filters = filters.get("cp_filters", {})
-                    # Optimization: Pre-warm CP cache for ALL curves before parallel processing
-                    if cp_filters:
+                    # Optimization: Pre-warm CP cache for selected/all curves before parallel processing
+                    if cp_filters and CACHE_ENABLED:
                         print(f"ðŸ”¥ Pre-warming CP cache for {len(curve_ids)} curves before parallel processing...")
-                        metadata_global = get_metadata_for_curves(conn, curve_ids)
+                        # Pass dataset_id so the metadata query is scoped to the correct dataset.
+                        # Without it, get_metadata_for_curves picks up the first matching curve_id
+                        # from any dataset in force_vs_z, producing a wrong spring_constant / tip_radius
+                        # that generates a different cache hash and causes autothresh to run twice.
+                        metadata_global = get_metadata_for_curves(conn, curve_ids, dataset_id=dataset_id)
                         warmup_cp_cache(
                             conn, 
                             [int(cid) for cid in curve_ids], 
@@ -363,134 +663,154 @@ async def websocket_data_stream(websocket: WebSocket):
                     if curve_id:
                         curve_ids = [curve_id]
                     else:
+                        limit = curve_to - curve_from
                         curve_ids_result = conn.execute(
-                            "SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)
+                            f"""
+                            SELECT DISTINCT curve_id FROM force_vs_z
+                            WHERE dataset_id = ? AND {seg_sql}
+                            ORDER BY curve_id
+                            LIMIT ? OFFSET ?
+                            """,
+                            (dataset_id, limit, curve_from)
                         ).fetchall()
                         curve_ids = [str(row[0]) for row in curve_ids_result]
 
                 # --- ADD THIS ---
                 global_force_params = []
                 global_elastic_params = []
-                # Added before using has_fmodel and has_emodel
-                has_fmodel = bool(filters.get("f_models", {}))
-                has_emodel = bool(filters.get("e_models", {}))
+                global_k_params = []  # NEW: stiffness (K) values from LinearWindowFit
+                global_k_contact_params = []  # NEW: compliance-corrected k_contact
+                global_E_params = []  # NEW: Young's modulus E
+                # Per-curve LinearWindowFit rows ({curve_id, k_n_per_m, k_contact, youngs_modulus_pa})
+                # so the client can show/export results keyed by the chosen ids.
+                global_kfit_by_curve = []
                 
-                # Check if parallel processing is feasible based on system resources
-                try:
-                    import psutil
-                    available_memory_gb = psutil.virtual_memory().available / (1024**3)
-                except ImportError:
-                    # psutil not available - assume constrained environment
-                    print("⚠️ psutil not available, assuming constrained environment")
-                    available_memory_gb = 0.5  # Conservative estimate
-                
-                cpu_count = os.cpu_count() or 1
-                
-                # Require at least 1.5GB free RAM and 2+ CPU cores for parallel processing
-                can_parallelize = (
-                    available_memory_gb >= 1.5 and 
-                    cpu_count >= 2 and 
-                    not IS_WINDOWS
-                )
-                
-                if not can_parallelize:
-                    print(f"⚠️ Parallel processing disabled: insufficient resources")
-                    print(f"   Available RAM: {available_memory_gb:.1f} GB (need 1.5+ GB)")
-                    print(f"   CPU cores: {cpu_count} (need 2+)")
-                    print(f"   Using sequential processing instead...")
-                
-                # Optimization: Use parallel processing for model_stats (only if resources available)
-                if compute_scope == "model_stats" and len(curve_ids) > BATCH_SIZE and can_parallelize:
-                    print(f"ðŸš€ Using parallel processing for {len(curve_ids)} curves...")
-                    
-                    # Create larger batches for parallel processing (100 curves per worker)
-                    parallel_batch_size = 100
-                    parallel_batches = [
-                        curve_ids[i:i+parallel_batch_size] 
-                        for i in range(0, len(curve_ids), parallel_batch_size)
-                    ]
-                    
-                    # Use ProcessPoolExecutor for true parallelism
-                    max_workers = min(os.cpu_count() or 2, len(parallel_batches))
-                    
-                    with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                        # Submit all batches
-                        futures = []
-                        for batch in parallel_batches:
-                            # Create compute spec for worker
-                            compute_spec = {
-                                "compute": "fparams" if has_fmodel else "elasticity",
-                                "emodel_params": elastic_model_params,
-                                "elasticity_params": elasticity_params if has_emodel else None,
-                            }
-                            
-                            future = executor.submit(
-                                _parallel_worker, 
-                                batch, 
-                                filters, 
-                                compute_spec
-                            )
-                            futures.append((future, batch))
-                        
-                        # Collect results as they complete
-                        completed = 0
-                        for future, batch in futures:
-                            try:
-                                success, result = future.result()
-                                
-                                if success:
-                                    # Extract force params
-                                    if has_fmodel and "fparams" in result:
-                                        for r in result["fparams"]:
-                                            if is_valid_param_vector(r.get("fparam")):
-                                                global_force_params.append(r["fparam"])
-                                    
-                                    # Extract elastic params
-                                    if has_emodel and "elasticity_params" in result:
-                                        for r in result["elasticity_params"]:
-                                            if is_valid_param_vector(r.get("elasticity_param")):
-                                                global_elastic_params.append(r["elasticity_param"])
-                                
-                                completed += len(batch)
-                                progress = (completed / len(curve_ids)) * 100
-                                print(f"  ðŸ“Š Progress: {completed}/{len(curve_ids)} curves ({progress:.1f}%)")
-                            
-                            except Exception as e:
-                                print(f"  âŒ Error processing batch: {e}")
-                                continue
-                    
-                    print(f"âœ… Parallel processing complete: {len(global_force_params)} force params, {len(global_elastic_params)} elastic params")
-                
+                # ── Resource check (centralised) ─────────────────────────────────────
+                can_parallelize, max_par_workers, par_batch_size = _get_parallelism_config()
+
+                # Build the compute spec once (reused for every parallel batch)
+                if has_fmodel and has_emodel:
+                    compute_mode = "both"
+                elif has_fmodel:
+                    compute_mode = "fparams"
                 else:
-                    # Sequential processing for small datasets, constrained resources, or non-model_stats
-                    # Adjust batch size based on available resources (use variable from resource check above)
+                    compute_mode = "elasticity"
+
+                compute_spec = {
+                    "compute": compute_mode,
+                    "emodel_params": elastic_model_params,
+                    "elasticity_params": elasticity_params if has_emodel else None,
+                    "force_model_params": force_model_params,
+                    "set_zero_force": set_zero_force,
+                    "dataset_id": dataset_id,
+                    "segment_type": segment_type,
+                }
+
+                # ── Parallel path (model_stats only, adequate resources) ──────────────
+                parallel_succeeded = False
+                if compute_scope == "model_stats" and len(curve_ids) > BATCH_SIZE and can_parallelize:
+                    print(
+                        f"Using parallel processing for {len(curve_ids)} curves "
+                        f"({max_par_workers} workers, {par_batch_size} curves/batch)..."
+                    )
+
+                    parallel_batches = [
+                        curve_ids[i:i + par_batch_size]
+                        for i in range(0, len(curve_ids), par_batch_size)
+                    ]
+                    effective_workers = min(max_par_workers, len(parallel_batches))
+
+                    try:
+                        # Always use ThreadPoolExecutor on every platform.
+                        # ProcessPoolExecutor is intentionally avoided: on Linux it uses
+                        # fork() which inherits the parent's open DuckDB file handles and
+                        # causes worker processes to be terminated abruptly (SIGKILL / OOM).
+                        # Each _parallel_worker creates its own duckdb.connect() so threads
+                        # are safe here — DuckDB releases the GIL during I/O.
+                        with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                            futures = [
+                                (executor.submit(_parallel_worker, batch, filters, compute_spec), batch)
+                                for batch in parallel_batches
+                            ]
+
+                            completed = 0
+                            batch_errors = 0
+                            for future, batch in futures:
+                                try:
+                                    success, result = future.result(timeout=300)
+                                    if success:
+                                        if has_fmodel and "fparams" in result:
+                                            for r in result["fparams"]:
+                                                if is_valid_param_vector(r.get("fparam")):
+                                                    global_force_params.append(r["fparam"])
+                                        if has_emodel and "elasticity_params" in result:
+                                            for r in result["elasticity_params"]:
+                                                if is_valid_param_vector(r.get("elasticity_param")):
+                                                    global_elastic_params.append(r["elasticity_param"])
+                                        if "kfit_params" in result:
+                                            for r in result["kfit_params"]:
+                                                # Drop curves outside the user's picker selection
+                                                # when K is filtered while f/e still use the full set.
+                                                if not _kfit_row_in_scope(r, k_scope_ids):
+                                                    continue
+                                                # Keep the full per-curve row so mean±std and
+                                                # by-id breakdown stay aligned with chosen ids.
+                                                global_kfit_by_curve.append(r)
+                                                if r.get("k_n_per_m") is not None:
+                                                    global_k_params.append(r["k_n_per_m"])
+                                                if r.get("k_contact") is not None:
+                                                    global_k_contact_params.append(r["k_contact"])
+                                                if r.get("youngs_modulus_pa") is not None:
+                                                    global_E_params.append(r["youngs_modulus_pa"])
+                                    completed += len(batch)
+                                    pct = (completed / len(curve_ids)) * 100
+                                    print(f"  Progress: {completed}/{len(curve_ids)} curves ({pct:.1f}%)")
+                                except Exception as e:
+                                    batch_errors += 1
+                                    print(f"  Error processing batch: {e}")
+
+                        if batch_errors < len(parallel_batches):
+                            parallel_succeeded = True
+                            print(
+                                f"Parallel processing complete: "
+                                f"{len(global_force_params)} force params, "
+                                f"{len(global_elastic_params)} elastic params, "
+                                f"{len(global_k_params)} k params"
+                            )
+                        else:
+                            print("All parallel batches failed -- falling back to sequential.")
+
+                    except Exception as e:
+                        print(f"Parallel executor failed ({e}) -- falling back to sequential.")
+
+                # ── Sequential path ───────────────────────────────────────────────────
+                # Runs when: dataset is small, resources are constrained, compute_scope
+                # is not model_stats, OR all parallel workers failed.
+                if not parallel_succeeded:
+                    try:
+                        import psutil
+                        available_memory_gb = psutil.virtual_memory().available / (1024 ** 3)
+                    except ImportError:
+                        available_memory_gb = 0.5
+
+                    cpu_count_seq = os.cpu_count() or 1
+
                     if available_memory_gb < 1.0:
-                        # Very constrained - use smaller batches
-                        batch_size_to_use = 5
-                        print(f"⚠️ Low memory detected ({available_memory_gb:.1f} GB), using batch size: {batch_size_to_use}")
-                    elif available_memory_gb < 2.0:
-                        # Moderately constrained - medium batches
                         batch_size_to_use = 10
-                        print(f"ℹ️ Moderate resources ({available_memory_gb:.1f} GB, {cpu_count} CPU), using batch size: {batch_size_to_use}")
-                    elif cpu_count == 1:
-                        # Single CPU but good memory - larger batches for efficiency
+                        print(f"Very low memory ({available_memory_gb:.1f} GB) -- batch size: {batch_size_to_use}")
+                    elif available_memory_gb < 2.0:
+                        batch_size_to_use = 10
+                        print(f"Moderate memory ({available_memory_gb:.1f} GB) -- batch size: {batch_size_to_use}")
+                    elif cpu_count_seq == 1:
                         batch_size_to_use = 20
-                        print(f"ℹ️ Single CPU with good memory ({available_memory_gb:.1f} GB), using batch size: {batch_size_to_use}")
+                        print(f"Single CPU, good memory ({available_memory_gb:.1f} GB) -- batch size: {batch_size_to_use}")
                     else:
-                        # Normal batch size
                         batch_size_to_use = BATCH_SIZE
-                        print(f"ℹ️ Using standard batch size: {batch_size_to_use}")
-                    
-                    total_batches = (len(curve_ids) + batch_size_to_use - 1) // batch_size_to_use
-                    
-                    # Process in batches
+                        print(f"Using standard batch size: {batch_size_to_use}")
+
                     for i in range(0, len(curve_ids), batch_size_to_use):
                         batch_ids = curve_ids[i:i + batch_size_to_use]
-                        batch_num = i // batch_size_to_use + 1
-                        
-                        if compute_scope == "model_stats":
-                            print(f"📊 Sequential processing: batch {batch_num}/{total_batches} ({len(batch_ids)} curves)")
-                        
+
                         await process_and_stream_batch(
                             conn,
                             batch_ids,
@@ -505,48 +825,75 @@ async def websocket_data_stream(websocket: WebSocket):
                             compute_scope=compute_scope,
                             global_force_params=global_force_params,
                             global_elastic_params=global_elastic_params,
+                            global_k_params=global_k_params,
+                            global_k_contact_params=global_k_contact_params,
+                            global_E_params=global_E_params,
+                            global_kfit_by_curve=global_kfit_by_curve,
+                            k_scope_ids=k_scope_ids,
+                            dataset_id=dataset_id,
+                            segment_type=segment_type,
                         )
                         await asyncio.sleep(0.01)  # Small delay to avoid overwhelming client
-                
-                    # print("send meta and now curves")
-                    if compute_scope == "model_stats":
-                        stats = {}
 
-                        if len(global_force_params) >= 2:
-                            n_params = len(global_force_params[0])
-                            params_by_index = [
-                                [p[i] for p in global_force_params]
-                                for i in range(n_params)
-                            ]
-                            stats["force_params"] = {
-                                f"p{i}": format_stat(values)
-                                for i, values in enumerate(params_by_index)
-                                if len(values) >= 2
-                            }
+                # ---- Send stats + completion (runs after BOTH parallel and sequential paths) ----
+                if compute_scope == "model_stats":
+                    stats = {}
 
-                        if len(global_elastic_params) >= 2:
-                            n_params = len(global_elastic_params[0])
-                            params_by_index = [
-                                [p[i] for p in global_elastic_params]
-                                for i in range(n_params)
-                            ]
-                            stats["elasticity_params"] = {
-                                f"p{i}": format_stat(values)
-                                for i, values in enumerate(params_by_index)
-                                if len(values) >= 2
-                            }
+                    if len(global_force_params) >= 2:
+                        n_params = len(global_force_params[0])
+                        params_by_index = [
+                            [p[i] for p in global_force_params]
+                            for i in range(n_params)
+                        ]
+                        stats["force_params"] = {
+                            f"p{i}": format_stat(values)
+                            for i, values in enumerate(params_by_index)
+                            if len(values) >= 2
+                        }
 
-                        await websocket.send_text(json.dumps({
-                            "status": "model_stats",
-                            "data": {
-                                "stats": stats,
-                                "num_curves": len(curve_ids)
-                            }
-                        }))
+                    if len(global_elastic_params) >= 2:
+                        n_params = len(global_elastic_params[0])
+                        params_by_index = [
+                            [p[i] for p in global_elastic_params]
+                            for i in range(n_params)
+                        ]
+                        stats["elasticity_params"] = {
+                            f"p{i}": format_stat(values)
+                            for i, values in enumerate(params_by_index)
+                            if len(values) >= 2
+                        }
 
-                    # Signal completion of this request
-                    await websocket.send_text(json.dumps({"status": "complete"}))
-                    # print("Request completed")
+                    # Allow a single chosen curve (n >= 1): format_stat returns the
+                    # value with std=0, which is what single-curve mode needs.
+                    if len(global_k_params) >= 1:
+                        stats["k_stiffness"] = format_stat(global_k_params)
+                    if len(global_k_contact_params) >= 1:
+                        stats["k_contact"] = format_stat(global_k_contact_params)
+                    if len(global_E_params) >= 1:
+                        stats["youngs_modulus"] = format_stat(global_E_params)
+                    if global_kfit_by_curve:
+                        stats["kfit_by_curve"] = global_kfit_by_curve
+
+                    await websocket.send_text(json.dumps({
+                        "status": "model_stats",
+                        "data": {
+                            "stats": stats,
+                            # Report how many curves fed the K aggregate when scoped;
+                            # otherwise the full population size used for the request.
+                            "num_curves": (
+                                len(global_kfit_by_curve)
+                                if global_kfit_by_curve
+                                else len(curve_ids)
+                            ),
+                            "curve_ids": [
+                                row.get("curve_id") for row in global_kfit_by_curve
+                            ] if global_kfit_by_curve else curve_ids,
+                        }
+                    }))
+
+                # Signal completion of this request, including action so the
+                # frontend can reliably match this "complete" to the right operation.
+                await websocket.send_text(json.dumps({"status": "complete", "action": action}))
 
             except WebSocketDisconnect:
                 # print("Client disconnected.")
@@ -570,21 +917,177 @@ async def websocket_data_stream(websocket: WebSocket):
         # print("WebSocket connection closed")
 
 
-async def get_metadata(conn, websocket):
+async def validate_token(websocket: WebSocket) -> Tuple[bool, Optional[int], Optional[dict], str]:
+    """
+    Validate WebSocket token and extract user information.
+    
+    Args:
+        websocket: WebSocket connection with token in query params
+        
+    Returns:
+        Tuple of (is_valid, user_id, user_dict, error_message)
+        If valid, returns (True, user_id, user_dict, None)
+        If invalid, returns (False, None, None, error_message)
+    """
+    from auth.security import decode_token
+    from db.users import get_user_by_email
+    
+    # Extract token from query parameters
+    token = websocket.query_params.get("token")
+    
+    if not token:
+        return False, None, None, "No token provided"
+    
     try:
+        # Decode token
+        payload = decode_token(token)
+        email = payload.get("sub")
+        
+        if not email:
+            return False, None, None, "Invalid token payload"
+        
+        # Get user by email
+        user = get_user_by_email(email)
+        if not user:
+            return False, None, None, f"User not found for email {email}"
+        
+        user_id = user["id"]
+        print(f"Token validated: User ID {user_id} ({email})")
+        return True, user_id, user, None
+        
+    except Exception as e:
+        error_msg = f"Token validation failed: {str(e)}"
+        print(f"WebSocket connection rejected: {error_msg}")
+        return False, None, None, error_msg
+
+
+async def validate_dataset(conn: duckdb.DuckDBPyConnection, dataset_id: int, user_id: int = None) -> Tuple[bool, str]:
+    """
+    Validate that a dataset exists and optionally belongs to the user.
+    
+    Args:
+        conn: DuckDB connection
+        dataset_id: The dataset ID to validate
+        user_id: Optional user ID to verify ownership
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+        If valid, returns (True, None)
+        If invalid, returns (False, error_message)
+    """
+    if dataset_id is None:
+        return False, "dataset_id is required"
+    
+    try:
+        # Check if dataset exists
+        if user_id is not None:
+            # Verify dataset exists and belongs to user
+            result = conn.execute(
+                "SELECT id FROM datasets WHERE id = ? AND user_id = ?",
+                (dataset_id, user_id)
+            ).fetchone()
+            if not result:
+                return False, f"Dataset {dataset_id} not found or access denied"
+        else:
+            # Just check if dataset exists
+            result = conn.execute(
+                "SELECT id FROM datasets WHERE id = ?",
+                (dataset_id,)
+            ).fetchone()
+            if not result:
+                return False, f"Dataset {dataset_id} not found"
+        
+        return True, None
+    except Exception as e:
+        return False, f"Error validating dataset: {str(e)}"
+
+
+def update_dataset_last_accessed(conn: duckdb.DuckDBPyConnection, dataset_id: int) -> None:
+    """
+    Update the last_accessed_at timestamp for a dataset.
+    
+    Args:
+        conn: DuckDB connection
+        dataset_id: The dataset ID to update
+    """
+    try:
+        conn.execute(
+            "UPDATE datasets SET last_accessed_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (dataset_id,)
+        )
+    except Exception as e:
+        logger.warning(f"Failed to update last_accessed_at for dataset {dataset_id}: {str(e)}")
+
+
+async def get_metadata(conn, websocket, dataset_id: int = None, segment_type: str = "segment0"):
+    try:
+        seg_sql = segment_types_sql(segment_type)
         # Execute query to fetch one row from force_vs_z
-        cursor = conn.execute("SELECT * FROM force_vs_z LIMIT 1")
+        # Rename file_id to file_name and exclude: instrument, inv_ols, no_points, sample, sampling_rate, tip_angle, velocity
+        query = """
+            SELECT 
+                dataset_id,
+                curve_id,
+                segment_type,
+                force_values,
+                z_values,
+                indentation_values,
+                elasticity_values,
+                file_id AS file_name,
+                date,
+                spring_constant,
+                tip_geometry,
+                tip_radius,
+                fmodel_params,
+                fmodel_name,
+                emodel_params,
+                emodel_name,
+                contact_point_z,
+                contact_point_force
+            FROM force_vs_z
+        """
+        if dataset_id is not None:
+            query += f" WHERE dataset_id = ? AND {seg_sql} LIMIT 1"
+            cursor = conn.execute(query, (dataset_id,))
+        else:
+            query += f" WHERE {seg_sql} LIMIT 1"
+            cursor = conn.execute(query)
         row = cursor.fetchone()
         
         # Get column names from cursor description
         columns = [description[0] for description in cursor.description]
+
+        # Count distinct curves for this dataset and segment.
+        if dataset_id is not None:
+            num_curves = conn.execute(
+                f"SELECT COUNT(DISTINCT curve_id) FROM force_vs_z WHERE dataset_id = ? AND {seg_sql}",
+                (dataset_id,),
+            ).fetchone()[0]
+            available_rows = conn.execute(
+                "SELECT DISTINCT segment_type FROM force_vs_z WHERE dataset_id = ?",
+                (dataset_id,),
+            ).fetchall()
+        else:
+            num_curves = conn.execute(
+                f"SELECT COUNT(DISTINCT curve_id) FROM force_vs_z WHERE {seg_sql}"
+            ).fetchone()[0]
+            available_rows = conn.execute(
+                "SELECT DISTINCT segment_type FROM force_vs_z"
+            ).fetchall()
+
+        available_segment_types = sorted(
+            {normalize_segment_type(row[0]) for row in available_rows if row[0]}
+        )
         
         # If a row exists, include its data; otherwise, send only column names
         metadata = {
             "status": "metadata",
             "metadata": {
                 "columns": columns,
-                "sample_row": dict(zip(columns, row)) if row else None
+                "sample_row": dict(zip(columns, row)) if row else None,
+                "num_curves": num_curves,
+                "segment_type": normalize_segment_type(segment_type),
+                "available_segment_types": available_segment_types,
             }
         }
         
@@ -617,15 +1120,22 @@ async def process_and_stream_batch(
     compute_scope: str = "full",  # NEW
     global_force_params: list = None,
     global_elastic_params: list = None,
+    global_k_params: list = None,  # NEW: stiffness (K) values from LinearWindowFit
+    global_k_contact_params: list = None,  # NEW: compliance-corrected k_contact
+    global_E_params: list = None,  # NEW: Young's modulus E
+    global_kfit_by_curve: list = None,  # Per-curve LinearWindowFit result rows
+    k_scope_ids: Optional[set] = None,  # Optional chosen-id filter for K aggregates
+    dataset_id: int = None,
+    segment_type: str = "segment0",
 ) -> None:
     """
     Process a batch of curve IDs and optionally a single curve ID, fetch data from DuckDB,
     and stream results via WebSocket.
 
     compute_scope:
-        - "full"         ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ compute all graphs (current behaviour)
-        - "fmodel_only"  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ update only force-model overlay (indentation graph)
-        - "emodel_only"  ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ update only elasticity-model overlay (elspectra graph)
+        - "full"         compute all graphs (current behaviour)
+        - "fmodel_only"   update only force-model overlay (indentation graph)
+        - "emodel_only"   update only elasticity-model overlay (elspectra graph)
     """
     try:
         loop = asyncio.get_running_loop()
@@ -649,7 +1159,7 @@ async def process_and_stream_batch(
         cp_filters = filters_for_call.get("cp_filters", {})     # Added before using cp_filters
         # --- Model stats scope ---
         scope_model_stats = compute_scope == "model_stats"
-        print("scope_model_stats", scope_model_stats)
+        # print("scope_model_stats", scope_model_stats)
         has_fmodel = bool(filters_for_call["f_models"])
         has_emodel = bool(filters_for_call["e_models"])
 
@@ -660,7 +1170,7 @@ async def process_and_stream_batch(
         # Optimization: skip expensive elspectra when only fmodel stats needed
         if scope_model_stats and run_force_population and not run_elastic_population:
             compute_elspectra_flag = False
-            print(f"Ã¢Å¡Â¡ Optimization: Skipping elspectra for force-only population stats")
+            # print(f"Ã¢Å¡Â¡ Optimization: Skipping elspectra for force-only population stats")
         elif scope_f_only:
             # Only force-model (uses indentation) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ no elasticity models, no elspectra
             filters_for_call["e_models"] = {}
@@ -688,8 +1198,12 @@ async def process_and_stream_batch(
         # Use ThreadPoolExecutor for blocking DuckDB ops
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             from pipeline import get_metadata_for_curves
-            metadata = get_metadata_for_curves(conn, batch_ids)
-            print(f"DEBUG: Retrieved metadata: {metadata}")
+            metadata = get_metadata_for_curves(conn, batch_ids, dataset_id=dataset_id)
+            print(
+                "DEBUG fetch_curves_batch metadata "
+                f"(scope={compute_scope}, dataset_id={dataset_id}, batch_size={len(batch_ids)}): "
+                f"{metadata}"
+            )
 
             # ---- SINGLE-CURVE PATH (models / targeted updates) ----
             if is_single_batch and (curve_id or want_models or not scope_full):
@@ -706,15 +1220,17 @@ async def process_and_stream_batch(
                     elastic_model_params=elastic_model_params,
                     force_model_params=force_model_params,
                     compute_elspectra=compute_elspectra_flag,
+                    dataset_id=dataset_id,
+                    segment_type=segment_type,
                 )
 
             # ---- BATCH PATH (full graphs) ----
             elif filters_changed or not curve_id or scope_full:
-                print(f"Batch processing ({compute_scope}):", batch_ids)
+                # print(f"Batch processing ({compute_scope}):", batch_ids)
                 
                 # Optimization: Warm up CP cache for model stats before parallel processing
-                if scope_model_stats and cp_filters:
-                    print(f"ðŸ”¥ Pre-warming CP cache for {len(batch_ids)} curves...")
+                if scope_model_stats and cp_filters and CACHE_ENABLED:
+                    # print(f"ðŸ"¥ Pre-warming CP cache for {len(batch_ids)} curves...")
                     warmup_cp_cache(conn, [int(cid) for cid in batch_ids], cp_filters, metadata, batch_size=50)
                 
                 graph_force_vs_z, graph_force_indentation, graph_elspectra = await loop.run_in_executor(
@@ -731,6 +1247,8 @@ async def process_and_stream_batch(
                         compute_elspectra=compute_elspectra_flag,
                         force_model_population=run_force_population,
                         elastic_model_population=run_elastic_population,
+                        dataset_id=dataset_id,
+                        segment_type=segment_type,
                     ),
                 )
 
@@ -739,19 +1257,47 @@ async def process_and_stream_batch(
             "status": "batch",
             "data": {},
         }
-        print("qwertrtt")
+        # print("qwertrtt")
         if scope_model_stats:
+            # A batch of exactly one curve is routed through the "single-curve
+            # path" above (is_single_batch is True), which only populates the
+            # *_single graph variables — the batch ones stay None. Fall back to
+            # the *_single variables so a single chosen curve (curve_ids with
+            # one id) still yields its stats instead of an empty {} here.
+            force_indentation_source = graph_force_indentation or graph_force_indentation_single
+            force_vs_z_source = graph_force_vs_z or graph_force_vs_z_single
+            elspectra_source = graph_elspectra or graph_elspectra_single
+
             # Force params come from graph_force_indentation["curves"]["curves_fparam"]
-            curves_block = graph_force_indentation.get("curves", {}) if graph_force_indentation else {}
+            curves_block = force_indentation_source.get("curves", {}) if force_indentation_source else {}
 
             if run_force_population and "curves_fparam" in curves_block:
                 for r in curves_block["curves_fparam"]:
                     if is_valid_param_vector(r.get("fparam")):
                         global_force_params.append(r["fparam"])
 
+            # K-stiffness values come from graph_force_vs_z["curves_kfit"], populated
+            # whenever LinearWindowFit is active among the Regular filters — independent
+            # of whether any force/elasticity model is selected.
+            if force_vs_z_source and "curves_kfit" in force_vs_z_source:
+                for r in force_vs_z_source["curves_kfit"]:
+                    # Drop curves outside the user's picker selection when K is
+                    # filtered while f/e population still uses the full dataset.
+                    if not _kfit_row_in_scope(r, k_scope_ids):
+                        continue
+                    # Preserve the full per-curve row (includes curve_id) for by-id results.
+                    if global_kfit_by_curve is not None:
+                        global_kfit_by_curve.append(r)
+                    if r.get("k_n_per_m") is not None and global_k_params is not None:
+                        global_k_params.append(r["k_n_per_m"])
+                    if r.get("k_contact") is not None and global_k_contact_params is not None:
+                        global_k_contact_params.append(r["k_contact"])
+                    if r.get("youngs_modulus_pa") is not None and global_E_params is not None:
+                        global_E_params.append(r["youngs_modulus_pa"])
+
             # Elasticity params come from graph_elspectra["curves_elasticity_param"] (top-level, not inside "curves")
-            if run_elastic_population and graph_elspectra:
-                elasticity_params_list = graph_elspectra.get("curves_elasticity_param", [])
+            if run_elastic_population and elspectra_source:
+                elasticity_params_list = elspectra_source.get("curves_elasticity_param", [])
                 for r in elasticity_params_list:
                     if is_valid_param_vector(r.get("elasticity_param")):
                         global_elastic_params.append(r["elasticity_param"])
@@ -773,6 +1319,43 @@ async def process_and_stream_batch(
                     "graphForceIndentationSingle": graph_force_indentation_single,
                     "graphElspectraSingle": graph_elspectra_single,
                 })
+
+            # A single curve picked via the curve picker (e.g. a get_metadata
+            # request carrying curve_id) never goes through the dedicated
+            # model_stats compute_scope, so its K/stiffness numbers were
+            # otherwise never sent. Surface them here as their own K_raw/
+            # K_contact/E "for that curve" whenever LinearWindowFit is active,
+            # without touching the batch/multi-curve full-scope response above.
+            has_linfit_here = "linearwindowfit" in filters_for_call.get("regular", {})
+            if has_linfit_here and curve_id and graph_force_vs_z_single:
+                kfit_rows = [
+                    r for r in (graph_force_vs_z_single.get("curves_kfit") or [])
+                    if _kfit_row_in_scope(r, k_scope_ids)
+                ]
+                if kfit_rows:
+                    k_vals = [r["k_n_per_m"] for r in kfit_rows if r.get("k_n_per_m") is not None]
+                    kc_vals = [r["k_contact"] for r in kfit_rows if r.get("k_contact") is not None]
+                    e_vals = [r["youngs_modulus_pa"] for r in kfit_rows if r.get("youngs_modulus_pa") is not None]
+                    single_curve_stats: Dict[str, Any] = {}
+                    if k_vals:
+                        single_curve_stats["k_stiffness"] = format_stat(k_vals)
+                    if kc_vals:
+                        single_curve_stats["k_contact"] = format_stat(kc_vals)
+                    if e_vals:
+                        single_curve_stats["youngs_modulus"] = format_stat(e_vals)
+                    if single_curve_stats:
+                        # Kept off kfit_by_curve on purpose: with exactly one curve the
+                        # aggregate above already *is* that curve's own K/E, so the
+                        # sidebar's "per chosen curve" breakdown stays hidden and only
+                        # this single set of numbers is shown, per the single-curve rule.
+                        await websocket.send_text(json.dumps({
+                            "status": "model_stats",
+                            "data": {
+                                "stats": single_curve_stats,
+                                "num_curves": len(kfit_rows),
+                                "curve_ids": [row.get("curve_id") for row in kfit_rows],
+                            }
+                        }, default=str))
 
         elif scope_f_only:
             if graph_force_indentation_single:
@@ -841,7 +1424,10 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from routers.opener import router as experiment_router
 from routers.exporter import router as exporter_router
+from routers.datasets import router as datasets_router
+from routers.hdf5_ingest import ingest_router, ApiKeyMiddleware
 from auth.router import router as auth_router
+from auth.dependencies import get_current_user
 from experiments.router import router as experiments_router
 
 # Configure logging
@@ -854,10 +1440,15 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+# Protects all /hdf5/* endpoints with API-key authentication middleware.
+app.add_middleware(ApiKeyMiddleware)
 app.include_router(experiment_router)
 app.include_router(exporter_router)
+app.include_router(datasets_router)
 app.include_router(experiments_router)
 app.include_router(auth_router)
+# Exposes /hdf5/ingest and /hdf5/ping routes for remote file delivery.
+app.include_router(ingest_router)
 
 
 # Sanitize file system paths
@@ -879,104 +1470,6 @@ def validate_hdf5_path(path: str) -> None:
     if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9_/]*[a-zA-Z0-9]$', path):
         raise ValueError("HDF5 path contains invalid characters")
 
-# @app.post("/export-hdf5")
-# async def export_hdf5_endpoint(data: Dict[str, Any]):
-#     """Export curves from DuckDB to an HDF5 file with custom level names and metadata."""
-#     export_hdf5_path = data.get("export_hdf5_path")
-#     curve_ids = data.get("curve_ids", [])
-#     dataset_path = data.get("dataset_path")
-#     num_curves = data.get("num_curves")
-#     level_names = data.get("level_names", ["curve0", "segment0"])
-#     metadata_path = data.get("metadata_path", "")
-#     metadata = data.get("metadata", {})
-#     db_path = "data/experiment.db"
-#     errors = []
-
-#     # Validate export_hdf5_path
-#     if not export_hdf5_path:
-#         errors.append("Missing export_hdf5_path")
-#         logger.error("Missing export_hdf5_path")
-#         raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing export_hdf5_path", "errors": errors})
-
-#     try:
-#         # Sanitize file system path
-#         export_hdf5_path = sanitize_file_path(export_hdf5_path)
-
-#         # Validate dataset_path (required for HDF5 data storage)
-#         if not dataset_path:
-#             errors.append("Missing dataset_path")
-#             logger.error("Missing dataset_path")
-#             raise HTTPException(status_code=400, detail={"status": "error", "message": "Missing dataset_path", "errors": errors})
-#         validate_hdf5_path(dataset_path)
-
-#         # Validate metadata_path (optional, can be empty)
-#         if metadata_path:
-#             validate_hdf5_path(metadata_path)
-
-#         # Convert curve_ids
-#         converted_curve_ids = None
-#         if curve_ids:
-#             converted_curve_ids = []
-#             for curve_id in curve_ids:
-#                 match = re.match(r"curve(\d+)", curve_id)
-#                 if not match:
-#                     errors.append(f"Invalid curve_id format: {curve_id}")
-#                     logger.error(f"Invalid curve_id: {curve_id}")
-#                     raise HTTPException(status_code=400, detail={"status": "error", "message": f"Invalid curve_id: {curve_id}", "errors": errors})
-#                 converted_curve_ids.append(int(match.group(1)))
-
-#         # Fetch curve_ids if num_curves is provided
-#         if not converted_curve_ids and num_curves is not None:
-#             if not isinstance(num_curves, int) or num_curves <= 0:
-#                 errors.append("num_curves must be a positive integer")
-#                 raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid num_curves", "errors": errors})
-#             with duckdb.connect(db_path) as conn:
-#                 curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z LIMIT ?", (num_curves,)).fetchall()
-#                 converted_curve_ids = [row[0] for row in curve_ids_result]
-
-#         # Validate level_names
-#         if not all(isinstance(name, str) and name.strip() for name in level_names):
-#             errors.append("All level names must be non-empty strings")
-#             raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid level names", "errors": errors})
-
-#         # Validate metadata
-#         for key, value in metadata.items():
-#             if value and isinstance(value, str) and not value.strip():
-#                 errors.append(f"Metadata field {key} cannot be empty")
-#         if errors:
-#             raise HTTPException(status_code=400, detail={
-#                 "status": "error",
-#                 "message": "Invalid metadata",
-#                 "errors": errors
-#             })
-
-#         logger.info(f"Starting HDF5 export to {export_hdf5_path} with {len(converted_curve_ids or [])} curves")
-#         os.makedirs(os.path.dirname(export_hdf5_path), exist_ok=True)
-#         num_exported = export_from_duckdb_to_hdf5(
-#             db_path=db_path,
-#             output_path=export_hdf5_path,  # Fixed: Use output_path instead of export_hdf5_path
-#             curve_ids=converted_curve_ids,
-#             dataset_path=dataset_path,  # Pass dataset_path for HDF5 data storage
-#             level_names=level_names,
-#             metadata_path=metadata_path,
-#             metadata=metadata
-#         )
-
-#         return {
-#             "status": "success",
-#             "message": f"Successfully exported {num_exported} curves",
-#             "export_hdf5_path": export_hdf5_path,
-#             "exported_curves": num_exported
-#         }
-#     except Exception as e:
-#         errors.append(str(e))
-#         logger.error(f"Failed to export to HDF5: {str(e)}")
-#         raise HTTPException(status_code=500, detail={
-#             "status": "error",
-#             "message": f"Failed to export: {str(e)}",
-#             "export_hdf5_path": export_hdf5_path,
-#             "errors": errors
-#         })
 
 
 # New endpoint to fetch all curves' fparams with progress streaming
@@ -985,81 +1478,104 @@ async def get_all_fparams_stream(data: Dict[str, Any]):
     """
     Server-Sent Events endpoint to stream fparams progress and results.
     Emits progress updates during batch processing.
+
+    Body fields:
+      filters       – filter dict (regular, cp_filters, f_models, e_models)
+      num_curves    – optional int, limit curves processed
+      dataset_id    – optional int, restrict processing to a single dataset
     """
     async def generate():
         try:
             # Extract parameters from request
             filters = data.get("filters", {})
+            dataset_id = data.get("dataset_id")  # None → all datasets
+            # Receives force-model runtime parameters (maxInd/minInd/poisson) from frontend.
+            force_model_params = data.get("force_model_params", {
+                "maxInd": 800,
+                "minInd": 0,
+                "poisson": 0.5
+            })
+            # Receives zero-force toggle so indentation computation matches the UI setting.
+            set_zero_force = data.get("set_zero_force", True)
             
             # Ensure we have fmodels to calculate fparams
             if not filters.get("f_models"):
                 filters["f_models"] = {"hertz_filter_array": {"model": "hertz", "poisson": 0.5}}
-            
-            # Connect to database
-            conn = duckdb.connect(DB_PATH)
-            
-            # Register filters (with error handling for existing functions)
-            try:
-                register_filters(conn)
-                # Ensure cache tables exist
-                ensure_cache_tables(conn)
-            except Exception as e:
-                if "already exists" in str(e):
-                    print(f"Some functions already exist. Continuing with existing functions.")
-                else:
-                    raise
-            
-            # Get ALL curve IDs (no limit)
-            curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z").fetchall()
+
+            # Use the singleton connection – safe here because _parallel_worker no longer
+            # closes it (each worker now opens its own independent duckdb.connect()).
+            _conn = get_conn()
+            if dataset_id is not None:
+                curve_ids_result = _conn.execute(
+                    "SELECT curve_id FROM force_vs_z WHERE dataset_id = ?", (dataset_id,)
+                ).fetchall()
+            else:
+                curve_ids_result = _conn.execute("SELECT curve_id FROM force_vs_z").fetchall()
             curve_ids = [str(row[0]) for row in curve_ids_result]
             
             total_curves = len(curve_ids)
             print(f"Found {total_curves} total curves in database")
             
-            # Emit initial progress
+            # Emit initial progress and yield control so the chunk flushes to the client
             yield f"data: {json.dumps({'type': 'progress', 'phase': 'Starting...', 'done': 0, 'total': total_curves})}\n\n"
-            
+            await asyncio.sleep(0)
+
             if not curve_ids:
                 yield f"data: {json.dumps({'type': 'complete', 'status': 'success', 'fparams': [], 'message': 'No curves found'})}\n\n"
-                conn.close()
                 return
-            
+
             # Process curves in smaller batches to avoid memory issues
             batch_size = 50  # Process 50 curves at a time
             all_fparams = []
             total_batches = (total_curves + batch_size - 1) // batch_size
-            
+            loop = asyncio.get_event_loop()
+
             for i in range(0, len(curve_ids), batch_size):
                 batch_curve_ids = curve_ids[i:i + batch_size]
                 batch_num = i // batch_size + 1
                 print(f"Processing batch {batch_num}/{total_batches}: curves {i} to {min(i + batch_size, len(curve_ids))}")
-                
-                # Emit batch progress
+
+                # Emit batch progress and flush before blocking work begins
                 yield f"data: {json.dumps({'type': 'progress', 'phase': f'Processing batch {batch_num}/{total_batches}...', 'done': i, 'total': total_curves, 'current_batch': batch_num, 'total_batches': total_batches})}\n\n"
-                
-                # Fetch curves with fparam calculation (use single=True to get fparams)
-                # Skip elspectra calculation for fparams endpoint to improve performance
-                graph_force_vs_z, graph_force_indentation, graph_elspectra = fetch_curves_batch(
-                    conn, batch_curve_ids, filters, single=True, compute_elspectra=False
-                )
+                await asyncio.sleep(0)
+
+                # On Windows DuckDB only allows connections with the same configuration,
+                # so we must reuse the singleton rather than open a new connection.
+                # fetch_curves_batch is synchronous; run it in an executor so the event
+                # loop can keep flushing SSE chunks while the batch is processed.
+                # The singleton is not closed by workers anymore, so it is safe to pass
+                # to a single-threaded executor (only one batch runs at a time here).
+                _batch_conn = get_conn()
+                def _process_batch(_ids=batch_curve_ids, _filters=filters, _c=_batch_conn, _ds=dataset_id):
+                    # Retrieves per-request metadata so indentation uses the real spring constant/tip metadata.
+                    batch_metadata = get_metadata_for_curves(_c, _ids, dataset_id=_ds)
+                    _fvz, g_fi, _el = fetch_curves_batch(
+                        _c, _ids, _filters,
+                        single=True, compute_elspectra=False,
+                        metadata=batch_metadata,
+                        force_model_params=force_model_params,
+                        set_zero_force=set_zero_force,
+                        dataset_id=_ds,
+                    )
+                    return g_fi
+
+                graph_force_indentation = await loop.run_in_executor(None, _process_batch)
                 
                 # Extract fparams from this batch
                 if graph_force_indentation and graph_force_indentation.get("curves"):
                     curves_data = graph_force_indentation["curves"]
                     if isinstance(curves_data, dict) and "curves_fparam" in curves_data:
                         batch_fparams = curves_data["curves_fparam"]
-                        # ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ‚Â§ FIX: No longer need to adjust curve_index - it's now the actual curve_id (global)
                         all_fparams.extend(batch_fparams)
                         print(f"Batch {batch_num}: Found {len(batch_fparams)} fparams")
                 
-                # Emit batch completion
+                # Emit batch completion and flush
                 yield f"data: {json.dumps({'type': 'progress', 'phase': f'Batch {batch_num}/{total_batches} complete', 'done': min(i + batch_size, total_curves), 'total': total_curves})}\n\n"
-            
+                await asyncio.sleep(0)
+
             fparams = all_fparams
             print(f"Total fparams found: {len(fparams)}")
-            
-            conn.close()
-            
+
             # Emit final result
             yield f"data: {json.dumps({'type': 'complete', 'status': 'success', 'fparams': fparams, 'message': f'Retrieved fparams for {len(fparams)} curves'})}\n\n"
             
@@ -1077,8 +1593,7 @@ def sse_event(payload: dict) -> bytes:
 
 
 # New endpoint to fetch all curves' elasticity parameters with progress streaming
-@app.post("/get-all-emodels-stream")
-async def get_all_emodels_stream(req: Request):
+async def _emodels_stream_handler(req: Request):
     """
     SSE stream of elasticity model parameters with progress.
     Uses consistent DuckDB connection to avoid configuration conflicts.
@@ -1092,6 +1607,7 @@ async def get_all_emodels_stream(req: Request):
           "e_models": {...}
         },
         "num_curves": <optional>,
+        "dataset_id": <optional int – restrict to a single dataset>,
         "elasticity_params": {"interpolate": true, "order": 2, "window": 61},
         "emodel_params": {"maxInd": 800, "minInd": 0}
       }
@@ -1099,6 +1615,7 @@ async def get_all_emodels_stream(req: Request):
     body = await req.json()
     filters = (body or {}).get("filters", {})
     num_curves = (body or {}).get("num_curves")
+    dataset_id = (body or {}).get("dataset_id")  # None → all datasets
     elasticity_params = (body or {}).get("elasticity_params", {"interpolate": True, "order": 2, "window": 61})
     elastic_model_params = (body or {}).get("emodel_params", {"maxInd": 800, "minInd": 0})
     
@@ -1111,7 +1628,9 @@ async def get_all_emodels_stream(req: Request):
         yield b": keep-alive\n\n"
         yield sse_event({"type": "initializing", "phase": "Initializing...", "done": 0, "total": 0, "total_batches": 0})
         
-        # Use consistent connection from get_conn() to avoid DuckDB configuration conflicts
+        # Use consistent connection from get_conn() to avoid DuckDB configuration conflicts.
+        # asyncio is single-threaded so concurrent SSE coroutines won't issue queries in
+        # parallel; they interleave only at 'await' points, making the singleton safe.
         conn = get_conn()
         try:
             # Use the batched async generator
@@ -1121,7 +1640,8 @@ async def get_all_emodels_stream(req: Request):
                 num_curves=num_curves,
                 batch_size=50,
                 elasticity_params=elasticity_params,
-                elastic_model_params=elastic_model_params
+                elastic_model_params=elastic_model_params,
+                dataset_id=dataset_id,
             )
             
             total_batches = None
@@ -1172,6 +1692,18 @@ async def get_all_emodels_stream(req: Request):
     return StreamingResponse(gen(), media_type="text/event-stream", headers=headers)
 
 
+# Two route names for the same handler: legacy name kept for backward compatibility
+@app.post("/get-all-emodels-stream")
+async def get_all_emodels_stream(req: Request):
+    return await _emodels_stream_handler(req)
+
+
+@app.post("/get-all-eparams-stream")
+async def get_all_eparams_stream(req: Request):
+    """Alias for /get-all-emodels-stream."""
+    return await _emodels_stream_handler(req)
+
+
 # New endpoint to fetch all curves' fparams (non-streaming, kept for compatibility)
 @app.post("/get-all-fparams")
 async def get_all_fparams(data: Dict[str, Any]):
@@ -1204,29 +1736,53 @@ async def get_all_fparams(data: Dict[str, Any]):
             }
         
         print(f"Found {len(all_ids)} total curves in database")
-        
-        # Process curves in batches with process-level parallelism
-        batch_size = 100  # Process 100 curves per batch (tune as you like)
-        batches = [all_ids[i:i+batch_size] for i in range(0, len(all_ids), batch_size)]
-        
+
+        can_parallelize, max_par_workers, par_batch_size = _get_parallelism_config()
+
+        batches = [all_ids[i:i + par_batch_size]
+                   for i in range(0, len(all_ids), par_batch_size)]
+
         all_fparams = []
-        # Use ProcessPoolExecutor for true process-level parallelism
-        # Each worker = its own DuckDB connection + its own UDFs
-        with ProcessPoolExecutor(max_workers=(os.cpu_count() // 2) or 2) as ex:
-            futs = [ex.submit(_parallel_worker, b, filters, "fparams") for b in batches]
-            for fut in as_completed(futs):
-                res = fut.result()
+
+        if can_parallelize and len(batches) > 1:
+            # ── Parallel path (ThreadPoolExecutor on ALL platforms) ──────────
+            # ProcessPoolExecutor is intentionally avoided: on Linux it forks
+            # the process, inheriting DuckDB file handles, which causes workers
+            # to be OOM-killed or crash immediately.
+            effective_workers = min(max_par_workers, len(batches))
+            print(f"  Using ThreadPoolExecutor: {effective_workers} workers, "
+                  f"{par_batch_size} curves/batch")
+            try:
+                with ThreadPoolExecutor(max_workers=effective_workers) as ex:
+                    futs = [ex.submit(_parallel_worker, b, filters, "fparams")
+                            for b in batches]
+                    for fut in as_completed(futs):
+                        res = fut.result()
+                        if res and "fparams" in res:
+                            all_fparams.extend(res["fparams"])
+            except Exception as par_err:
+                print(f"  Parallel path failed ({par_err}), falling back to sequential.")
+                all_fparams = []
+                can_parallelize = False  # trigger sequential below
+
+        if not can_parallelize or len(batches) <= 1:
+            # ── Sequential path ──────────────────────────────────────────────
+            print(f"  Using sequential processing: {len(batches)} batch(es), "
+                  f"{par_batch_size} curves/batch")
+            _seq_conn = get_conn()
+            for b in batches:
+                res = _parallel_worker(b, filters, "fparams")
                 if res and "fparams" in res:
                     all_fparams.extend(res["fparams"])
-        
+
         print(f"Total fparams found: {len(all_fparams)}")
-        
+
         return {
             "status": "success",
             "fparams": all_fparams,
             "message": f"Retrieved fparams for {len(all_fparams)} curves"
         }
-        
+
     except Exception as e:
         logger.error(f"Failed to fetch fparams: {str(e)}")
         raise HTTPException(status_code=500, detail={
@@ -1238,36 +1794,65 @@ async def get_all_fparams(data: Dict[str, Any]):
 # New endpoint to fetch all curves' elasticity parameters
 @app.post("/get-all-elasticity-params")
 async def get_all_elasticity_params(data: Dict[str, Any]):
-    """HTTP endpoint to fetch elasticity parameters for all curves with current filters using process-level parallelism."""
+    """HTTP endpoint to fetch elasticity parameters for all curves.
+
+    Uses ThreadPoolExecutor on all platforms (never ProcessPoolExecutor).
+    Automatically falls back to sequential processing on resource-constrained
+    environments (e.g. 1-CPU / 0.5 GB Linux containers).
+    """
     try:
         filters = data.get("filters", {})
         if not filters.get("e_models"):
             filters["e_models"] = {"constant_filter_array": {"model": "constant"}}
 
-        # Use consistent connection to avoid DuckDB configuration conflicts
+        # Use consistent singleton connection to avoid DuckDB config conflicts.
         conn = get_conn()
-        try:
-            # Let DuckDB parallelize scans/CTEs within queries
-            conn.execute(f"PRAGMA threads = {os.cpu_count() or 2};")
-            curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z").fetchall()
-            all_ids = [str(r[0]) for r in curve_ids_result]
-        finally:
-            # Don't close singleton connection
-            pass
+        curve_ids_result = conn.execute("SELECT curve_id FROM force_vs_z").fetchall()
+        all_ids = [str(r[0]) for r in curve_ids_result]
 
         if not all_ids:
             return {"status": "success", "elasticity_params": [], "message": "No curves found"}
 
-        batch_size = 100   # Process 100 curves per batch to reduce coordinator round-trips
-        batches = [all_ids[i:i+batch_size] for i in range(0, len(all_ids), batch_size)]
+        print(f"Found {len(all_ids)} total curves in database")
+
+        can_parallelize, max_par_workers, par_batch_size = _get_parallelism_config()
+
+        batches = [all_ids[i:i + par_batch_size]
+                   for i in range(0, len(all_ids), par_batch_size)]
 
         all_params = []
-        with ProcessPoolExecutor(max_workers=(os.cpu_count() // 2) or 2) as ex:
-            futs = [ex.submit(_parallel_worker, b, filters, "elasticity") for b in batches]
-            for fut in as_completed(futs):
-                res = fut.result()
+
+        if can_parallelize and len(batches) > 1:
+            # ── Parallel path (ThreadPoolExecutor on ALL platforms) ──────────
+            # ProcessPoolExecutor is intentionally avoided: on Linux it forks
+            # the process, inheriting DuckDB file handles, which causes workers
+            # to be OOM-killed or crash immediately.
+            effective_workers = min(max_par_workers, len(batches))
+            print(f"  Using ThreadPoolExecutor: {effective_workers} workers, "
+                  f"{par_batch_size} curves/batch")
+            try:
+                with ThreadPoolExecutor(max_workers=effective_workers) as ex:
+                    futs = [ex.submit(_parallel_worker, b, filters, "elasticity")
+                            for b in batches]
+                    for fut in as_completed(futs):
+                        res = fut.result()
+                        if res and "elasticity_params" in res:
+                            all_params.extend(res["elasticity_params"])
+            except Exception as par_err:
+                print(f"  Parallel path failed ({par_err}), falling back to sequential.")
+                all_params = []
+                can_parallelize = False  # trigger sequential below
+
+        if not can_parallelize or len(batches) <= 1:
+            # ── Sequential path ──────────────────────────────────────────────
+            print(f"  Using sequential processing: {len(batches)} batch(es), "
+                  f"{par_batch_size} curves/batch")
+            for b in batches:
+                res = _parallel_worker(b, filters, "elasticity")
                 if res and "elasticity_params" in res:
                     all_params.extend(res["elasticity_params"])
+
+        print(f"Total elasticity params found: {len(all_params)}")
 
         return {
             "status": "success",
@@ -1283,9 +1868,297 @@ async def get_all_elasticity_params(data: Dict[str, Any]):
         })
 
 
+
+# Returns the current operation flags for a dataset. retract_trimmed and
+# z_normalized are one-time/irreversible, so the frontend disables their
+# checkboxes once true. force_sign_flipped is self-inverse (toggleable and
+# re-appliable), so the frontend never disables that checkbox — it only uses
+# the flag to know the current sign state for validation/UX purposes.
+@app.get("/dataset-trim-state/{dataset_id}")
+async def get_dataset_trim_state(dataset_id: int, user=Depends(get_current_user)):
+    """
+    Return the persistent trim-state flags for a dataset:
+      - force_sign_flipped: True if F -> -F is currently applied to all curves.
+        Toggleable: applying the flip again restores the original sign.
+      - retract_trimmed: True once the retract phase has been removed
+        (irreversible — checkbox stays disabled once true).
+      - z_normalized: True once z-normalization (z[i] -= z[0]) has been applied
+        (irreversible — checkbox stays disabled once true).
+    """
+    try:
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT force_sign_flipped, retract_trimmed, z_normalized FROM datasets WHERE id = ?",
+            [dataset_id],
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail=f"Dataset {dataset_id} not found")
+        return {
+            "force_sign_flipped": bool(row[0]) if row[0] is not None else False,
+            "retract_trimmed": bool(row[1]) if row[1] is not None else False,
+            # Whether z-normalization has already been applied to this dataset.
+            "z_normalized": bool(row[2]) if row[2] is not None else False,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching trim state: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch trim state: {str(e)}")
+
+
+# Trim data endpoint — removes data points outside the specified force range from all curves
+@app.post("/trim-data")
+async def trim_data_endpoint(request: Request, user=Depends(get_current_user)):
+    """
+    Remove rows from all curves in a dataset where force values fall outside
+    the provided [force_min, force_max] range. Both bounds are optional:
+    omitting force_min skips the lower-bound check; omitting force_max skips
+    the upper-bound check.
+    """
+    # Performs one full trim transaction attempt so the caller can retry on
+    # optimistic concurrency conflicts without duplicating the core logic.
+    def _run_trim_once(body: Dict[str, Any]) -> Dict[str, Any]:
+
+        # Required dataset identifier
+        dataset_id = body.get("dataset_id")
+        if dataset_id is None:
+            raise HTTPException(status_code=400, detail="dataset_id is required")
+
+        # Optional force bounds (None = no constraint on that side)
+        force_min = body.get("force_min")
+        force_max = body.get("force_max")
+        # When True, each curve is truncated at its peak-force index (argmin of
+        # force), discarding the retract phase that follows the deepest indent.
+        trim_retract = bool(body.get("trim_retract", False))
+        # When True, every force sample is negated before any range-based
+        # trimming so that -F replaces F across all curves (sign flip).
+        flip_force_sign = bool(body.get("flip_force_sign", False))
+        # When True, shift every curve's z values so the first z becomes 0:
+        # z[i] -= z[0]. Applied only when all curves have positive first and last z.
+        normalize_z = bool(body.get("normalize_z", False))
+
+        if force_min is None and force_max is None and not trim_retract and not flip_force_sign and not normalize_z:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one of force_min, force_max, trim_retract, flip_force_sign, or normalize_z must be provided"
+            )
+
+        conn = get_conn()
+
+        # Read whether forces are currently sign-flipped from a previous call so
+        # that trim_retract uses the correct peak-detection direction even when
+        # flip_force_sign is not set in this request.
+        dataset_row = conn.execute(
+            "SELECT force_sign_flipped FROM datasets WHERE id = ?",
+            [dataset_id],
+        ).fetchone()
+        # Default False if the column is missing on a very old DB row.
+        already_sign_flipped = bool(dataset_row[0]) if dataset_row and dataset_row[0] is not None else False
+
+        # Sign-flip is self-inverse (negating twice restores the original
+        # data), so it is toggleable/re-appliable rather than a one-time flag:
+        # the resulting state is the XOR of the persisted state and this
+        # request's flip_force_sign, i.e. requesting it again on
+        # already-flipped data flips it back to the original sign.
+        forces_are_sign_flipped = already_sign_flipped != flip_force_sign
+
+        # Fetch all rows for this dataset so we can filter element-by-element
+        rows = conn.execute(
+            """
+            SELECT curve_id, segment_type, force_values, z_values
+            FROM force_vs_z
+            WHERE dataset_id = ?
+            """,
+            [dataset_id],
+        ).fetchall()
+
+        if not rows:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No curves found for dataset_id {dataset_id}"
+            )
+
+        # Pre-validate z-normalization: every curve must have positive first and
+        # last z values so that the shift z[i] -= z[0] is physically meaningful.
+        # If any curve fails the check, reject the whole operation rather than
+        # normalizing only a subset and leaving the dataset in a mixed state.
+        if normalize_z:
+            for curve_id, segment_type, force_values, z_values in rows:
+                if not z_values or len(z_values) < 2:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Curve {curve_id} ({segment_type}) has fewer than 2 z-values — "
+                            "cannot validate z-normalization."
+                        ),
+                    )
+                # First and last z must both be strictly positive.
+                z_first = z_values[0]
+                z_last = z_values[-1]
+                if z_first <= 0 or z_last <= 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Curve {curve_id} ({segment_type}) has non-positive z values "
+                            f"(first={z_first:.4g}, last={z_last:.4g}). "
+                            "All curves must have positive first and last z values for normalization."
+                        ),
+                    )
+
+        # Tracks how many data points were trimmed across all curves
+        total_trimmed = 0
+
+        for curve_id, segment_type, force_values, z_values in rows:
+            if not force_values:
+                continue
+
+            # Negate every force sample first so that subsequent range trimming
+            # (and retract detection) operates on the flipped values (-F).
+            # Unlike |F|, negation does not confine values to a fixed sign, so
+            # force_min/force_max bounds keep their usual signed meaning.
+            if flip_force_sign:
+                force_values = [-f for f in force_values]
+
+            # Build keep-mask: True for indices that satisfy both bounds
+            mask = []
+            for f in force_values:
+                keep = True
+                if force_min is not None and f < force_min:
+                    keep = False
+                if force_max is not None and f > force_max:
+                    keep = False
+                mask.append(keep)
+
+            # Apply mask to both arrays in lockstep to preserve pairing
+            new_force = [f for f, m in zip(force_values, mask) if m]
+            new_z = (
+                [z for z, m in zip(z_values, mask) if m]
+                if z_values is not None
+                else None
+            )
+
+            # Retract-phase trimming: keep only the approach portion of each
+            # curve — everything up to and including the peak-force sample.
+            # On signed data the deepest indentation point is the most-negative
+            # (minimum) force value. Negation is order-reversing, so once forces
+            # are sign-flipped (either from this request or a prior one), that
+            # same point becomes the maximum instead. Using min() on flipped
+            # data would wrongly find the near-zero start of contact and
+            # discard almost the entire approach curve.
+            if trim_retract and new_force:
+                peak_idx = (
+                    new_force.index(max(new_force))
+                    if forces_are_sign_flipped
+                    else new_force.index(min(new_force))
+                )
+                new_force = new_force[: peak_idx + 1]
+                if new_z is not None:
+                    new_z = new_z[: peak_idx + 1]
+
+            # Shift z so the first point sits at z=0: z[i] -= z[0].
+            # This collapses the absolute piezo offset and aligns all curves
+            # to a common origin without changing their relative spacing.
+            if normalize_z and new_z is not None and len(new_z) > 0:
+                z_origin = new_z[0]
+                new_z = [z - z_origin for z in new_z]
+
+            # Count how many points were removed for this curve/segment
+            total_trimmed += len(force_values) - len(new_force)
+
+            conn.execute(
+                """
+                UPDATE force_vs_z
+                SET force_values = ?, z_values = ?
+                WHERE dataset_id = ? AND curve_id = ? AND segment_type = ?
+                """,
+                [new_force, new_z, dataset_id, curve_id, segment_type],
+            )
+
+        # Persist flags so the frontend knows the current data state without
+        # re-sending them, and so already-applied irreversible operations stay
+        # disabled in the UI.
+        #   force_sign_flipped — reflects the current sign state (toggleable);
+        #                        always written since it can flip back to FALSE.
+        #   retract_trimmed    — set once the retract phase has been discarded
+        #                        (irreversible, so only ever written as TRUE).
+        #   z_normalized       — set once z values have been shifted by z[0]
+        #                        per curve (irreversible, only written as TRUE).
+        # All columns are updated in a single statement to stay consistent.
+        update_cols = [f"force_sign_flipped = {forces_are_sign_flipped}"]
+        if trim_retract:
+            update_cols.append("retract_trimmed = TRUE")
+        if normalize_z:
+            update_cols.append("z_normalized = TRUE")
+        if update_cols:
+            conn.execute(
+                f"UPDATE datasets SET {', '.join(update_cols)} WHERE id = ?",
+                [dataset_id],
+            )
+
+        # Invalidate caches so subsequent queries use the trimmed data
+        clear_cache(conn)
+
+        logger.info(
+            f"Trimmed {total_trimmed} data points from dataset {dataset_id} "
+            f"(force_min={force_min}, force_max={force_max})"
+        )
+
+        return {
+            "status": "success",
+            "message": (
+                f"Data trimmed successfully. "
+                f"Removed {total_trimmed} data points across {len(rows)} curve segments."
+            ),
+            "trimmed_points": total_trimmed,
+        }
+
+    try:
+        # Captures the client payload once so each retry uses identical inputs.
+        body = await request.json()
+        # Limits optimistic-concurrency retries to avoid infinite loops.
+        max_retries = 3
+        # Base delay (seconds) for exponential backoff between retry attempts.
+        retry_delay_seconds = 0.05
+        # Stores the last seen exception to preserve root-cause reporting.
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                return _run_trim_once(body)
+            except Exception as trim_error:
+                # Tracks the latest failure so we can re-raise after final attempt.
+                last_error = trim_error
+                # Normalizes DuckDB error text for robust conflict detection.
+                error_text = str(trim_error).lower()
+                # Prevent crash on transient concurrent updates to the same row.
+                is_write_conflict = "write-write conflict" in error_text
+                if not is_write_conflict or attempt == max_retries - 1:
+                    raise
+                # Calculates exponential backoff to reduce immediate contention.
+                backoff_seconds = retry_delay_seconds * (2 ** attempt)
+                logger.warning(
+                    "Write-write conflict while trimming dataset; retrying "
+                    f"(attempt {attempt + 1}/{max_retries}) after {backoff_seconds:.3f}s: {trim_error}"
+                )
+                await asyncio.sleep(backoff_seconds)
+
+        if last_error is not None:
+            raise last_error
+
+    except HTTPException:
+        # Re-raise explicit HTTP exceptions unchanged
+        raise
+    except Exception as e:
+        logger.error(f"Error trimming data: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": f"Failed to trim data: {str(e)}"}
+        )
+
+
 # File-serving endpoint
 @app.get("/exports/{file_path:path}")
-async def serve_exported_file(file_path: str):
+async def serve_exported_file(file_path: str, user=Depends(get_current_user)):
     """Serve an exported file from the exports directory."""
     full_path = os.path.join("", file_path)
     print(full_path)
@@ -1328,3 +2201,10 @@ async def clear_cache_endpoint(cache_type: str = None):
             "status": "error",
             "message": f"Failed to clear cache: {str(e)}"
         })
+
+
+if __name__ == '__main__':
+    # Required on Windows so that spawned worker processes don't re-launch the server
+    multiprocessing.freeze_support()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

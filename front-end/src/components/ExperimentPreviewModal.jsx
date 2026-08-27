@@ -66,9 +66,14 @@ export default function ExperimentPreviewModal({ id, onClose, onOpen }) {
         {/* ───────────── Header ───────────── */}
         <div style={headerStyle}>
           <div>
+            {/* Experiment title */}
             <h2 style={modalTitleStyle}>
               {data?.name || `Experiment #${id}`}
             </h2>
+            {/* Optional description shown below the title */}
+            {data?.description && (
+              <p style={descriptionStyle}>{data.description}</p>
+            )}
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
               {data?.created_at && (
                 <span style={captionStyle}>{formatDate(data.created_at)}</span>
@@ -112,6 +117,28 @@ export default function ExperimentPreviewModal({ id, onClose, onOpen }) {
                 )}{" "}
                 Pa
               </div>
+
+              {/* Stiffness results from the LinearWindowFit regular filter, distinct from
+                  the Hertz-model Young's modulus shown above. Only rendered when at least
+                  one value was actually computed and saved. */}
+              {(data.k_raw_mean != null ||
+                data.k_contact_mean != null ||
+                data.stiffness_youngs_modulus_mean != null) && (
+                <div style={bodyTextStyle}>
+                  <strong>K_raw:</strong>{" "}
+                  {formatYoungsModulus(data.k_raw_mean, data.k_raw_std)} N/m
+                  <br />
+                  <strong>K_contact:</strong>{" "}
+                  {formatYoungsModulus(data.k_contact_mean, data.k_contact_std)} N/m
+                  <br />
+                  <strong>E (LinearWindowFit):</strong>{" "}
+                  {formatYoungsModulus(
+                    data.stiffness_youngs_modulus_mean,
+                    data.stiffness_youngs_modulus_std
+                  )}{" "}
+                  Pa
+                </div>
+              )}
 
               <div style={dividerStyle}></div>
 
@@ -384,6 +411,14 @@ const modalStyle = {
 const headerStyle = {
   padding: 24,
   borderBottom: "1px solid #eef1ff",
+};
+
+// Description text shown below the experiment title in the header
+const descriptionStyle = {
+  margin: "6px 0 0",
+  fontSize: 14,
+  color: "#6b7280",
+  lineHeight: 1.5,
 };
 
 const modalTitleStyle = {

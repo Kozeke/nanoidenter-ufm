@@ -39,8 +39,10 @@ class LineMaxModel(EmodelBase):
         if len(full) < 2 or len(y) < 2:
             return None
 
-        percentile = self.get_value('Smooth')  # Upper percentile
-        lower = self.get_value('Lower')        # Lower percentile
+        # Snapshot these NOW — before any other thread can mutate self.parameters
+        # This ensures thread-safety when using these values
+        percentile = int(self.get_value('Smooth'))  # Upper percentile
+        lower = int(self.get_value('Lower'))        # Lower percentile
 
         if percentile < 100:
             threshold = np.percentile(full, percentile)
@@ -55,6 +57,11 @@ class LineMaxModel(EmodelBase):
         stats = [float(np.average(y)), float(np.median(full)), float(maxi), float(mini)]
         # print("stats", stats)
 
-        # Use the average (stats[0]) to compute y_fit with theory
-        y_fit = self.theory(x, stats[0])  # Only pass the average modulus
+        # Use a closure for thread-safety (even though theory() doesn't use self.get_value(),
+        # this pattern ensures consistency)
+        def theory_local(x, E):
+            return E * np.ones(len(x))
+        
+        # Use the average (stats[0]) to compute y_fit with closure function
+        y_fit = theory_local(x, stats[0])  # Only pass the average modulus
         return [x.tolist(), y_fit.tolist(), stats]  # Return with parameters
